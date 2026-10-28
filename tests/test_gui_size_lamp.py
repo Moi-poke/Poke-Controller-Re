@@ -50,7 +50,10 @@ def test_the_display_settings_dialog_offers_two_modes_and_one_size_picker() -> N
         if isinstance(node, ast.Constant) and isinstance(node.value, str)
     ]
     assert "固定サイズ" in modes
-    assert "ウィンドウに合わせる（16:9 を維持）" in modes
+    assert "ウィンドウに合わせる" in modes
+    assert "ウィンドウに合わせる（16:9 を維持）" not in modes
+    # fit の意味（枠に合わせた拡大縮小と縦横比の維持）はラベルの下の 1 行で補う。
+    assert any("縦横比" in value for value in modes)
     for label in ("適用", "OK", "キャンセル"):
         assert label in modes, f"{label} ボタンが無い"
     assert "disabled" in modes, "fit 時に固定サイズ欄を無効化する文字列が無い"

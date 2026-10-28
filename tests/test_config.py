@@ -35,7 +35,7 @@ def test_default_sections_fresh() -> None:
     first = config.default_sections()
     first["General Setting"]["fps"] = 999
     second = config.default_sections()
-    assert second["General Setting"]["fps"] == 45
+    assert second["General Setting"]["fps"] == 60
 
 
 def test_complete_missing_fills_all() -> None:
@@ -57,7 +57,7 @@ def test_complete_missing_fixes_invalid() -> None:
     parser["Arbitration"]["mode"] = "typo"
     parser["Arbitration"]["cooldown"] = "-1"
     changed = config.complete_missing(parser)
-    assert general["fps"] == "45"
+    assert general["fps"] == "60"
     assert general["baud_rate"] == "9600"
     assert general["bcon_baud_index"] == "3"
     assert general["show_size"] == "640x360"
@@ -66,6 +66,23 @@ def test_complete_missing_fixes_invalid() -> None:
     assert parser["Arbitration"]["cooldown"] == "2.0"
     assert "General Setting.fps" in changed
     assert "Arbitration.mode" in changed
+
+
+def test_default_display_settings_are_fit_and_60() -> None:
+    """新規に作られる設定の既定は fit（ウィンドウに合わせる）＋60fps。"""
+    defaults = config.default_sections()["General Setting"]
+    assert defaults["show_mode"] == "fit"
+    assert defaults["fps"] == 60
+
+
+def test_existing_fixed_and_45_survive_the_backfill() -> None:
+    """既存の明示値（fixed / 45）は補正で書き換えない（欠損だけ既定を入れる）。"""
+    parser = make_parser()
+    parser["General Setting"] = {"show_mode": "fixed", "fps": "45"}
+    config.complete_missing(parser)
+    general = parser["General Setting"]
+    assert general["show_mode"] == "fixed"
+    assert general["fps"] == "45"
 
 
 def test_renderer_default_and_sanitize() -> None:
@@ -99,18 +116,18 @@ def test_show_mode_default_and_sanitize() -> None:
     parser = make_parser()
     config.complete_missing(parser)
     general = parser["General Setting"]
-    assert general["show_mode"] == "fixed"
+    assert general["show_mode"] == "fit"
     assert DEFAULT_SHOW_MODE in SHOW_MODES
     assert config.complete_missing(parser) == []
     general["show_mode"] = "typo"
     changed = config.complete_missing(parser)
-    assert general["show_mode"] == "fixed"
+    assert general["show_mode"] == "fit"
     assert "General Setting.show_mode" in changed
     assert config.complete_missing(parser) == []
     # キーごと消して補完が効くことも確かめる（追加したキーの抜け防止）
     del general["show_mode"]
     changed = config.complete_missing(parser)
-    assert general["show_mode"] == "fixed"
+    assert general["show_mode"] == "fit"
     assert "General Setting.show_mode" in changed
 
 

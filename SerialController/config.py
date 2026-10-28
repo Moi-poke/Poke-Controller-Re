@@ -75,11 +75,11 @@ def default_sections() -> dict[str, dict[str, Any]]:
             # bcon 系の通信速度（BAUD_TABLE の index 0-4）。レガシーは
             # baud_rate を使い、こちらは bcon のときだけ読む。
             "bcon_baud_index": 3,
-            "fps": 45,
+            "fps": 60,
             "show_size": "640x360",
             # プレビューの表示モード。fixed … プリセットで固定 /
             # fit … ウィンドウに合わせて拡大縮小。候補は core.display_mode
-            "show_mode": "fixed",
+            "show_mode": DEFAULT_SHOW_MODE,
             # 描画方式。候補は WindowUtils.RENDERER_VALUES が正
             "renderer": "auto",
             "is_show_realtime": True,
@@ -380,7 +380,7 @@ def complete_missing(parser: configparser.ConfigParser) -> list[str]:
         "baud_rate": (9600, lambda value: value > 0),
         # index の範囲は core/transport/bcon_protocol.py の BAUD_TABLE と揃える
         "bcon_baud_index": (3, lambda value: 0 <= value <= 4),
-        "fps": (45, lambda value: value in (5, 15, 30, 45, 60)),
+        "fps": (60, lambda value: value in (5, 15, 30, 45, 60)),
         "gamepad_index": (0, lambda value: 0 <= value <= 3),
         "gamepad_deadzone": (1638, lambda value: 0 <= value <= 8192),
     }

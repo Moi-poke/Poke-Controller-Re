@@ -402,9 +402,9 @@ class CameraPanelMixin:
         try:
             fps = int(self.fps.get())
         except (TypeError, ValueError):
-            fps = 45
+            fps = 60
         if fps not in WindowUtils.FPS_VALUES:
-            fps = 45
+            fps = 60
         self.fps.set(str(fps))
         return fps
 

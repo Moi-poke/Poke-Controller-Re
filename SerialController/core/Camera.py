@@ -372,7 +372,7 @@ CustomQueue = LatestFrame
 class Camera:
     """cv2.VideoCapture を別スレッドで回し、最新フレームを供給する。"""
 
-    def __init__(self, fps: int = 45, capture_size: tuple = CAPTURE_SIZE) -> None:
+    def __init__(self, fps: int = 60, capture_size: tuple = CAPTURE_SIZE) -> None:
         self.camera: cv2.VideoCapture | None = None
         self.fps = int(fps)
         self.capture_size = capture_size

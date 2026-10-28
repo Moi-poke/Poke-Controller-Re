@@ -76,7 +76,7 @@ def test_unknown_fps_and_renderer_fall_back_to_the_defaults(tk_root: tk.Tk) -> N
     )
     try:
         # Then: 画面に嘘を出さない（camera_panel の _current_* と同じ既定）。
-        assert dlg.fps_var.get() == "45"
+        assert dlg.fps_var.get() == "60"
         assert dlg.renderer_var.get() == "auto"
     finally:
         dlg.destroy()

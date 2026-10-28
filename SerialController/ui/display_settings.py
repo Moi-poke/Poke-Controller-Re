@@ -28,15 +28,16 @@ from core.display_mode import (
     normalize_profile_color,
 )
 
-# モード名のラベル。fit だけ意味が伝わりにくいため 16:9 を保つことを明示する。
+# モード名のラベル。fit の意味（枠に合わせた拡大縮小と縦横比の維持）は
+# ラベルの下の 1 行で補う（ラベルを長くすると固定サイズとの対比が読みにくい）。
 _MODE_LABELS: dict[str, str] = {
     "fixed": "固定サイズ",
-    "fit": "ウィンドウに合わせる（16:9 を維持）",
+    "fit": "ウィンドウに合わせる",
 }
 
 # FPS・描画方式が候補表に無いときの既定。camera_panel の _current_fps /
 # _current_renderer と同じ値（画面と実際の値をずらさない）。
-_DEFAULT_FPS = "45"
+_DEFAULT_FPS = "60"
 _DEFAULT_RENDERER = "auto"
 
 # プロファイルの色の見本の大きさ（px）。1 枚だけあれば意味が伝わる。
@@ -101,7 +102,14 @@ class DisplaySettingsDialog(tk.Toplevel):
                 command=self._sync_enabled,
             ).grid(column=0, columnspan=2, row=row, sticky="w")
 
-        size_row = len(SHOW_MODES) + 1
+        note_row = len(SHOW_MODES) + 1
+        # fit の意味はラベルだけでは伝わらないので 1 行だけ補う。
+        ttk.Label(
+            body,
+            text="「ウィンドウに合わせる」は枠に合わせて拡大縮小します（映像の縦横比は保たれます）。",
+        ).grid(column=0, columnspan=2, row=note_row, sticky="w")
+
+        size_row = note_row + 1
         ttk.Label(body, text="固定サイズ").grid(
             column=0, row=size_row, pady=(8, 0), sticky="w"
         )

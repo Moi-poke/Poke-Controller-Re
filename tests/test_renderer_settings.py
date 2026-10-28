@@ -45,8 +45,8 @@ CAMERA_PANEL_SOURCE = SERIAL_CONTROLLER / "ui" / "camera_panel.py"
 # 既定（"auto"）と違う値。保存されなければ「保存できていない」ことに気づけない。
 RENDERER_CHOICE = "photo"
 RENDERER_TYPO = "gd1"
-# 表示モードの既定（"fixed"）と違う値。同じく保存された与否が分かる値。
-SHOW_MODE_CHOICE = "fit"
+# 表示モードの既定（"fit"）と違う値。同じく保存された与否が分かる値。
+SHOW_MODE_CHOICE = "fixed"
 
 
 class _Var:
