@@ -54,6 +54,10 @@ class GuiSettings:
         self.com_port = tk.IntVar(value=general.getint("com_port"))
         self.com_port_name = tk.StringVar(value=general.get("com_port_name"))
         self.baud_rate = tk.IntVar(value=general.getint("baud_rate"))
+        # bcon 系の速度は BAUD_TABLE の index で持つ（レガシーの baud_rate と別枠）
+        self.bcon_baud_index = tk.IntVar(
+            value=general.getint("bcon_baud_index", fallback=3)
+        )
         self.fps = tk.IntVar(value=general.getint("fps"))
         self.show_size = tk.StringVar(value=general.get("show_size"))
         # プレビューの表示モード（fixed / fit）。show_size と同じ形の鏡。
@@ -357,6 +361,7 @@ class GuiSettings:
                 "com_port": self.com_port.get(),
                 "com_port_name": self.com_port_name.get(),
                 "baud_rate": self.baud_rate.get(),
+                "bcon_baud_index": self.bcon_baud_index.get(),
                 "fps": self.fps.get(),
                 "show_size": self.show_size.get(),
                 "show_mode": self.show_mode.get(),

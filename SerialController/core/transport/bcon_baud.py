@@ -70,6 +70,22 @@ def baud_label_for_index(index: int) -> str:
     return BAUD_DISPLAY_LABELS[int(index)]  # type: ignore[arg-type]
 
 
+def baud_combo_state(uses_bcon: bool) -> str:
+    """baud 欄の状態。bcon のときだけ選べる（レガシーは固定のまま）。"""
+    return "readonly" if uses_bcon else "disabled"
+
+
+def baud_combo_values(uses_bcon: bool, legacy_values: list[int]) -> list[str]:
+    """Combobox の候補。bcon は BAUD_TABLE の表示名、レガシーは既定候補。
+
+    レガシー側の候補をここで作っても意味が無いので、呼び出し元が
+    WindowUtils.BAUD_RATE_VALUES をそのまま渡す。
+    """
+    if uses_bcon:
+        return [BAUD_DISPLAY_LABELS[i] for i in sorted(BAUD_TABLE)]
+    return [str(value) for value in legacy_values]
+
+
 def baud_adopt_message(new_bps: int) -> str:
     """adopt成功時の確定文言。切替完了と新bpsを入れる。"""
     return f"baudを{int(new_bps)}bpsへ切替えました。"

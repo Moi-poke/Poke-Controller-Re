@@ -24,7 +24,6 @@ from typing import Any
 import LogPane
 import Settings
 import WindowGeometry
-import WindowUtils
 import cv2
 from GuiAssets import CaptureArea
 from Menubar import PokeController_Menubar
@@ -523,12 +522,9 @@ class PokeControllerApp(
         # 9600 / 4800 以外を使う人がいる。設定にある値が候補に無ければ
         # 候補そのものへ足して選ぶ。矯正すると設定ファイルへ書き戻る
         # 経路があるため、利用者の値が起動のたびに消える。
-        current_rate = str(self.settings.baud_rate.get())
-        rates = [str(v) for v in WindowUtils.BAUD_RATE_VALUES]
-        if current_rate not in rates:
-            rates.append(current_rate)
-            self.baud_rate_cb.config(values=rates)
-        self.baud_rate.set(current_rate)
+        # 候補の組み直しと可否は _refreshBaudUi が受け持つ（bcon は別枠）。
+        self.baud_rate.set(str(self.settings.baud_rate.get()))
+        self._refreshBaudUi()
 
         # 旧 settings.ini は com_port(番号) しか持たないことがある。
         # 名前が空なら番号から COM<n> を組み立てて選び直せるようにする。

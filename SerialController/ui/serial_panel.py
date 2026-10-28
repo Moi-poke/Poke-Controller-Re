@@ -17,6 +17,16 @@ import tkinter.ttk as ttk
 from typing import Any
 
 import WindowUtils
+from core.transport.bcon_baud import (
+    BAUD_DEFAULT_INDEX,
+    baud_bps_for_index,
+    baud_combo_state,
+    baud_combo_values,
+    baud_index_for_label,
+    baud_index_sendable,
+    baud_label_for_index,
+)
+from core.transport.bcon_protocol import BAUD_TABLE
 from loguru import logger
 from services.serial_service import SenderSpec, SerialService
 from ui.combo_fit import fit_combo_width
@@ -66,6 +76,7 @@ class SerialPanelMixin:
     com_port_cb: Any
     baud_rate_label: Any
     baud_rate: Any
+    bcon_baud: Any
     baud_rate_cb: Any
     baud_rate_state: str
     reloadComPort: Any
@@ -121,7 +132,6 @@ class SerialPanelMixin:
     controller_dock: Any
     preview: Any
     camera_lf: Any
-    applyBaudRate: Any
     _on_setting_changed: Any
     _update_title: Any
     _refresh_bcon_tab: Any
@@ -155,6 +165,9 @@ class SerialPanelMixin:
         self.baud_rate_label.grid(column=0, padx="5", pady="2", row=1, sticky="w")
 
         self.baud_rate = tk.StringVar()
+        # bcon のときだけ使う表示値（115200 / 460800 / 921600 / 1M / 2M）。
+        # レガシーの baud_rate と混ぜない（切替で設定が壊れないように）。
+        self.bcon_baud = tk.StringVar()
         self.baud_rate_cb = ttk.Combobox(self.serial_lf)
         # values の int 群は実行時に文字列化される。注釈だけの問題のため無視する。
         self.baud_rate_cb.config(  # type: ignore[call-overload]
@@ -527,6 +540,92 @@ class SerialPanelMixin:
         except Exception:
             pass
 
+    def _bconBaudIndex(self) -> int:
+        """設定に保存された bcon の index。範囲外・読めない値は既定へ。"""
+        try:
+            index = int(self.settings.bcon_baud_index.get())
+        except (TypeError, ValueError, tk.TclError):
+            return BAUD_DEFAULT_INDEX
+        return index if index in BAUD_TABLE else BAUD_DEFAULT_INDEX
+
+    def _legacyBaudValues(self) -> list[str]:
+        """レガシー側の候補。設定値が候補に無ければ足して選べるようにする。
+
+        BAUD_RATE_VALUES はよく使う値であって許可値ではない。設定ファイル
+        へ書き戻す経路があるため、値の矯正はしない。
+        """
+        values = [str(value) for value in WindowUtils.BAUD_RATE_VALUES]
+        try:
+            current = str(self.settings.baud_rate.get())
+        except Exception:
+            current = ""
+        if current and current not in values:
+            values.append(current)
+        return values
+
+    def _refreshBaudUi(self) -> None:
+        """通信方式に合わせて baud 欄の候補・可否・表示値を切り替える。
+
+        bcon 系だけ変更できる。レガシーは固定のまま（9600 前提の
+        マイコンを誤って変えないため）。
+        """
+        uses_bcon = self.serial.uses_bcon(self.transport_name.get())
+        if uses_bcon:
+            self.baud_rate_cb.config(
+                state=baud_combo_state(True),
+                values=baud_combo_values(True, []),
+                textvariable=self.bcon_baud,
+            )
+            self.bcon_baud.set(baud_label_for_index(self._bconBaudIndex()))
+        else:
+            self.baud_rate_cb.config(
+                state=baud_combo_state(False),
+                values=baud_combo_values(False, WindowUtils.BAUD_RATE_VALUES),
+                textvariable=self.baud_rate,
+            )
+
+    def applyBaudRate(self, event: Any = None) -> None:
+        """baud 欄の選択を受け取る。bcon のときだけ効く。
+
+        レガシーではコンボが disabled なので、ここへは来ない。
+        bcon では (1) 設定へ index を保存し、(2) 接続中なら
+        transport の set_baud_index でその場で切り替える。
+        切替の実体（BAUD_SET・adopt 確認・失敗時の旧レート復帰）は
+        transport 層の責務で、ここでは送るだけにする。
+        """
+        if not self.serial.uses_bcon(self.transport_name.get()):
+            return
+        label = self.bcon_baud.get()
+        index = baud_index_for_label(label)
+        if index is None or not baud_index_sendable(index):
+            # 表示だけ元の設定へ戻す（不正値を送らない）
+            self.bcon_baud.set(baud_label_for_index(self._bconBaudIndex()))
+            return
+        self.settings.bcon_baud_index.set(index)
+        self._on_setting_changed()
+        bps = baud_bps_for_index(index)
+        transport = self._bcon_transport()
+        sender = self.serial.sender
+        if transport is None or sender is None or not sender.isOpened():
+            print(
+                f"bconのbaudを{label}（{bps}bps）に設定しました（次回接続時に適用）。"
+            )
+            return
+
+        def job() -> None:
+            # 2秒前後ブロックするので GUI スレッドでは走らせない。
+            try:
+                setter = getattr(transport, "set_baud_index", None)
+                ok = bool(setter(index, timeout=2.0)) if callable(setter) else False
+            except Exception:
+                ok = False
+            if ok:
+                print(f"bconのbaudを{label}（{bps}bps）へ切替えました。")
+            else:
+                print("bconのbaud切替に失敗しました（詳細はログを確認）。")
+
+        threading.Thread(target=job, daemon=True).start()
+
     def _currentBaudRate(self) -> int:
         """Baud Rate を通常の int で返す。数値として読めないときだけ既定。
 
@@ -539,7 +638,12 @@ class SerialPanelMixin:
 
         ここで守るのは「数値として読めること」だけ。読めない値を
         そのまま流すと接続の途中で例外になり、開かない理由も出ない。
+
+        bcon 系はレガシーの baud_rate ではなく、BAUD_TABLE の index を
+        使う（1M などはコンボ表示の文字列で、int としては読めない）。
         """
+        if self.serial.uses_bcon(self.transport_name.get()):
+            return baud_bps_for_index(self._bconBaudIndex())
         try:
             return int(self.baud_rate.get())
         except (TypeError, ValueError, tk.TclError):
@@ -672,6 +776,8 @@ class SerialPanelMixin:
         self.transport_name.set(name)
         # 画面から選び直した以上、起動引数の指定はもう効かせない
         self.serial.clear_override()
+        # baud 欄は方式で変わる（bcon だけ変更可・レガシーは固定）
+        self._refreshBaudUi()
         if self.serial.sender is None:
             self._refresh_bcon_tab()
             self._on_setting_changed()

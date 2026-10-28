@@ -51,6 +51,7 @@ def test_complete_missing_fixes_invalid() -> None:
     general = parser["General Setting"]
     general["fps"] = "999"
     general["baud_rate"] = "0"
+    general["bcon_baud_index"] = "9"
     general["show_size"] = "1x1"
     parser["Transport"]["name"] = "   "
     parser["Arbitration"]["mode"] = "typo"
@@ -58,6 +59,7 @@ def test_complete_missing_fixes_invalid() -> None:
     changed = config.complete_missing(parser)
     assert general["fps"] == "45"
     assert general["baud_rate"] == "9600"
+    assert general["bcon_baud_index"] == "3"
     assert general["show_size"] == "640x360"
     assert parser["Transport"]["name"] == "legacy_text"
     assert parser["Arbitration"]["mode"] == "off"

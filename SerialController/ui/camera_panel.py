@@ -838,26 +838,6 @@ class CameraPanelMixin:
         print(f"描画方式を {renderer} に変更しました（再起動後に反映されます）")
         self._on_setting_changed()
 
-    def applyBaudRate(self, event: Any = None) -> None:
-        """Baud Rate の選択は受け取らない（意図的に何もしない）。
-
-        画面の Combobox は state="disabled" にしてあり、そもそも選び
-        直せない。ここが空なのは実装漏れではなく、その状態に合わせて
-        いる。
-
-        Switch の自動化では 9600 から変える理由が無い。一方 GameCube
-        の自動化では別の速度を使うが、その利用者は Switch 側の数百分の
-        一で、かつ自分でスクリプトを直せる人に限られる。画面から触れる
-        ようにすると、多数派である Switch の利用者が誤って変更し、
-        「繋がらない」という問い合わせだけが増える。
-
-        速度を変える必要がある場合は settings.ini の baud_rate を直接
-        書き換える。Settings は候補で縛らず value > 0 だけを検査するの
-        で、任意の値がそのまま通る。マイコン側の SERIAL_BAUD と同じ値
-        にすること。片方だけ変えると文字が化けて一切通信できない。
-        """
-        pass
-
     def applyDisplaySettings(
         self,
         mode: str,

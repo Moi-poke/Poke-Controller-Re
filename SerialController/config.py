@@ -72,6 +72,9 @@ def default_sections() -> dict[str, dict[str, Any]]:
             "com_port": 0,
             "com_port_name": "",
             "baud_rate": 9600,
+            # bcon 系の通信速度（BAUD_TABLE の index 0-4）。レガシーは
+            # baud_rate を使い、こちらは bcon のときだけ読む。
+            "bcon_baud_index": 3,
             "fps": 45,
             "show_size": "640x360",
             # プレビューの表示モード。fixed … プリセットで固定 /
@@ -375,6 +378,8 @@ def complete_missing(parser: configparser.ConfigParser) -> list[str]:
         "camera_id": (0, lambda value: value >= 0),
         "com_port": (0, lambda value: value >= 0),
         "baud_rate": (9600, lambda value: value > 0),
+        # index の範囲は core/transport/bcon_protocol.py の BAUD_TABLE と揃える
+        "bcon_baud_index": (3, lambda value: 0 <= value <= 4),
         "fps": (45, lambda value: value in (5, 15, 30, 45, 60)),
         "gamepad_index": (0, lambda value: 0 <= value <= 3),
         "gamepad_deadzone": (1638, lambda value: 0 <= value <= 8192),

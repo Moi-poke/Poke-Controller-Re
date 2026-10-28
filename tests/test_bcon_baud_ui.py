@@ -1,15 +1,9 @@
-"""bcon baud切替UIのRED試験（実機不要・headless）。
+"""bcon baud切替UIの試験（実機不要・headless）。
 
-監査メモ（use_len12露出調査・2026-09-23）:
-- BconTransport.__init__(use_len12=False)は bcon.py:112,121 に存在し、
-  send_row系 bcon.py:365 でLEN12/LEN8を切替える。
-- bcon_proc.py:219 で子へ透過、490-494でproxyが保持し593でcfg経由で渡す。
-- UI露出は無し：ui/serial_panel.pyは汎用baudコンボのみ
-  （WindowUtils.BAUD_RATE_VALUES=9600〜115200）、baud index切替ウィジェット無し。
-- BconSetup.pyにbaud行無し（BAUD_SETは型名0x36と注意文言のみ）。
-- docs/BCON_TRANSPORT.md:47「画面上のボタンは無い」と一致。
-- setterはtransport層set_baud_indexのみ、永続化（settings.ini/config.py）無し。
-- 結論：use_len12 UIはN/A（transport旗のみ、UI未実装のため重複なし）。
+- 表示・可否・候補の組み立ては core.transport.bcon_baud（純粋関数）が持つ。
+- メイン画面の baud 欄は bcon 系のときだけ readonly で選べる。
+- レガシーは disabled（9600 前提のマイコンを誤らないため）。
+- 永続化は settings.ini の bcon_baud_index（0-4）。
 """
 
 from __future__ import annotations
@@ -78,3 +72,31 @@ def test_baud_revert_display_message():
     assert str(old_bps) in revert
     assert revert != adopt
     assert "戻" in revert
+
+
+def test_combo_state_is_editable_only_for_bcon():
+    """レガシーは固定、bcon だけ選べる。"""
+    from core.transport import bcon_baud as baud_ui
+
+    assert baud_ui.baud_combo_state(True) == "readonly"
+    assert baud_ui.baud_combo_state(False) == "disabled"
+
+
+def test_combo_values_switch_between_table_and_legacy():
+    """bcon は BAUD_TABLE の表示名、レガシーは渡した候補をそのまま使う。"""
+    from core.transport import bcon_baud as baud_ui
+    from core.transport.bcon_protocol import BAUD_TABLE
+
+    labels = baud_ui.baud_combo_values(True, [9600, 4800])
+    assert labels == [baud_ui.BAUD_DISPLAY_LABELS[i] for i in sorted(BAUD_TABLE)]
+    assert baud_ui.baud_combo_values(False, [9600, 4800]) == ["9600", "4800"]
+
+
+def test_label_and_index_roundtrip_covers_table():
+    """コンボの表示名と index が全段で往復する（選んだ段を取り違えない）。"""
+    from core.transport import bcon_baud as baud_ui
+    from core.transport.bcon_protocol import BAUD_TABLE
+
+    for index in sorted(BAUD_TABLE):
+        label = baud_ui.baud_label_for_index(index)
+        assert baud_ui.baud_index_for_label(label) == index

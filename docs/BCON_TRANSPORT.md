@@ -44,7 +44,12 @@ live 送出を再開する。`HELLO` の前に `STATE` を流さな
 `NEUTRAL` を保ったまま止まる。
 
 baud の探索・切替は公開 API の `baud_hunt` と
-`set_baud_index` が担い、画面上のボタンは無い。
+`set_baud_index` が担う。画面からは、メイン画面の
+「ボーレート」欄（通信方式が bcon 系のときだけ選べる）と
+「Bcon」タブの「通信速度」から切り替えられる。
+候補は `BAUD_TABLE` の5段（115200 / 460800 / 921600 / 1M / 2M）で、
+選択すると index が `settings.ini` の `bcon_baud_index` に残る。
+レガシーの通信方式ではボーレート欄は固定（9600 前提を誤らないため）。
 
 `baud_hunt` は候補 rate ごとに、まず短い `HELLO` で確定済みかを
 見て、返らなければ `NEUTRAL` を 5ms 間隔で 0.7 秒流す（呼び水）。
