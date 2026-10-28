@@ -49,7 +49,7 @@ python .\SerialController\Window.py
 - For an independent second pass, use the read-only [`.opencode/agents/project-reviewer.md`](.opencode/agents/project-reviewer.md). It cannot edit or run commands, so treat its findings as hypotheses to verify.
 - For real-screen checks, use [`.opencode/skills/gui-probe/SKILL.md`](.opencode/skills/gui-probe/SKILL.md) or the read-only [`.opencode/agents/gui-verifier.md`](.opencode/agents/gui-verifier.md).
 - 外部エージェントでローカル clone を使う導入は [`docs/AI_AUTOMATION.md`](docs/AI_AUTOMATION.md) を読む。
-- 実装計画（旧 `docs/superpowers/plans/`）とレビュー往復（旧 `docs/reviews/`）は main に置かない。退避先はブランチ `archive/agent-process-docs`。設計書（`docs/superpowers/specs/`）は現在の設計根拠なので main に残す。
+- 完了した実装計画とレビュー往復は [`docs/archive/`](docs/archive/README.md) に置く（削除しない・読み口には出さない）。設計書（`docs/superpowers/specs/`）は現在の設計根拠なので main の `docs/` に残す。新規の計画は issue/PR に書き、完了後に archive へ移す。
 - Blockly を自動で組む・編集するときは共通の [`docs/blockly-agent/README.md`](docs/blockly-agent/README.md) と [`tools/blockly_agent.py`](tools/blockly_agent.py) を使う（新規は仕様 → `check` → `build --write`。保存済み作品は workspace の部分編集。`.py` を直接書かない）。
 
 ## Orca 作業役（worker）
