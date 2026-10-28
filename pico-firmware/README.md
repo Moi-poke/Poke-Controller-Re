@@ -33,5 +33,4 @@ PC側とのプロトコル互換は維持しない（破棄可）。
 ## 未確定
 
 - 基板（RP2040 / Pico W / wakeCon基板か）、主経路（有線優先かBT優先か）。
-- 詳細引継ぎ: `C:\Users\moilo\AppData\Local\Temp\opencode\handoff-firmware-newrepo.md`
-  （別セッションが読む想定。決まり次第ここへ転記する）。
+- 詳細引継ぎ: 未転記（別セッションの handoff メモは現存しない。決まったことはこの README に直接書く）。
