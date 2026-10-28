@@ -1,10 +1,28 @@
-# Poke-Controller MODIFIED
+# Poke-Controller Re:
 
-本質的な部分はそのままに、機能を一部追加します
+Poke-Controller Modifiedの開発履歴を引き継ぐ、Nintendo Switch向け操作・自動化ツール。
+映像・音声認識、Pythonスクリプト、Blocklyによる自動操作に対応します。
+
+## プロジェクトの系譜
+
+[KawaSwitch/Poke-Controller](https://github.com/KawaSwitch/Poke-Controller) を元にした
+[Poke-Controller Modified](https://github.com/Moi-poke/Poke-Controller-Modified) の
+`release/v4.0` を、コミット履歴ごと引き継いだ独立リポジトリです。
+今後の開発は [Moi-poke/Poke-Controller-Re](https://github.com/Moi-poke/Poke-Controller-Re) の `main` で行います。
+旧Modified版の `master` は従来版の保守用とし、原則としてセキュリティ・重大な不具合の修正に限定します。
+
+既存の自作スクリプト（`Commands.*`）と `settings*.ini` の形式は変更しません。
+MITライセンスと元の著作権表示を引き継ぎます。
 
 ![メインGUI](https://github.com/Moi-Poke/Poke-Controller/blob/photo/photos/gui.png)
 
 ## 変更点
+
+### Re:への移行
+
+- Modified版の `release/v4.0` から開発履歴を継承し、開発先を新リポジトリの `main` へ移しました。
+- アプリ・ランチャーの表示名、ヘルプと不具合報告の案内先を更新しました。
+- 通信方式、自作スクリプトの公開API、設定・作品ファイルの形式は従来どおりです。
 
 ### ver4.0.2
 主な変更点
@@ -207,7 +225,7 @@ task ci        一通りの検査（ruff＋整形確認＋mypy＋境界検査＋
   具体的には、Switchのソフトウェアキーボードを有向グラフに見立てて、文字入力の最適化を試みています。\
   サンプルコードを同梱しているので、興味のある方は試してみてください。
 
-以下は本家様の説明になります。
+以下には本家由来の使い方と参考資料を残しています。現在の環境構築は上の [Installation](#installation) を参照してください。
 - - -
 
 Pythonで書く！Switchの自動化支援ソフトウェア
@@ -228,8 +246,8 @@ Pythonで書く！Switchの自動化支援ソフトウェア
 
   - [新しいコマンドを作成](https://github.com/KawaSwitch/Poke-Controller/wiki/%E6%96%B0%E3%81%97%E3%81%84Python%E3%82%B3%E3%83%9E%E3%83%B3%E3%83%89%E3%81%AE%E4%BD%9C%E3%82%8A%E6%96%B9)
 
-分からないことや改善要望などがあれば遠慮なく[Issue](https://github.com/KawaSwitch/Poke-Controller/issues)まで  
-[Q&A](https://github.com/KawaSwitch/Poke-Controller/wiki/Q&A)や[解決済みIssue](https://github.com/KawaSwitch/Poke-Controller/issues?q=is%3Aissue+is%3Aclosed)なども役に立つかもしれません
+本アプリの不具合・改善要望は [Poke-Controller Re:のIssue](https://github.com/Moi-poke/Poke-Controller-Re/issues) へお願いします。  
+本家の [Q&A](https://github.com/KawaSwitch/Poke-Controller/wiki/Q&A) や [解決済みIssue](https://github.com/KawaSwitch/Poke-Controller/issues?q=is%3Aissue+is%3Aclosed) は参考資料です。
 
 ## クイックビュー
 
@@ -254,7 +272,7 @@ Pythonで書く！Switchの自動化支援ソフトウェア
 `self.press(Button.A) # スティックを倒した状態でAボタンを押して離す`
 
 [リファレンス](https://github.com/KawaSwitch/Poke-Controller/wiki/Python%E3%82%B3%E3%83%9E%E3%83%B3%E3%83%89_%E4%BD%9C%E6%88%90How_to)やデフォルトのコマンドなども参考にして中身を覗いてみましょう  
-作成したコマンドや便利な機能は[プルリク](https://github.com/KawaSwitch/Poke-Controller/pulls)や[Issue](https://github.com/KawaSwitch/Poke-Controller/issues)で頂けると非常に喜びます
+作成したコマンドや改善案は [本リポジトリのプルリクエスト](https://github.com/Moi-poke/Poke-Controller-Re/pulls) や [Issue](https://github.com/Moi-poke/Poke-Controller-Re/issues) へお寄せください。
 
 ### Pythonファイル管理
 
@@ -324,16 +342,12 @@ SDL 経由で読めます。
 | 十字キー | 十字キー |
 | 左・右スティック | 左・右スティック |
 
-## リリース
+## リリースと開発
 
-- 過去リリース
-  - [Github - Releases](https://github.com/KawaSwitch/Poke-Controller/releases)
-
-- 進捗状況の確認
-  - [Github - Project](https://github.com/KawaSwitch/Poke-Controller/projects)
-
-- ロードマップ
-  - [リリースについて](https://github.com/KawaSwitch/Poke-Controller/wiki/About-Releases)
+- [Poke-Controller Re:のリリース](https://github.com/Moi-poke/Poke-Controller-Re/releases)
+- [不具合・改善要望](https://github.com/Moi-poke/Poke-Controller-Re/issues)
+- [旧Modified版のリリース](https://github.com/Moi-poke/Poke-Controller-Modified/releases)
+- [本家Poke-Controllerの過去リリース](https://github.com/KawaSwitch/Poke-Controller/releases)
 
 ## 貢献
 
@@ -360,7 +374,7 @@ SDL 経由で読めます。
 ## ライセンス
 
 本プロジェクトはMITライセンスです  
-詳細は [LICENSE](https://github.com/KawaSwitch/Poke-Controller/blob/master/LICENSE) を参照ください
+詳細は [LICENSE](LICENSE) を参照ください
 
 また, 本プロジェクトではLGPLライセンスのDirectShowLib-2005.dllを同梱し使用しています  
 [About DirectShowLib](http://directshownet.sourceforge.net/)  

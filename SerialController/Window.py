@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Window.py - Poke-Controller Modified のメインウィンドウ.
+"""Window.py - Poke-Controller Re: のメインウィンドウ.
 
 PokeControllerApp : アプリ本体の組立。画面の部品ごとの手順は
 ui/ の Mixin（camera / serial / command / log の各パネル）が持ち、
@@ -56,8 +56,8 @@ from ui.scroll_host import ScrollHost
 from ui.serial_panel import SerialPanelMixin
 from ui.tooltip import Tooltip
 
-NAME = "Poke-Controller"
-VERSION = "v4.0.2 Modified"  # based on 1.0-beta3(custom by @dragonite303)
+NAME = "Poke-Controller Re:"
+VERSION = "v4.0.2"  # based on 1.0-beta3(custom by @dragonite303)
 
 
 # タイトルに出すコマンド名の上限。長い名前でウィンドウ名が埋まるのを防ぐ
@@ -593,7 +593,7 @@ class PokeControllerApp(
     # ------------------------------------------------------------------
 
     def run(self) -> None:
-        logger.debug("Start Poke-Controller")
+        logger.debug("Start {}", NAME)
         self.mainwindow.mainloop()
 
     def exit(self) -> None:
@@ -609,7 +609,7 @@ class PokeControllerApp(
         if self._closing:
             logger.debug("exit() は既に実行中のため無視しました")
             return
-        if not tkmsg.askyesno("確認", "Poke Controllerを終了しますか？"):
+        if not tkmsg.askyesno("確認", f"{NAME} を終了しますか？"):
             return
 
         self._closing = True
@@ -726,7 +726,7 @@ class PokeControllerApp(
             self._exit_step("OpenCV の窓", cv2.destroyAllWindows)
         finally:
             sys.stdout = sys.__stdout__
-            logger.debug("Stop Poke Controller")
+            logger.debug("Stop {}", NAME)
             self._exit_phase = "root_destroyed"
             try:
                 self.root.destroy()

@@ -1,4 +1,4 @@
-# AGENTS.md — Poke-Controller Modified
+# AGENTS.md — Poke-Controller Re:
 
 tkinter desktop app that automates a Switch via serial (Arduino Leonardo / Pico) + capture-board video. Primarily used on Windows, but mac/Linux users exist — serial open and other OS-dependent paths must at least fail gracefully without crashing. Python >=3.12, pinned to 3.12.15 in `.python-version`.
 

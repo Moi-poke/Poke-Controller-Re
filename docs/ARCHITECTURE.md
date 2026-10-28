@@ -1,6 +1,6 @@
 # ARCHITECTURE
 
-Poke-Controller Modified の構成メモ。詳細な開発手順は [`AGENTS.md`](../AGENTS.md)、
+Poke-Controller Re: の構成メモ。詳細な開発手順は [`AGENTS.md`](../AGENTS.md)、
 自動化コマンドの作り方は本家 wiki を参照。
 
 ## 層構造

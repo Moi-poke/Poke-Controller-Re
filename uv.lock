@@ -712,7 +712,7 @@ wheels = [
 ]
 
 [[package]]
-name = "poke-controller-modified"
+name = "poke-controller-re"
 version = "4.0.2"
 source = { virtual = "." }
 dependencies = [

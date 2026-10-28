@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""GuiAssets.py - Poke-Controller Modified の GUI 部品.
+"""GuiAssets.py - Poke-Controller Re: の GUI 部品.
 
 CaptureArea    : カメラ映像を描画する Frame。マウスでのスティック操作も担う。
 _PhotoImageSurface : 非 Windows 用の描画面（Canvas + PhotoImage）。

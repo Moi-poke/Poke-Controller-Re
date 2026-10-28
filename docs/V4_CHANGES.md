@@ -1,8 +1,10 @@
-# v4.0.0 変更点（`origin/master` 基準）
+# Modified版 v4.0.0 変更点（旧リポジトリの `origin/master` 基準）
 
-`release/v4.0` がこのリポジトリの主系（`origin/master`）から変わった点を、
+旧 [Poke-Controller Modified](https://github.com/Moi-poke/Poke-Controller-Modified) の
+`release/v4.0` が、同リポジトリの主系（`origin/master`）から変わった点を記録した文書です。
+Re:はこのブランチの履歴を引き継いでいます。現在の開発ブランチは `main` です。
 利用者向けに分野別でまとめたもの。開発基盤の話は末尾に短く置く。
-基準の差分は73件（`git log origin/master..release/v4.0` で確認できる）。
+作成時点の基準差分は73件（旧cloneでの `git log origin/master..release/v4.0` による）。
 
 ## 新機能
 

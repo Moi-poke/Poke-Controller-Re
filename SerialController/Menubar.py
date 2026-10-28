@@ -15,7 +15,7 @@ from loguru import logger
 from ui.window_aspect import WindowAspectLock
 
 # 使い方の置き場所（ヘルプ > ドキュメント / バージョン情報）。
-DOCS_URL = "https://github.com/Moi-poke/Poke-Controller-Modified"
+DOCS_URL = "https://github.com/Moi-poke/Poke-Controller-Re"
 
 # ヘルプ > ショートカット一覧 に出す表。キーの束縛は ui/command_panel.py の
 # _bind_keys が正。ここを変えるときはそちらと揃える。
@@ -260,7 +260,7 @@ class PokeController_Menubar(tk.Menu):
         version = str(getattr(self.app, "app_version", ""))
         messagebox.showinfo(
             "バージョン情報",
-            f"Poke-Controller Modified {version}\n{DOCS_URL}",
+            f"Poke-Controller Re: {version}\n{DOCS_URL}",
             parent=self.root,
         )
 

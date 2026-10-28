@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""launcher.py - Poke-Controller のプロファイルを選んで起動するランチャー.
+"""launcher.py - Poke-Controller Re: のプロファイルを選んで起動するランチャー.
 
 複数の Switch を並列で自動化するとき、台ごとに設定を分けるための
 プロファイル（settings.<name>.ini）を作成・複製・削除し、選んだものを
@@ -498,7 +498,7 @@ class LauncherWindow(ttk.Frame):
     def __init__(self, master: tk.Tk) -> None:
         super().__init__(master, padding=10)
         self.master = master
-        self.master.title("Poke-Controller ランチャー")
+        self.master.title("Poke-Controller Re: ランチャー")
         self.master.minsize(720, 340)
         self.grid(sticky=tk.NSEW)
         self.master.columnconfigure(0, weight=1)
@@ -723,7 +723,7 @@ class LauncherWindow(ttk.Frame):
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Poke-Controller ランチャー")
+    parser = argparse.ArgumentParser(description="Poke-Controller Re: ランチャー")
     parser.add_argument(
         "--profile",
         default=None,

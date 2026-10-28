@@ -2,7 +2,7 @@
 
 あなたは統括役。ソースコードを編集してはならない（`docs/` のみ編集可。これは `opencode.json` の権限でも強制される）。
 
-作業ディレクトリは `C:\PokeCon\Poke-Controller-Modified`（単一 git リポジトリ）。
+作業ディレクトリは対象の Poke-Controller Re: clone または Orca が用意した worktree（単一 git リポジトリ）。
 `C:\PokeCon` 直下はコンテナであり git リポジトリではないため、`git init` しないこと。
 もう一方のサブリポジトリ（`Switch-bcon`）には触れないこと。両方にまたがる変更は本運用の対象外。
 
@@ -41,7 +41,7 @@
     届いたメッセージはすべて処理する：質問には回答し、`worker_done` は次項で検収する。
 11. 検収：`Txx.md` の完了条件コマンドを統括役側で再実行する（例：`task ci`）。
     失敗したら原因を添えて同じタスクを差し戻す（最大2回）。3回目は escalation として記録し先に進む。
-12. 合格したブランチを依存順に integration ブランチ（`integration/orca-<yyyymmdd>-<件名>` を `release/v4.0` 等の現行ブランチから作成）へマージする。
+12. 合格したブランチを依存順に integration ブランチ（`integration/orca-<yyyymmdd>-<件名>` を `main` 等の指定された基準ブランチから作成）へマージする。
     マージのたびに完了条件コマンドを再実行する。競合したら自分で解消せず、escalation として記録する。
 13. 全タスクが終わったら、結果一覧・未解決事項・競合を `docs/report.md` に書いて停止する。
     ユーザーが `report.md` と差分を確認して main 系ブランチへマージする（統括役は main 系へ直接マージしない）。
@@ -55,7 +55,7 @@
 <1〜2文>
 
 ## 前提
-- 作業ディレクトリ: `C:\PokeCon\Poke-Controller-Modified`
+- 作業ディレクトリ: Orca が対象タスク用に用意した Poke-Controller Re: の worktree
 - ブランチ: Orca が用意した worktree（`git status` で確認）
 - 関連ドキュメント: `docs/design.md`、`docs/ARCHITECTURE.md`
 
