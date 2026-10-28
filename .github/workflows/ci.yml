@@ -17,9 +17,7 @@ jobs:
         with:
           version: "0.13.5"
       - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12.15"
+        run: uv python install
       - name: Sync deps
         run: uv sync --frozen
       - name: ruff check
