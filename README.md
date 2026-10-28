@@ -14,7 +14,7 @@ Poke-Controller Modifiedの開発履歴を引き継ぐ、Nintendo Switch向け�
 既存の自作スクリプト（`Commands.*`）と `settings*.ini` の形式は変更しません。
 MITライセンスと元の著作権表示を引き継ぎます。
 
-![メインGUI](https://github.com/Moi-Poke/Poke-Controller/blob/photo/photos/gui.png)
+![メインGUI](docs/images/main-window.png)
 
 ## 変更点
 
