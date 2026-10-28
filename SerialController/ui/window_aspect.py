@@ -5,8 +5,10 @@
 Windows の Tk（8.6.12 で確認）は wm_aspect を受け付けるが、縁のドラッグには
 何も効かない（右の縁を 300px 引くと 1102x450 になった）。Windows では窓の
 処理を差し替え（SetWindowSubclass）、ドラッグ中に届く WM_SIZING の枠を
-その場で 16:9 に直す。ドラッグを終えてから戻す方式だと、下の縁を引いても
-幅基準で元の高さへ戻され、縦に広げられない。
+その場で外形（GetWindowRect）が 16:9 になるよう直す。OBS のウィンドウ
+キャプチャは枠込みで取ることがあるため、外形を基準にする。ドラッグを
+終えてから戻す方式だと、下の縁を引いても幅基準で元の高さへ戻され、
+縦に広げられない。
 
 Windows 以外は wm_aspect をそのまま使う（ウィンドウマネージャが従う）。
 寸法の計算は core.aspect_lock に置く。
@@ -19,7 +21,15 @@ import sys
 import tkinter as tk
 from typing import Any
 
-from core.aspect_lock import RATIO_H, RATIO_W, locked_rect, snap_client
+from core.aspect_lock import (
+    RATIO_H,
+    RATIO_W,
+    Rect,
+    Size,
+    locked_rect,
+    snap_client,
+    snap_outer,
+)
 from loguru import logger
 from ui.win32_subclass import WM_NCDESTROY, WindowSubclass
 
@@ -35,9 +45,46 @@ if sys.platform == "win32":
     _user32.GetWindowRect.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.RECT)]
     _user32.GetClientRect.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.RECT)]
 
+    def _window_metrics(hwnd: int) -> tuple[Rect, Size]:
+        """窓の外形の矩形と、外形と中身の差（frame）を測る。"""
+        outer, inner = wintypes.RECT(), wintypes.RECT()
+        _user32.GetWindowRect(hwnd, ctypes.byref(outer))
+        _user32.GetClientRect(hwnd, ctypes.byref(inner))
+        rect: Rect = (outer.left, outer.top, outer.right, outer.bottom)
+        frame: Size = (
+            rect[2] - rect[0] - inner.right,
+            rect[3] - rect[1] - inner.bottom,
+        )
+        return rect, frame
+
+    def _snap_size(root: Any, minimum: Size, hwnd: int | None) -> Size | None:
+        """固定を入れたとき wm_geometry へ渡す中身の寸法（外形基準）。"""
+        if hwnd is None:
+            return None
+        rect, frame = _window_metrics(hwnd)
+        outer_w, outer_h = rect[2] - rect[0], rect[3] - rect[1]
+        if outer_w <= 1 or outer_h <= 1:
+            return None
+        target_w, target_h = snap_outer(outer_w, outer_h, frame, minimum)
+        if (target_w, target_h) == (outer_w, outer_h):
+            return None
+        # wm_geometry は中身の寸法を取る。外形の目標から枠を引く。
+        return target_w - frame[0], target_h - frame[1]
+
+else:
+
+    def _snap_size(root: Any, minimum: Size, hwnd: int | None) -> Size | None:
+        """固定を入れたとき wm_geometry へ渡す中身の寸法（wm_aspect 用）。"""
+        del hwnd
+        width, height = root.winfo_width(), root.winfo_height()
+        if width <= 1 or height <= 1:
+            return None
+        target = snap_client(width, height, minimum=minimum)
+        return None if target == (width, height) else target
+
 
 class WindowAspectLock:
-    """root の窓を 16:9 に保つ。入/切はセッションの間だけ（ini へは残さない）。"""
+    """root の窓の外形を 16:9 に保つ。入/切はセッションの間だけ（ini へは残さない）。"""
 
     def __init__(self, root: Any) -> None:
         self._root = root
@@ -76,19 +123,29 @@ class WindowAspectLock:
         self._enabled = False
         self._subclass.remove()
 
+    def refresh(self) -> None:
+        """固定中なら、今の窓の大きさに 16:9 を掛け直す。
+
+        メニューの「ウィンドウ 1280x720」のように wm_geometry で直接
+        大きさを変える経路は WM_SIZING を通らないため、ここで合わせる。
+        """
+        if self._enabled:
+            self._snap()
+
     # ------------------------------------------------------------------
 
     def _snap(self) -> None:
-        """入れた瞬間、今の幅を保って高さを 16:9 に合わせる。"""
+        """入れた瞬間、外形の幅を保って外形を 16:9 に合わせる。
+
+        Windows では枠（タイトルバー・メニュー・縁）を含めた外形が 16:9 に
+        なるよう、外形から枠を引いた寸法を wm_geometry で設定する。
+        """
         try:
             if self._root.state() != "normal":
                 return  # 最大化中は窓の大きさを変えない。
             self._root.update_idletasks()
-            width, height = self._root.winfo_width(), self._root.winfo_height()
-            if width <= 1 or height <= 1:
-                return
-            target = snap_client(width, height, minimum=self._minimum)
-            if target != (width, height):
+            target = _snap_size(self._root, self._minimum, self._subclass.hwnd)
+            if target is not None:
                 self._root.geometry("%dx%d" % target)
         except tk.TclError as e:
             logger.warning(f"16:9 の寸法へ合わせられませんでした: {e!r}")
@@ -118,14 +175,8 @@ class WindowAspectLock:
         hwnd = self._subclass.hwnd
         if sys.platform != "win32" or hwnd is None:
             return
-        outer, inner = wintypes.RECT(), wintypes.RECT()
-        _user32.GetWindowRect(hwnd, ctypes.byref(outer))
-        _user32.GetClientRect(hwnd, ctypes.byref(inner))
         # 枠（タイトルバー・メニュー・縁）の分。ドラッグの前の今の窓で測る。
-        frame = (
-            outer.right - outer.left - inner.right,
-            outer.bottom - outer.top - inner.bottom,
-        )
+        _, frame = _window_metrics(hwnd)
         rect = wintypes.RECT.from_address(lparam)
         left, top, right, bottom = locked_rect(
             edge,
