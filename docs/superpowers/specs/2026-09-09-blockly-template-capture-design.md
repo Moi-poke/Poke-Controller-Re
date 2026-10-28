@@ -1,7 +1,7 @@
 # TODO-22 Phase B: テンプレ画像作成 設計書
 
 - 日付: 2026-09-09
-- 前提: Phase A完成（`dff2924`、反映修正含む）。spec `docs/superpowers/specs/2026-09-08-blockly-vision-design.md`、plan `docs/superpowers/plans/2026-09-08-blockly-vision.md`。
+- 前提: Phase A完成（`dff2924`、反映修正含む）。spec `docs/superpowers/specs/2026-09-08-blockly-vision-design.md`、plan は archive ブランチ `archive/agent-process-docs` の `docs/superpowers/plans/2026-09-08-blockly-vision.md`。
 - 方式: 案A（編集画面に同居・サーバ側crop・取得関数を注入）。ROI切出しのデスクトップ前例（`GuiAssets.StartRangeSS`系：表示→実座標スケーリング＋`saveCapture(crop_ax)`）をブラウザ版にする。
 
 ## 1. 目的

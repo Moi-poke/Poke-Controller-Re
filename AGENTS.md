@@ -38,7 +38,7 @@ python .\SerialController\Window.py
 - Windows-only deps: `pythonnet`, [`DirectShowLib/`](DirectShowLib), `timeBeginPeriod` in `PythonCommandBase`. Don't add POSIX-only assumptions; `os.name == "nt"` branches are load-bearing. mac/Linux users exist: `Transport.open` posix/Darwin branches and other OS-dependent paths must at least fail gracefully without crashing (return False + log, never raise on bad baud/port). `chmod 0o600` in `Settings` is posix-only guarded.
 - New connection method (beyond the built-in `legacy_text` / `pico_uart` / `switch-bcon` / `switch-bcon-proc`): add a `Transport` subclass + `register_transport(name, factory, description)`. Unknown `capability` names are accepted (treated as legacy-equivalent, sync `send_row`, no live worker); worker-backed methods add their name to `Transport.LIVE_WORKER_CAPABILITIES`. `open/openSerial` accept `**extra` for future params (VID/PID, IP, etc.). `WakeLink` uses `get_raw_serial()/acquire_write_lock()` so non-serial transports degrade to fallback instead of crashing. Logging policy: file (`logger`) for almost everything, GUI (`print` → LogPane) only for critical user-actionable failures (open failure, write timeout, SerialException, resolve/create fallback).
 - `Sender` send interval (`Transport.MIN_SEND_INTERVAL`) is derived from baud rate with a 0.02s cap — no flow control on the wire, so don't lower it blindly.
-- `export_py.py` was deleted (unused). Root `makefile` is the legacy AVR LUFA firmware. The old `pico_firmware/` (underscore) was deleted; current `pico-firmware/` (hyphen) is a new design workspace. The protocol reference is the separate repo `Moi-poke/pico-wakeCon`.
+- `export_py.py`（未使用）と旧 AVR LUFA 用のルート `makefile` は削除済み（`Joystick.c` 等のソースも LUFA 本体もリポジトリに無く、ビルド不能だった）。The old `pico_firmware/` (underscore) was deleted; current `pico-firmware/` (hyphen) is a new design workspace. The protocol reference is the separate repo `Moi-poke/pico-wakeCon`.
 - pico-wakeCon wire compat (verified against its `main` branch, no hardware): UART0 115200 8N1 + USB CDC, CRLF, `S <6 hex>` inputs, `O <4 hex> → color ...` replies, 200ms watchdog (keepalive <200ms required), `N` is sent without waiting for a reply. Pico UART (legacy text) connections must use 115200, not the 9600 default; BCON uses 1 Mbps.
 - `settings*.ini` は**アプリ終了時に保存**される。起動中に ini を手編集すると終了時に旧値で上書きされるので、編集はアプリを閉じてから行う。
 
@@ -49,6 +49,7 @@ python .\SerialController\Window.py
 - For an independent second pass, use the read-only [`.opencode/agents/project-reviewer.md`](.opencode/agents/project-reviewer.md). It cannot edit or run commands, so treat its findings as hypotheses to verify.
 - For real-screen checks, use [`.opencode/skills/gui-probe/SKILL.md`](.opencode/skills/gui-probe/SKILL.md) or the read-only [`.opencode/agents/gui-verifier.md`](.opencode/agents/gui-verifier.md).
 - 外部エージェントでローカル clone を使う導入は [`docs/AI_AUTOMATION.md`](docs/AI_AUTOMATION.md) を読む。
+- 実装計画（旧 `docs/superpowers/plans/`）とレビュー往復（旧 `docs/reviews/`）は main に置かない。退避先はブランチ `archive/agent-process-docs`。設計書（`docs/superpowers/specs/`）は現在の設計根拠なので main に残す。
 - Blockly を自動で組む・編集するときは共通の [`docs/blockly-agent/README.md`](docs/blockly-agent/README.md) と [`tools/blockly_agent.py`](tools/blockly_agent.py) を使う（新規は仕様 → `check` → `build --write`。保存済み作品は workspace の部分編集。`.py` を直接書かない）。
 
 ## Orca 作業役（worker）

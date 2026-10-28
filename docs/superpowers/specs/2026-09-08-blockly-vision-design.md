@@ -1,7 +1,7 @@
 # TODO-22 Phase A: Blockly画像認識ブロック 設計書
 
 - 日付: 2026-09-08
-- 前提: TODO-20基盤完成（`af72caa`）。plan `docs/superpowers/plans/2026-09-07-blockly-editor.md`、handoff `pokecon-handoff.md`。
+- 前提: TODO-20基盤完成（`af72caa`）。plan は archive ブランチ `archive/agent-process-docs` の `docs/superpowers/plans/2026-09-07-blockly-editor.md`。
 - 方式: 案A（datalist併用・自動切替・形式のみ検証）。ROI切出しはPhase Bに分割。
 
 ## 1. 目的

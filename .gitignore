@@ -161,5 +161,8 @@ SerialController/log/
 # ルート直下の実行時生成物（PokeConLogger の ../log、旧版の ./Captures）
 /log/
 /Captures/
+
+# pytest の basetemp が cwd に落ちた場合の残骸（TEMP が壊れた環境で起きる）
+/pytest-of-*/
 .agents/
 .claude/
