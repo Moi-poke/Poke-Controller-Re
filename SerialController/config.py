@@ -72,11 +72,11 @@ def default_sections() -> dict[str, dict[str, Any]]:
             "com_port": 0,
             "com_port_name": "",
             "baud_rate": 9600,
-            "fps": 45,
+            "fps": 60,
             "show_size": "640x360",
             # プレビューの表示モード。fixed … プリセットで固定 /
             # fit … ウィンドウに合わせて拡大縮小。候補は core.display_mode
-            "show_mode": "fixed",
+            "show_mode": DEFAULT_SHOW_MODE,
             # 描画方式。候補は WindowUtils.RENDERER_VALUES が正
             "renderer": "auto",
             "is_show_realtime": True,
@@ -375,7 +375,7 @@ def complete_missing(parser: configparser.ConfigParser) -> list[str]:
         "camera_id": (0, lambda value: value >= 0),
         "com_port": (0, lambda value: value >= 0),
         "baud_rate": (9600, lambda value: value > 0),
-        "fps": (45, lambda value: value in (5, 15, 30, 45, 60)),
+        "fps": (60, lambda value: value in (5, 15, 30, 45, 60)),
         "gamepad_index": (0, lambda value: 0 <= value <= 3),
         "gamepad_deadzone": (1638, lambda value: 0 <= value <= 8192),
     }

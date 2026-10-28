@@ -27,7 +27,7 @@ def test_the_mode_table_offers_exactly_fixed_and_fit() -> None:
     # Given / When / Then: 表示モードは 2 つだけ。表を弄ると設定の補正と
     # 画面の選択肢がずれるので、ここを直接押さえる。
     assert SHOW_MODES == ("fixed", "fit")
-    assert DEFAULT_SHOW_MODE == "fixed"
+    assert DEFAULT_SHOW_MODE == "fit"
 
 
 def test_the_size_table_lists_the_four_presets_in_ascending_order() -> None:
@@ -88,15 +88,15 @@ def test_preview_layout_in_fit_mode_ignores_the_fixed_size() -> None:
     assert preview_layout("fit", "typo") == preview_layout("fit", "1920x1080")
 
 
-def test_preview_layout_treats_an_unknown_mode_as_fixed() -> None:
+def test_preview_layout_treats_an_unknown_mode_as_the_default() -> None:
     # Given: 候補に無いモード名（補完が効いていない設定など）
     # When
     layout = preview_layout("typo", "1280x720")
 
-    # Then: 固定サイズ扱い（伸びない要求を出す）。
-    assert layout == preview_layout("fixed", "1280x720"), layout
-    assert layout.stretch is False
-    assert layout.request_size == (1280, 720)
+    # Then: 既定（fit）扱い。設定補正の「不明値→既定」と同じ落とし先。
+    assert layout == preview_layout(DEFAULT_SHOW_MODE, "1280x720"), layout
+    assert layout.stretch is True
+    assert layout.request_size == FIT_REQUEST_SIZE
 
 
 def test_the_two_modes_really_produce_different_layouts() -> None:

@@ -26,11 +26,12 @@ from dataclasses import dataclass
 from typing import Final
 
 # 表示モード。fixed … プリセットで固定 / fit … 枠に合わせて拡大縮小
+# 既定は fit（ウィンドウの広さに合わせる）。
 SHOW_MODES: Final[tuple[str, str]] = ("fixed", "fit")
 # 固定モードのプリセット。候補は WindowUtils.SHOW_SIZE_VALUES と同じ中身の複製で、
 # 設定の補正（config.complete_missing）もここを参照する。
 SHOW_SIZES: Final[tuple[str, ...]] = ("640x360", "960x540", "1280x720", "1920x1080")
-DEFAULT_SHOW_MODE: Final[str] = "fixed"
+DEFAULT_SHOW_MODE: Final[str] = "fit"
 DEFAULT_SHOW_SIZE: Final[str] = "640x360"
 # fit のときの要求サイズ。ウィンドウがこれより小さくても要求寸法は下がらない
 # （小さいときは枠の中に収まるよう縮んで表示される）。
@@ -93,10 +94,11 @@ def parse_show_size(text: str) -> tuple[int, int]:
 def preview_layout(mode: str, show_size: str) -> PreviewLayout:
     """表示モードと固定サイズから、枠の要求（伸ばすかどうか）を決める。
 
-    不明なモードは fixed 扱い。補完（config.complete_missing）を抜けても
-    ウィンドウそのものは壊さないため。
+    不明なモードは既定（DEFAULT_SHOW_MODE）扱い。補完（config.complete_missing）
+    を抜けてもウィンドウそのものは壊さないため。
     """
-    if mode == "fit":
+    resolved = mode if mode in SHOW_MODES else DEFAULT_SHOW_MODE
+    if resolved == "fit":
         # 固定サイズはこのモードでは選ばれていないため参照しない。
         return PreviewLayout(stretch=True, request_size=FIT_REQUEST_SIZE)
     return PreviewLayout(stretch=False, request_size=parse_show_size(show_size))
