@@ -331,7 +331,9 @@ SDL 経由で読めます。
 
 > **Switch Pro コントローラの HID 直結（ジャイロ含む）を使う場合**
 > Steam / SDL との HID 競合を避けるため、[HidHide の設定](docs/HIDHIDE.md)が必要です。
-> HidHide が未設定のときは、Switch HID のパッド/ジャイロ機能だけが無効になります。
+> HidHide が未設定のときは、「ゲームパッドで操作」のチェック自体が
+> 無効になります（判定は起動時の1回。設定後はアプリを再起動してください）。
+> 通常の入力経路は HID 直結だけで、SDL はデバッグ用（`POKECON_SDL_DEBUG`）です。
 
 | Switchコントローラ | ゲームパッド |
 | ---- | ---- |
@@ -343,8 +345,14 @@ SDL 経由で読めます。
 | 十字キー | 十字キー |
 | 左・右スティック | 左・右スティック |
 
-## リリースと開発
+### 画面を配信・録画する（OBS など）
 
+メニューの「16:9 に固定」を ON にすると、タイトルバー・メニューを含む
+**ウィンドウの外枠**が 16:9 になります。OBS の「ウィンドウキャプチャ」で
+「クライアント領域のみ」を ON にしている場合は中身だけが切り出され、
+16:9 にならないため OFF にしてください。
+
+## リリースと開発
 - [Poke-Controller Re:のリリース](https://github.com/Moi-poke/Poke-Controller-Re/releases)
 - [不具合・改善要望](https://github.com/Moi-poke/Poke-Controller-Re/issues)
 - [旧Modified版のリリース](https://github.com/Moi-poke/Poke-Controller-Modified/releases)
