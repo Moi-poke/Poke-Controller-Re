@@ -479,6 +479,9 @@ class PokeControllerApp(
         self.is_show_serial.set(self.settings.is_show_serial.get())
         self.is_use_keyboard.set(self.settings.is_use_keyboard.get())
         self.is_use_gamepad.set(self.settings.is_use_gamepad.get())
+        # HidHide 未設定なら、設定に True が残っていても選べない状態へ戻す
+        # （判定は _build_control_frame の起動時1回）。
+        self._apply_hidhide_gamepad_gate()
         self.gamepad_dz.set(str(self.settings.gamepad_deadzone.get()))
         self.fps.set(str(self.settings.fps.get()))
         self.show_size.set(self.settings.show_size.get())
