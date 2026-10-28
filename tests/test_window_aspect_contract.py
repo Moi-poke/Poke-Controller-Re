@@ -2,8 +2,9 @@
 
 Windows の Tk（8.6.12）は wm_aspect を受け付けるが、縁のドラッグには何も
 効かない（右の縁を 300px 引くと 1102x450 になった）。ドラッグ中に Windows が
-送る WM_SIZING を受け、その場で枠を 16:9 に直す。ここでは実際の窓へ
-WM_SIZING を送り、窓の処理が枠を直したかを見る（マウスは動かさない）。
+送る WM_SIZING を受け、その場で外形（GetWindowRect）を 16:9 に直す。
+ここでは実際の窓へ WM_SIZING を送り、窓の処理が枠を直したかを見る
+（マウスは動かさない）。
 """
 
 from __future__ import annotations
@@ -80,6 +81,14 @@ def _client_of(win: tk.Toplevel, rect: _Rect) -> tuple[int, int]:
     return rect.right - rect.left - frame_w, rect.bottom - rect.top - frame_h
 
 
+def _outer_of(rect: _Rect) -> tuple[int, int]:
+    return rect.right - rect.left, rect.bottom - rect.top
+
+
+def _assert_16_to_9(width: int, height: int) -> None:
+    assert abs(width * 9 - height * 16) <= 16
+
+
 def test_a_locked_window_stays_16_to_9_while_its_edge_is_dragged(
     window: tk.Toplevel,
 ) -> None:
@@ -88,19 +97,22 @@ def test_a_locked_window_stays_16_to_9_while_its_edge_is_dragged(
     lock = WindowAspectLock(window)
     assert lock.set_enabled(True)
 
-    # When: the right edge is dragged to 1100x450.
+    # When: the right edge is dragged so the client would be 1100x450.
     rect = _send_sizing(window, WMSZ_RIGHT, 1100, 450)
 
-    # Then: 枠は 16:9 に直される（横に引いた分、下へ伸びる）。
-    width, height = _client_of(window, rect)
-    assert width == 1100
-    assert abs(width * 9 - height * 16) <= 16
+    # Then: 外形は 16:9 に直される（横に引いた分、下へ伸びる）。
+    frame_w, frame_h = _frame_size(window)
+    outer_w, outer_h = _outer_of(rect)
+    assert outer_w == 1100 + frame_w
+    _assert_16_to_9(outer_w, outer_h)
 
     # When: the bottom edge is dragged instead.
     rect = _send_sizing(window, WMSZ_BOTTOM, 800, 630)
 
     # Then: 高さに合わせて幅が広がる（下の縁のドラッグも効く）。
-    assert _client_of(window, rect) == (1120, 630)
+    outer_w, outer_h = _outer_of(rect)
+    assert outer_h == 630 + frame_h
+    assert outer_w == round(outer_h * 16 / 9)
     lock.cleanup()
 
 
@@ -126,14 +138,46 @@ def test_turning_the_lock_on_makes_the_current_window_16_to_9(
 
     window.geometry("1000x700")
     window.update()
+    frame_w, _frame_h = _frame_size(window)
+    before = _Rect()
+    hwnd = int(window.wm_frame(), 16)
+    _user32().GetWindowRect(hwnd, ctypes.byref(before))
+    outer_w = before.right - before.left
     lock = WindowAspectLock(window)
 
     # When: the lock is turned on.
     lock.set_enabled(True)
     window.update()
 
-    # Then: 今の幅を保って高さを 16:9 に合わせる。
-    assert (window.winfo_width(), window.winfo_height()) == (1000, 562)
+    # Then: 今の外形の幅を保って、外形を 16:9 に合わせる。
+    after = _Rect()
+    _user32().GetWindowRect(hwnd, ctypes.byref(after))
+    _assert_16_to_9(after.right - after.left, after.bottom - after.top)
+    assert after.right - after.left == outer_w
+    # wm_geometry は中身の寸法を取る。中身は外形から枠を引いた幅になる。
+    assert window.winfo_width() == outer_w - frame_w
+    lock.cleanup()
+
+
+def test_resizing_programmatically_while_locked_is_repaired(
+    window: tk.Toplevel,
+) -> None:
+    from ui.window_aspect import WindowAspectLock
+
+    lock = WindowAspectLock(window)
+    lock.set_enabled(True)
+
+    # When: a menu command (wm_geometry) changes the size without WM_SIZING.
+    window.geometry("1200x800")
+    window.update()
+    lock.refresh()
+    window.update()
+
+    # Then: 外形は 16:9 に戻る。
+    hwnd = int(window.wm_frame(), 16)
+    outer = _Rect()
+    _user32().GetWindowRect(hwnd, ctypes.byref(outer))
+    _assert_16_to_9(outer.right - outer.left, outer.bottom - outer.top)
     lock.cleanup()
 
 

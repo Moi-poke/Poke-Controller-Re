@@ -338,17 +338,22 @@ class PokeController_Menubar(tk.Menu):
             self.key_config = None
 
     def applyWindowSize(self, width: int, height: int) -> None:
-        """メインウィンドウ全体を指定サイズにする。保存は終了時に行う。"""
+        """メインウィンドウ全体を指定サイズにする。保存は終了時に行う。
+
+        16:9 固定中は、大きさを変えた後に外形が 16:9 になるよう掛け直す。
+        """
         root: Any = self.root
         try:
             root.geometry(f"{int(width)}x{int(height)}")
         except Exception as e:
             logger.warning(f"画面サイズの変更に失敗しました: {e!r}")
             return
+        if self._aspect_lock is not None and self._aspect_lock.enabled:
+            self._aspect_lock.refresh()
         logger.info(f"画面サイズを{int(width)}x{int(height)}にしました。")
 
     def lockAspect(self, lock: bool) -> None:
-        """16:9 の縦横比固定を入/切する。失敗は警告のみ。
+        """16:9（外形）の縦横比固定を入/切する。失敗は警告のみ。
 
         wm_aspect だけでは Windows で効かないため、ui.window_aspect に任せる。
         入れられなかったときはチェックを外し、今の状態と食い違わせない。
