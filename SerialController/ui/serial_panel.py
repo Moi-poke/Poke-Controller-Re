@@ -111,6 +111,7 @@ class SerialPanelMixin:
     is_use_gamepad: Any
     _gamepad_active: Any
     cb_use_gamepad: Any
+    _hidhide_gamepad_ok: bool
     gamepad_label: Any
     gamepad_choice: Any
     gamepad_cb: Any
@@ -340,7 +341,12 @@ class SerialPanelMixin:
         self.control_lf = ttk.Labelframe(self.tab_controller)
 
         # HidHideが未設定なら、Switch HIDのパッド/ジャイロだけを無効にする。
-        # Xbox/SDLコントローラはHidHideなしでも動くため、タブごとは消さない。
+        # ゲームパッド操作のチェックも無効にする（下の
+        # _apply_hidhide_gamepad_gate）。通常の読み取り経路は HID 直結だけで、
+        # SDL は POKECON_SDL_DEBUG のときしか使わない。押せてしまうと
+        # 「有効にしたのに動かない」だけになるため、入口ごと閉じる。
+        # 判定は起動時の1回だけ。後から HidHide を設定しても、この画面では
+        # 追わない（再起動で反映する）。
         self.hidhide_notice: Any = None
         try:
             from core.hidhide import detect_hidhide
@@ -350,9 +356,9 @@ class SerialPanelMixin:
                 self.hidhide_notice = ttk.Label(
                     self.control_lf,
                     text=(
-                        "HidHideが未設定のため、Switch HIDコントローラ/ジャイロは"
-                        "無効です。READMEのHidHide手順を確認してください。"
-                        f"（{status.summary()}）"
+                        "HidHideが未設定のため、Switch HIDコントローラ/ジャイロと"
+                        "ゲームパッド操作は使えません（設定後に再起動してください）。"
+                        f"（{status.summary()}）READMEのHidHide手順を確認してください。"
                     ),
                     wraplength=520,
                     foreground="#9a5b00",
@@ -383,6 +389,11 @@ class SerialPanelMixin:
         )
         self.cb_use_gamepad.grid(column=1, row=0, padx="10", pady="5", sticky="ew")
         Tooltip(self.cb_use_gamepad, "接続したゲームパッドの入力を Switch へ送る")
+        # 状態はここで1回だけ調べ、結果を保持する。設定の流し込み
+        # （_apply_settings_to_widgets）は後から is_use_gamepad を
+        # 上書きするため、そこでも同じ結果で門を閉じ直す。
+        self._hidhide_gamepad_ok = self._gamepad_enabled_by_hidhide()
+        self._apply_hidhide_gamepad_gate()
 
         self.cb_left_stick_mouse = ttk.Checkbutton(self.control_lf)
         self.cb_left_stick_mouse.config(
@@ -513,6 +524,43 @@ class SerialPanelMixin:
                 viewport=getattr(self, "tabs_scroll", None),
             )
         self.simpleConButton = self.controller_dock.pop_button
+
+    def _gamepad_enabled_by_hidhide(self) -> bool:
+        """「ゲームパッドで操作」を選べる状態か（起動時の判定）。
+
+        HidHide が未設定なら HID 直結パッドは開けない。通常の読み取り
+        経路は HID 直結だけで、SDL は POKECON_SDL_DEBUG のときしか使わない
+        ため、チェックを押せても操作はできない。判定は起動時に1回だけ
+        行い、HidHide の状態が後から変わっても再起動までは追わない。
+        """
+        try:
+            from core.hidhide import hidhide_ready
+
+            return bool(hidhide_ready())
+        except Exception:
+            return False
+
+    def _apply_hidhide_gamepad_gate(self) -> None:
+        """HidHide 未設定ならゲームパッド操作のチェックを無効にする。
+
+        `_build_control_frame`（組み立て時）と `_apply_settings_to_widgets`
+        （設定の流し込み時）の両方から呼ぶ。後者が設定値を書き戻すため、
+        片方だけでは True が復活してしまう。判定結果は
+        `_hidhide_gamepad_ok` に固定し、ここでは再検出しない。
+        """
+        if getattr(self, "_hidhide_gamepad_ok", False):
+            self.cb_use_gamepad.config(state="normal")
+            return
+        self.cb_use_gamepad.config(state="disabled")
+        if not self.is_use_gamepad.get():
+            return
+        # 設定に True が残っていても開始しない。既に動いている場合
+        # （通常は起動直後で実体なし）は止める。
+        self.is_use_gamepad.set(False)
+        try:
+            self.serial.set_gamepad_enabled(False)
+        except Exception as e:
+            logger.warning(f"ゲームパッド操作を止められませんでした: {e}")
 
     def _read_imu_settings(self) -> dict[str, str]:
         """IMU節を読む。無ければ空辞書（呼出側が既定で補う）。"""

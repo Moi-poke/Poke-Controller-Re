@@ -45,7 +45,10 @@ GUI の HidHide Configuration Client でも同じ設定ができる。
 - HidHide が **ready**（cloak-on / アプリ許可 / Switch HID を hide）の
   ときだけ、HID 直結のパッド・ジャイロを使う。
 - 未導入・未設定なら、Switch HID のパッド/ジャイロは無効になり、
-  コントローラタブに案内を出す。Xbox/SDL コントローラは引き続き使える。
+  コントローラタブに案内を出す。通常の読み取り経路は HID 直結だけで、
+  SDL はデバッグ用（`POKECON_SDL_DEBUG`）のため、「ゲームパッドで操作」
+  のチェックも無効にする。判定は起動時の1回だけなので、設定後は
+  アプリを再起動する。
 - 通常は HID 有線のみ。SDL をデバッグ用に解禁するときだけ、起動前に
   `POKECON_SDL_DEBUG=1` を設定する。
 
