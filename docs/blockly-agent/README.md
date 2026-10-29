@@ -107,6 +107,18 @@ uv run --frozen python tools/blockly_agent.py live patch --server "<origin>" --o
 - 同じアプリの別タブには適用しない（1 タブだけが貸与される）。エディタを閉じると使えない。
 - マウス・キーボード入力の代わりに Blockly API を使う。
 
+構造変更が多い場合は、ライブ workspace のコピーで先に `patch --dry-run` を通す。
+取得した `revision` はライブ適用まで保持し、既存のブロック ID・配置・コメントを残して変更する。
+
+```text
+uv run --frozen python tools/blockly_agent.py live status --server "<origin>" --output work/live.blockly.json --json
+uv run --frozen python tools/blockly_agent.py patch work/live.blockly.json --ops work/ops.json --dry-run --json
+```
+
+dry-run が通っても、その後にブラウザで編集されれば版は変わる。
+元の `revision` でライブ適用し、適用後の `live status` で変更箇所と `dirty` を確認する。
+`dirty:true` は未保存を示すため、ディスクへ保存済みとは報告しない。
+
 ## 認識準備と限定試行
 
 [vision ガイド](references/vision.md) の実画像取得 → 対象選択 → 切出し → 別の正例・負例で照合 → 条件決定を通す。

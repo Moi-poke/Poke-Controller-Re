@@ -112,6 +112,18 @@ uv run --frozen python tools/blockly_agent.py patch MyBlock.blockly.json --ops w
 {"operations":[{"op":"delete_block","blockId":"agent_wait"}]}
 ```
 
+### 条件ブロックの動的な接続口
+
+現行の `patch` はカタログの `inputs` で接続先を検査する。
+`controls_if` に `set_extra_state` で `{"hasElse":true}` を設定しても、カタログにない `ELSE` への `create_block` / `connect` は「接続口がありません」と拒否される。
+新規仕様の `if` 短縮形が `else` を生成できることとは別の制約である。
+
+既存 workspace を部分編集する場合は、「条件を反転 → 不成立時のログ・終了 → 後続に成功処理」の順でも同じ停止条件を表せる。
+`logic_negate` を `controls_if.IF0` へ接続し、`DO0` に失敗時の処理と `pokecon_finish` を置く。
+後続へ成功処理を置く場合は、失敗側で終了することを生成コードで確認する。
+接続エラーを避けるために失敗条件を削除したり、workspace 全体を作り直したりしない。
+
+
 ## 版と要約値
 
 | 取得した値 | 渡すオプション・用途 |

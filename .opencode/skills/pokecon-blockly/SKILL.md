@@ -11,4 +11,8 @@ description: Poke-Controller Modified の Blockly プログラムを、コンパ
 導入は [外部 AI の利用手順](../../../docs/AI_AUTOMATION.md)、構文・CLI・画像認識・作例は共通手順から必要なものだけ読む。
 この skill に製品別の手順・作例は複製しない。
 
+画面認識を伴うマクロの作成・検証では、共通の [画像認識ガイド](../../../docs/blockly-agent/references/vision.md) を読む。
+操作の前提条件、操作前後の状態変化、証拠画像の保存、試行の合否判定を同ガイドで扱う。
+共通手順には再利用できる判断基準と実装上の制約を書き、個別画面の座標・操作対象・測定結果は作業記録に分ける。
+
 実画面の操作確認が必要な場合だけ、OpenCode 固有の任意補助として [gui-probe](../gui-probe/SKILL.md) を使える。
