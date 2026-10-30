@@ -36,6 +36,12 @@ from typing import Any
 import cv2
 import numpy as np
 from core.Camera import BASE_DIR, imwrite
+from core.recovery import (
+    CameraUnavailableError,
+    RecoveryAdvice,
+    TemplateImageError,
+    retry_with_recovery,
+)
 from loguru import logger
 
 # テンプレート画像のキャッシュ件数。判定ループでは同じ画像を毎秒数十回
@@ -99,15 +105,20 @@ def _imread_or_raise(template_path: str, flags: int) -> np.ndarray:
             hint = (
                 f"画像を {TEMPLATE_PATH} からの相対で置いてください "
                 f"（例: {path.join(TEMPLATE_PATH, 'my-pack', 'a.png')}）。"
-                "配布物は `Template/<パッケージ名>/` に置く規約です"
+                "配布物は `Template/<パッケージ名>/` に置く規約です。"
+                "パスの書き間違いを直す場合は「中止」し、スクリプトを"
+                "修正して再読み込み（F5）してから実行し直してください"
             )
         else:
             reason = "ファイルはありますが画像として読めません（破損・形式違い）"
-            hint = "別の画像ビューアで開けるか確かめ、開けない場合は作り直してください"
-        raise FileNotFoundError(
+            hint = (
+                "別の画像ビューアで開けるか確かめ、開けない場合は作り直してください。"
+                "直した画像で「再試行」できます"
+            )
+        raise TemplateImageError(
             f"テンプレート画像を読み込めませんでした（{reason}）: {filespec}\n"
-            f"{hint}\n"
-            f"指定: {template_path!r} / 既定の置き場所: {TEMPLATE_PATH}"
+            f"指定: {template_path!r} / 既定の置き場所: {TEMPLATE_PATH}",
+            hint=hint,
         )
     image.flags.writeable = False  # 共有配列を誤って書き換えないための保険
     return image
@@ -210,7 +221,7 @@ class VisionMixin:
         key = (template_path, bool(use_gray))
         gtmpl = self._cuda_templates.get(key)
         if gtmpl is None:
-            template = _imread_or_raise(
+            template = self._readTemplateWithRecovery(
                 template_path,
                 cv2.IMREAD_GRAYSCALE if use_gray else cv2.IMREAD_COLOR,
             )
@@ -248,6 +259,80 @@ class VisionMixin:
                     cache.clear()
             self._cached_seq = None
 
+    # -- 回復（人が直してから同じ操作をやり直す） ---------------------------
+
+    def _recoverySleep(self, seconds: float) -> None:
+        """再試行の間隔を待つ。wait があれば停止・一時停止を見る。"""
+        wait = getattr(self, "wait", None)
+        if callable(wait):
+            wait(seconds)
+        else:
+            time.sleep(seconds)
+
+    def _askRecoveryMidOperation(
+        self, exc: BaseException, advice: RecoveryAdvice
+    ) -> bool | None:
+        """操作の途中で人に尋ねる。ask_recovery が無ければ None（尋ねない）。"""
+        ask = getattr(self, "ask_recovery", None)
+        if not callable(ask):
+            return None
+        pause = getattr(self, "pause", None)
+        resume = getattr(self, "resume", None)
+        is_paused = getattr(self, "isPaused", None)
+        paused_here = False
+        # 押しっぱなしのまま人へ渡さない。既に利用者が止めている場合は
+        # その状態を respect する（勝手に再開しない）。
+        if callable(pause) and callable(is_paused):
+            try:
+                if not bool(is_paused()):
+                    pause()
+                    paused_here = True
+            except Exception:
+                logger.debug(
+                    "回復ダイアログの前に一時停止できませんでした", exc_info=True
+                )
+        try:
+            decision = ask(advice)
+            # None は「尋ねられない」。False に潰すと、GUI の無い環境で
+            # 元の例外ではなく「中止」扱いになって診断情報が消える。
+            return None if decision is None else bool(decision)
+        finally:
+            if paused_here and callable(resume):
+                try:
+                    resume()
+                except Exception:
+                    logger.debug(
+                        "回復ダイアログの後に再開できませんでした", exc_info=True
+                    )
+
+    def _readTemplateWithRecovery(self, template_path: str, flags: int) -> np.ndarray:
+        """テンプレートを読む。失敗したら人が直してから同じ読みをやり直す。"""
+        return retry_with_recovery(
+            lambda: _imread_or_raise(template_path, flags),
+            ask=self._askRecoveryMidOperation,
+            sleep=self._recoverySleep,
+        )
+
+    @staticmethod
+    def _readCameraFrame(camera: Any) -> np.ndarray:
+        frame = camera.readFrame()
+        if frame is None or getattr(frame, "size", 0) == 0:
+            raise CameraUnavailableError(
+                "カメラから画像を取得できません"
+                "（未接続 / Disable / 取得スレッド停止）。"
+            )
+        return frame
+
+    @staticmethod
+    def _readCameraFrameWithSeq(read_seq: Any) -> tuple[np.ndarray, int]:
+        frame, seq = read_seq()
+        if frame is None or getattr(frame, "size", 0) == 0:
+            raise CameraUnavailableError(
+                "カメラから画像を取得できません"
+                "（未接続 / Disable / 取得スレッド停止）。"
+            )
+        return frame, int(seq)
+
     # -- 入力の検証（画像認識の共通前処理） ---------------------------------
 
     def _readFrameOrRaise(self) -> np.ndarray:
@@ -261,14 +346,13 @@ class VisionMixin:
         """
         camera = getattr(self, "camera", None)
         if camera is None:
+            # カメラの割り当てが無いのは設定・コードの誤り。回復可能にはしない。
             raise RuntimeError("カメラが割り当てられていません。")
-        frame = camera.readFrame()
-        if frame is None or getattr(frame, "size", 0) == 0:
-            raise RuntimeError(
-                "カメラから画像を取得できません"
-                "（未接続 / Disable / 取得スレッド停止）。"
-            )
-        return frame
+        return retry_with_recovery(
+            lambda: self._readCameraFrame(camera),
+            ask=self._askRecoveryMidOperation,
+            sleep=self._recoverySleep,
+        )
 
     @staticmethod
     def _cropOrRaise(src: np.ndarray, crop: Any) -> np.ndarray:
@@ -347,19 +431,16 @@ class VisionMixin:
             raise RuntimeError("カメラが割り当てられていません。")
         read_seq = getattr(camera, "readFrameWithSeq", None)
         if callable(read_seq):
-            frame, seq = read_seq()
-            if frame is None or getattr(frame, "size", 0) == 0:
-                raise RuntimeError(
-                    "カメラから画像を取得できません"
-                    "（未接続 / Disable / 取得スレッド停止）。"
-                )
-            return frame, int(seq)
-        frame = camera.readFrame()
-        if frame is None or getattr(frame, "size", 0) == 0:
-            raise RuntimeError(
-                "カメラから画像を取得できません"
-                "（未接続 / Disable / 取得スレッド停止）。"
+            return retry_with_recovery(
+                lambda: self._readCameraFrameWithSeq(read_seq),
+                ask=self._askRecoveryMidOperation,
+                sleep=self._recoverySleep,
             )
+        frame = retry_with_recovery(
+            lambda: self._readCameraFrame(camera),
+            ask=self._askRecoveryMidOperation,
+            sleep=self._recoverySleep,
+        )
         seq_getter = getattr(camera, "frame_seq", None)
         seq_val: int | None = None
         if callable(seq_getter):
@@ -495,7 +576,7 @@ class VisionMixin:
         crop = crop or []
         src = self._prepareSrc(crop, use_gray)
 
-        template = _imread_or_raise(
+        template = self._readTemplateWithRecovery(
             template_path,
             cv2.IMREAD_GRAYSCALE if use_gray else cv2.IMREAD_COLOR,
         )
@@ -505,7 +586,7 @@ class VisionMixin:
             mask = None
             method = cv2.TM_CCOEFF_NORMED
         else:
-            mask = _imread_or_raise(mask_path, 0)
+            mask = self._readTemplateWithRecovery(mask_path, 0)
             method = cv2.TM_CCORR_NORMED
 
         self._checkTemplate(src, template, mask)
@@ -578,7 +659,7 @@ class VisionMixin:
         max_val_list = []
         judge_threshold_list = []
         for template_path in template_path_list:
-            template = _imread_or_raise(
+            template = self._readTemplateWithRecovery(
                 template_path,
                 cv2.IMREAD_GRAYSCALE if use_gray else cv2.IMREAD_COLOR,
             )
@@ -667,7 +748,7 @@ class VisionMixin:
         # メッセージだけが出て、原因が crop なのか画像なのか分からない。
         # 検証には CPU 上のテンプレートが要るので、キャッシュと同じ
         # 読み方でもう一度読む（lru_cache が効くので実費は無い）。
-        template = _imread_or_raise(
+        template = self._readTemplateWithRecovery(
             template_path,
             cv2.IMREAD_GRAYSCALE if use_gray else cv2.IMREAD_COLOR,
         )
@@ -770,7 +851,7 @@ class VisionMixin:
                 center = (int(max_loc[0] + dx + w / 2), int(max_loc[1] + dy + h / 2))
                 return bool(max_val >= threshold), float(max_val), center
 
-        template = _imread_or_raise(
+        template = self._readTemplateWithRecovery(
             template_path,
             cv2.IMREAD_GRAYSCALE if use_gray else cv2.IMREAD_COLOR,
         )
@@ -778,7 +859,7 @@ class VisionMixin:
             mask = None
             method = cv2.TM_CCOEFF_NORMED
         else:
-            mask = _imread_or_raise(mask_path, 0)
+            mask = self._readTemplateWithRecovery(mask_path, 0)
             method = cv2.TM_CCORR_NORMED
 
         self._checkTemplate(src, template, mask)
@@ -1091,7 +1172,7 @@ class VisionMixin:
         crop = crop or []
         src = self._prepareSrc(crop, use_gray)
 
-        template = _imread_or_raise(
+        template = self._readTemplateWithRecovery(
             template_path,
             cv2.IMREAD_GRAYSCALE if use_gray else cv2.IMREAD_COLOR,
         )
