@@ -34,6 +34,7 @@ import traceback
 from collections.abc import Callable
 from typing import Any, cast
 
+from core.recovery import RecoveryAdvice
 from loguru import logger
 
 # 作業側→GUI側の委譲待ち行列。作業スレッドはTkを触らず積むだけにし、
@@ -181,6 +182,10 @@ class DialogMixin:
     _DIALOGUE_OPEN_TIMEOUT = 30.0
     # 待ちを刻む幅(秒)。停止遅延を50ms→20ms相当へ近づける。
     _DIALOGUE_WAIT_SLICE = 0.05
+    # 回復ダイアログを開いたままにする上限(秒)。利用者がファイルを
+    # 置いたりカメラを繋ぎ直したりする時間を見込む。主循環が死んだ
+    # 場合に作業スレッドを置き去りにしないための保険でもある。
+    _RECOVERY_OPEN_TIMEOUT = 300.0
 
     def dialogue(
         self, title: str, message: int | str | list, need: type = list
@@ -345,6 +350,168 @@ class DialogMixin:
         if "error" in box:
             raise RuntimeError(f"dialogue failed:\n{box['error']}")
         return box.get("value")
+
+    def ask_recovery(self, advice: RecoveryAdvice) -> bool | None:
+        """回復可能なエラーで、人が直してから再試行するかを尋ねる。
+
+        作業スレッドから呼ばれる。Tk は GUI スレッドで作り、結果だけを
+        Event で受け取る（dialogue と同じ作法）。GUI が無い・ダイアログを
+        開けないときは None を返し、呼び出し側は元の例外をそのまま出す。
+
+        戻り値:
+          True  … 利用者が「再試行」を押した
+          False … 利用者が「中止」を押した／窓を閉じた／時間切れ
+          None  … 尋ねられない（GUI 無し・ダイアログを開けない）
+
+        grab_set はしない。回復待ちの間も本体の Stop を押せるようにする
+        ため（モーダルにすると停止できず、打ち切りまで待つことになる）。
+        また、窓の生成だけを GUI 側へ積み、待つのは作業側で行う。
+        生成側で wait_window すると委譲の取り出し輪がその場で止まり、
+        停止時に積んだ「閉じる」処理が走らなくなるため。
+        """
+        root = self._guiRoot()
+        if root is None:
+            return None
+
+        done = threading.Event()
+        box: dict[str, Any] = {}
+        holder: dict[str, Any] = {}
+        slice_s = float(getattr(self, "_DIALOGUE_WAIT_SLICE", 0.05))
+        close_wait = float(getattr(self, "_DIALOGUE_CLOSE_WAIT", 1.0))
+        timeout_s = float(getattr(self, "_RECOVERY_OPEN_TIMEOUT", 300.0))
+
+        def close(retry: bool) -> None:
+            """ダイアログを閉じる。必ず GUI スレッドから呼ぶこと。"""
+            box["retry"] = bool(retry)
+            self.message_dialogue = None
+            top = holder.pop("top", None)
+            if top is not None:
+                try:
+                    if bool(top.winfo_exists()):
+                        top.destroy()
+                except Exception:
+                    logger.debug("回復ダイアログの破棄で例外を握りました")
+            done.set()
+
+        def build() -> None:
+            try:
+                top = tk.Toplevel(root)
+                holder["top"] = top
+                self.message_dialogue = top
+                top.title(advice.title)
+                try:
+                    top.transient(root)
+                    top.attributes("-topmost", True)
+                except Exception:
+                    logger.debug("回復ダイアログの属性設定で例外を握りました")
+                top.protocol("WM_DELETE_WINDOW", lambda: close(False))
+                top.resizable(False, False)
+
+                frame = ttk.Frame(top)
+                frame.pack(fill="both", expand=True, padx=14, pady=12)
+                ttk.Label(
+                    frame,
+                    text=advice.title,
+                    font=("", 11, "bold"),
+                    anchor="w",
+                    justify="left",
+                ).pack(fill="x")
+                body = advice.body()
+                if body:
+                    ttk.Label(
+                        frame,
+                        text=body,
+                        anchor="w",
+                        justify="left",
+                        wraplength=560,
+                    ).pack(fill="x", pady=(6, 12))
+                buttons = ttk.Frame(frame)
+                buttons.pack()
+                ttk.Button(
+                    buttons, text=advice.retry_label, command=lambda: close(True)
+                ).pack(side="left", padx=4)
+                ttk.Button(
+                    buttons, text=advice.abort_label, command=lambda: close(False)
+                ).pack(side="left", padx=4)
+
+                top.update_idletasks()
+                try:
+                    x = root.winfo_rootx() + max(
+                        0, (root.winfo_width() - top.winfo_width()) // 2
+                    )
+                    y = root.winfo_rooty() + max(
+                        0, (root.winfo_height() - top.winfo_height()) // 2
+                    )
+                    top.geometry(f"+{int(x)}+{int(y)}")
+                except Exception:
+                    logger.debug("回復ダイアログの位置決めで例外を握りました")
+            except Exception:
+                box["error"] = traceback.format_exc()
+                self.message_dialogue = None
+                done.set()
+
+        try:
+            is_gui = threading.current_thread() is threading.main_thread()
+        except Exception:
+            is_gui = False
+        if is_gui:
+            # GUI スレッドから直接呼ばれた（試し実行の一部など）。
+            # 生成してから wait_window で待つ。Tk のイベントは処理される。
+            build()
+            top = holder.get("top")
+            if top is not None:
+
+                def poll_stop() -> None:
+                    if self._stop_event.is_set():
+                        close(False)
+                        return
+                    try:
+                        if top.winfo_exists():
+                            root.after(100, poll_stop)
+                    except Exception:
+                        logger.debug("回復ダイアログの停止監視で例外を握りました")
+
+                root.after(100, poll_stop)
+                try:
+                    root.wait_window(top)
+                except Exception:
+                    logger.debug("回復ダイアログの待機で例外を握りました")
+            if "error" in box:
+                logger.error(f"回復ダイアログを開けませんでした:\n{box['error']}")
+                return None
+            return bool(box["retry"]) if "retry" in box else None
+
+        if not _post_gui_task(root, build):
+            logger.warning("回復ダイアログを GUI スレッドへ渡せませんでした")
+            return None
+        waited = 0.0
+        while not done.wait(slice_s):
+            waited += slice_s
+            if self._stop_event.is_set():
+                # 停止要求。閉じる処理は取り出し輪が空いているうちに積む。
+                logger.warning("回復ダイアログを開いている間に停止要求が来ました")
+                _post_gui_task(root, lambda: close(False))
+                done.wait(close_wait)
+                # ここで取り出し行列を掃除しない。閉じる処理を捨てると
+                # ダイアログだけ画面に残る。主循環が生きている限り、
+                # 次の取り出しで閉じられる。
+                self.checkIfAlive()
+                return None
+            if waited >= timeout_s:
+                logger.warning(
+                    f"回復ダイアログが {timeout_s} 秒でタイムアウトしました"
+                    f"（{advice.title}）。中止として扱います"
+                )
+                _post_gui_task(root, lambda: close(False))
+                done.wait(close_wait)
+                return False
+
+        if "error" in box:
+            logger.error(f"回復ダイアログを開けませんでした:\n{box['error']}")
+            return None
+        if "retry" not in box:
+            return None
+        return bool(box["retry"])
 
     def _guiRoot(self) -> Any | None:
         """ダイアログを載せる tk のルートを返す。無ければ None。
