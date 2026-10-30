@@ -2154,3 +2154,43 @@ def test_realign_when_stopped_does_nothing() -> None:
     clock.realign()
     # Then: 描画も予約もしない
     assert calls == []
+
+
+def test_poll_hook_runs_on_the_native_watch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """1ms 見張りに相乗りした処理（映像のフレーム監視）が毎回走る。"""
+    root = FakeRoot()
+    runtime = FakeNativeRuntime()
+    monkeypatch.setattr(
+        preview_clock, "_create_native_runtime", lambda **_kwargs: runtime
+    )
+    clock = preview_clock.PreviewClock(
+        root, lambda: preview_clock.DispatchResult("active"), 60, 200
+    )
+    calls: list[str] = []
+    clock.start()
+    clock.set_poll_hook(lambda: calls.append("hook"))
+    clock._poll_native_wake()
+    assert calls == ["hook"]
+    clock.stop()
+
+
+def test_poll_hook_runs_on_the_after_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
+    """after 経路でも、周期の刻みごとに同じ処理が走る。"""
+    root = FakeRoot()
+
+    def fail_factory(**_kwargs: Any) -> FakeNativeRuntime:
+        raise preview_clock._PreviewClockError("injected")
+
+    monkeypatch.setattr(preview_clock, "_create_native_runtime", fail_factory)
+    clock = preview_clock.PreviewClock(
+        root, lambda: preview_clock.DispatchResult("active"), 60, 200
+    )
+    calls: list[str] = []
+    clock.set_poll_hook(lambda: calls.append("hook"))
+    clock.start()
+    assert clock.mode() == "after"
+    clock._fallback_tick()
+    assert calls == ["hook"]
+    clock.stop()

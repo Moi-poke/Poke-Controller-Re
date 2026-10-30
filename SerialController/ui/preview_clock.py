@@ -1633,6 +1633,10 @@ class PreviewClock:
     ) -> None:
         self._root = root
         self._dispatch_tick = dispatch_tick
+        #: 1ms の見張り（native）／周期の刻み（after）で呼ぶ追加処理。
+        #: 映像の「新しい1枚を描く」を、自前の after(1) 連鎖を増やさずに
+        #: 済ませるための口。例外は握りつぶさず dispatch 側の失敗として扱う。
+        self._poll_hook: Callable[[], object] | None = None
         self._configured_fps = _validate_configured_fps(configured_fps)
         self._idle_interval_ms = _validate_idle_interval(idle_interval_ms)
         self._owner_thread_id = threading.get_native_id()
@@ -1801,6 +1805,25 @@ class PreviewClock:
                 return self._continue_native_teardown()
             case unreachable:
                 assert_never(unreachable)
+
+    def set_poll_hook(self, hook: Callable[[], object] | None) -> None:
+        """1ms 見張り（native）／周期刻み（after）に毎回呼ぶ処理を差し替える。
+
+        自前の ``after(1)`` 連鎖を増やすと、この Tk では 1ms タイマーが
+        3 本になった時点で数百 ms の停止が数秒おきに出る（実測）。映像の
+        フレーム監視はこの口に相乗りさせる。Tk スレッドからだけ設定する。
+        """
+        self._assert_owner()
+        self._poll_hook = hook
+
+    def _run_poll_hook(self) -> None:
+        hook = self._poll_hook
+        if hook is None:
+            return
+        try:
+            hook()
+        except Exception:  # noqa: E501  # noqa: BROAD_EXCEPT_OK - Tk callback boundary.
+            logger.exception("preview poll hook failed")
 
     def set_fps(self, fps: int) -> None:
         self._assert_owner()
@@ -2116,6 +2139,7 @@ class PreviewClock:
         runtime = self._runtime
         if self._state is not _ClockState.HIGH_RESOLUTION or runtime is None:
             return
+        self._run_poll_hook()
         consume_wake_signal = getattr(runtime, "consume_wake_signal", None)
         if not callable(consume_wake_signal):
             return
@@ -2404,6 +2428,7 @@ class PreviewClock:
         if self._state is not _ClockState.AFTER:
             return
         self._invoke_dispatch()
+        self._run_poll_hook()
         self._reschedule_fallback()
 
     def _cancel_fallback(self) -> None:

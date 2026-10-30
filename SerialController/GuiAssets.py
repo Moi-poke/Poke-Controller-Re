@@ -464,7 +464,6 @@ class CaptureArea(tk.Frame):
         self._realign_after_id: str | None = None
         # フレーム公開での描画（Tk スレッドの面だけ）。時計の tick は刻みを
         # 持つ役で残し、新しい1枚が来たら 1ms 以内に描く。
-        self._frame_poll_id: str | None = None
         self._last_draw_at = 0.0
         self._camera_observation: dict[str, int] = {
             "camera_read_count": 0,
@@ -790,7 +789,11 @@ class CaptureArea(tk.Frame):
         )
         self._preview_clock.start()
         if self._pump is None:
-            self._start_frame_poll()
+            # 新しい1枚は、時計が既に回している 1ms の見張りで描く。自前の
+            # after(1) 連鎖を足すと、この Tk では 1ms タイマーが 3 本になった
+            # 時点で数秒おきに数百 ms 止まる（実測: 3本で 3.5回/s・最大
+            # 265ms の停止、2本なら 0 回）。
+            self._preview_clock.set_poll_hook(self._draw_new_frame)
 
     def stopCapture(self) -> preview_clock.StopResult:
         """描画ループを止め、clock の停止結果を返す。
@@ -801,12 +804,13 @@ class CaptureArea(tk.Frame):
         """
         self._capturing = False
         self._preview_stop_requested = True
-        for name in (
-            "_rect_after_id",
-            "_select_after_id",
-            "_realign_after_id",
-            "_frame_poll_id",
-        ):
+        clock = getattr(self, "_preview_clock", None)
+        if clock is not None:
+            try:
+                clock.set_poll_hook(None)
+            except Exception:
+                pass
+        for name in ("_rect_after_id", "_select_after_id", "_realign_after_id"):
             after_id = getattr(self, name, None)
             if after_id is not None:
                 setattr(self, name, None)
@@ -922,32 +926,10 @@ class CaptureArea(tk.Frame):
             logger.error(f"capture failed: {exc}")
         return preview_clock.DispatchResult(schedule="active" if showing else "idle")
 
-    def _start_frame_poll(self) -> None:
-        """公開された1枚を、時計の tick を待たずに描く監視を始める。
-
-        表示は時計の刻みで描くので、取込と表示が同じ 60Hz でも位相が
-        境界を越えた瞬間に1枚飛ばす（実測 0.9〜12 枚/s）。tick は刻みを
-        保つ役として残し、新しいフレームが公開されたら 1ms 以内に描く。
-        二重に描かないのは _drawFrame の世代番号判定が受け持つ。
-        """
-        if self._frame_poll_id is not None:
-            return
-        self._frame_poll_id = self.after(1, self._poll_new_frame)
-
-    def _poll_new_frame(self) -> None:
-        self._frame_poll_id = None
-        if not self._capturing or self._preview_stop_requested:
-            return
-        try:
-            self._draw_new_frame()
-        except Exception as exc:
-            logger.debug(f"フレーム公開の描画で例外: {exc}")
-        finally:
-            if self._capturing and not self._preview_stop_requested:
-                self._frame_poll_id = self.after(1, self._poll_new_frame)
-
     def _draw_new_frame(self) -> bool:
         """新しい1枚があれば描く（表示 fps の上限は設定値のまま守る）。"""
+        if not self._capturing or self._preview_stop_requested:
+            return False
         frame_seq = getattr(self.camera, "frame_seq", None)
         if not callable(frame_seq):
             return False
@@ -961,8 +943,16 @@ class CaptureArea(tk.Frame):
         frame, read_seq = self._readLatest()
         if frame is None:
             return False
+        started = time.perf_counter()
         if not self._drawFrame(frame, read_seq):
             return False
+        draw_ms = (time.perf_counter() - started) * 1000.0
+        if self._stat_draw_ms <= 0.0:
+            self._stat_draw_ms = draw_ms
+        else:
+            self._stat_draw_ms = self._stat_draw_ms * 0.9 + draw_ms * 0.1
+        if draw_ms > self._stat_draw_max_ms:
+            self._stat_draw_max_ms = draw_ms
         self._last_draw_at = now
         # 表示実測は tick 側と同じ規則で数える（同じ世代は二度数えない）。
         if read_seq is None or read_seq != getattr(self, "_stat_counted_seq", None):
