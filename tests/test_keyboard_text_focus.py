@@ -12,6 +12,7 @@ import tkinter as tk
 import tkinter.ttk as ttk
 from types import SimpleNamespace
 
+from core.connection_state import ConnectionSnapshot
 from ui.serial_panel import SerialPanelMixin, _is_text_input
 
 
@@ -19,7 +20,10 @@ def _host(root: tk.Misc) -> SimpleNamespace:
     host = SimpleNamespace(
         root=root,
         _kb_window_active=threading.Event(),
-        serial=SimpleNamespace(keyboard=object()),
+        serial=SimpleNamespace(
+            keyboard=object(),
+            connection_snapshot=lambda: ConnectionSnapshot(phase="ready", opened=True),
+        ),
     )
     return host
 

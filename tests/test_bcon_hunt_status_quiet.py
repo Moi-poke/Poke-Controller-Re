@@ -12,6 +12,7 @@ from typing import Any
 from core.transport.bcon_protocol import (
     PROTO_VER,
     RESULT_OK,
+    T_HELLO,
     T_HELLO_ACK,
     T_STATUS,
     frame_build,
@@ -50,6 +51,10 @@ def _make_scripted_ser() -> Any:
         def write(self, data: bytes) -> int:
             with self._lock:
                 self.written.append(bytes(data))
+                # 実際に届いた HELLO にだけ応答し、未要求の ACK を成功の代用にしない。
+                if len(data) >= 3 and data[0] == 0xAB and data[1] == T_HELLO:
+                    payload = bytes([PROTO_VER, 0x00, 0x04, RESULT_OK])
+                    self._chunks.append(frame_build(T_HELLO_ACK, payload, 0x00))
             return len(data)
 
     return ScriptedSer()
@@ -63,11 +68,6 @@ def _open_transport() -> tuple[Any, Any]:
     made.ser = ser
     made.start_rx_pump()
     return made, ser
-
-
-def _feed_hello_ack(ser: Any) -> None:
-    payload = bytes([PROTO_VER, 0x00, 0x04, RESULT_OK])
-    ser.feed(frame_build(T_HELLO_ACK, payload, 0x00))
 
 
 def _wait_until(predicate, timeout: float = 2.0) -> bool:
@@ -111,11 +111,11 @@ def test_status_errcode_is_quiet_before_hello(capsys) -> None:
 
 
 def test_status_timeout_is_visible_after_hello(capsys) -> None:
-    made, ser = _open_transport()
+    made, _ser = _open_transport()
     try:
         # Given: HELLO_ACK 成立済み（adopted=4・RESULT=OK）
-        _feed_hello_ack(ser)
-        assert _wait_until(made.hello_established)
+        assert made.hello(timeout=0.5)
+        assert made.hello_established()
         capsys.readouterr()
         # When: 成立後に STATUS_REQ が返らない
         assert made.request_status(timeout=0.1) is None
@@ -127,10 +127,14 @@ def test_status_timeout_is_visible_after_hello(capsys) -> None:
 
 def test_status_errcode_is_visible_after_hello(capsys) -> None:
     made, ser = _open_transport()
+    received = threading.Event()
+    unsubscribe = made.subscribe_rx(
+        lambda frame: received.set() if frame[0] == T_STATUS else None
+    )
     try:
         # Given: HELLO_ACK 成立済み
-        _feed_hello_ack(ser)
-        assert _wait_until(made.hello_established)
+        assert made.hello(timeout=0.5)
+        assert made.hello_established()
         capsys.readouterr()
         # When: 成立後に errcode=0x02 の STATUS を受ける
         ser.feed(
@@ -138,10 +142,29 @@ def test_status_errcode_is_visible_after_hello(capsys) -> None:
                 T_STATUS, bytes([0x00, 0x09, 0x03, 0x00, 0x00, 0x00, 0x02]), 0x21
             )
         )
-        assert _wait_until(lambda: made.last_status()["errcode"] == 0x02)
+        assert received.wait(2.0)
+        assert made.last_status()["errcode"] == 0x02
         # Then: 従来どおり異常として通知する
         out = capsys.readouterr().out
         assert "STATUS異常" in out
         assert "errcode=0x02" in out
     finally:
+        unsubscribe()
+        made.stop_rx_pump()
+
+
+def test_unsolicited_ack_does_not_admit_input() -> None:
+    made, ser = _open_transport()
+    received = threading.Event()
+    unsubscribe = made.subscribe_rx(
+        lambda frame: received.set() if frame[0] == T_HELLO_ACK else None
+    )
+    try:
+        ser.feed(frame_build(T_HELLO_ACK, bytes([PROTO_VER, 0, 4, RESULT_OK]), 0))
+        assert received.wait(2.0)
+        assert not made.hello_established()
+        assert made.hello(timeout=0.5)
+        assert made.hello_established()
+    finally:
+        unsubscribe()
         made.stop_rx_pump()

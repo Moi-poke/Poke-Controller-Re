@@ -101,6 +101,8 @@ def test_bcon_send_row_accepts_pico_s_row_neutral():
     made = create_transport("bcon")
     ser = _make_fake_ser()
     made.ser = ser
+    # 送出形式の単体試験は HELLO 確立後を前提とする。
+    made._hello_established = True
     made.send_row("S 0 8 80 80 80 80")
     states = _state_frames(ser.snapshot())
     assert len(states) == 1
@@ -118,6 +120,8 @@ def test_bcon_s_row_buttons_map_to_viper_not_wire():
     made = create_transport("bcon")
     ser = _make_fake_ser()
     made.ser = ser
+    # 送出形式の単体試験は HELLO 確立後を前提とする。
+    made._hello_established = True
     made.send_row("S 1 8 80 80 80 80")
     made.send_row("S 2 8 80 80 80 80")
     made.send_row("S 4 8 80 80 80 80")
@@ -134,6 +138,8 @@ def test_bcon_s_row_hat_and_sticks():
     made = create_transport("bcon")
     ser = _make_fake_ser()
     made.ser = ser
+    # 送出形式の単体試験は HELLO 確立後を前提とする。
+    made._hello_established = True
     made.send_row("S 0 0 80 80 80 80")
     states = _state_frames(ser.snapshot())
     assert len(states) == 1
@@ -157,6 +163,8 @@ def test_bcon_stick_y_passes_through_uninverted():
     made = create_transport("bcon")
     ser = _make_fake_ser()
     made.ser = ser
+    # 送出形式の単体試験は HELLO 確立後を前提とする。
+    made._hello_established = True
     made.send_row("2 08 00 ff")
     made.send_row("S 0 8 80 00 80 ff")
     states = _state_frames(ser.snapshot())
@@ -172,6 +180,8 @@ def test_bcon_live_loop_refreshes_and_seqs():
     made = create_transport("bcon")
     ser = _make_fake_ser()
     made.ser = ser
+    # 送出形式の単体試験は HELLO 確立後を前提とする。
+    made._hello_established = True
     made.send_row("end")
     assert made.start_live_loop() is True
     try:
@@ -194,6 +204,8 @@ def test_bcon_live_loop_coalesces_burst_into_merged():
     made = create_transport("bcon")
     ser = _make_fake_ser(write_delay=0.03)
     made.ser = ser
+    # 送出形式の単体試験は HELLO 確立後を前提とする。
+    made._hello_established = True
     assert made.start_live_loop() is True
     try:
         for _ in range(6):
@@ -211,6 +223,8 @@ def test_bcon_live_stats_shape_and_counts():
     made = create_transport("bcon")
     ser = _make_fake_ser()
     made.ser = ser
+    # 送出形式の単体試験は HELLO 確立後を前提とする。
+    made._hello_established = True
     stats = made.live_stats()
     assert set(stats.keys()) >= {
         "sent",
@@ -237,6 +251,8 @@ def test_bcon_hold_suppresses_loop_and_counts_dropped():
     made = create_transport("bcon")
     ser = _make_fake_ser()
     made.ser = ser
+    # 送出形式の単体試験は HELLO 確立後を前提とする。
+    made._hello_established = True
     # loopは姿勢の捏造をしない。更新対象が無いと送らないため先に1発載せる。
     made.send_row("end")
     assert made.start_live_loop() is True
@@ -271,6 +287,8 @@ def test_bcon_set_baud_window_holds_tx():
     made = create_transport("bcon")
     ser = _make_fake_ser()
     made.ser = ser
+    # 送出形式の単体試験は HELLO 確立後を前提とする。
+    made._hello_established = True
     ser.baudrate = 1000000
     made.start_rx_pump()
     stop = threading.Event()
@@ -330,6 +348,9 @@ def test_bcon_sender_live_reaches_bcon_wire_as_viper():
     sender = Sender.Sender(is_show_serial=False, transport=made)
     try:
         made.ser = ser
+        # 送出形式の単体試験は HELLO 確立後を前提とする。
+        made._hello_established = True
+        assert sender.startLiveWorker()
         assert sender.pressButtons([Button.A]) is True
         assert _wait_for(
             lambda: any(
@@ -347,6 +368,8 @@ def test_bcon_close_stops_live_loop():
     made = create_transport("bcon")
     ser = _make_fake_ser()
     made.ser = ser
+    # 送出形式の単体試験は HELLO 確立後を前提とする。
+    made._hello_established = True
     assert made.start_live_loop() is True
     made.close()
     assert made.live_loop_running() is False

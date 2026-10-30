@@ -58,6 +58,8 @@ def test_bcon_notifies_sent_rows_once_and_skips_resends() -> None:
             return len(data)
 
     made.ser = FakeSer()
+    # 送出形式の単体試験は HELLO 確立後を前提とする。
+    made._hello_established = True
     made.send_row("0 8 80 80 80 80")
     made.send_row("4 8 80 80 80 80")
     # 同一行の再送（120Hz定期再送相当）は削る。差分は必ず無イベントのため。
@@ -78,14 +80,11 @@ def test_bcon_notifies_sent_rows_once_and_skips_resends() -> None:
 
 def test_bcon_proc_forwards_sent_rows_to_listeners(monkeypatch) -> None:
     """Given: proc線＋聞き手 / When: 送る / Then: 子が送った行が親へ届くこと。"""
-    import core.transport.bcon as _bcon
-    from core.transport import bcon_proc
-    from test_bcon_proc import _FakeSerial, _fake_spawn
+    from test_bcon_proc import _open_proc_with_scripted_ser
 
-    monkeypatch.setattr(_bcon.serial, "Serial", _FakeSerial)
-    made = bcon_proc.BconProcTransport(_spawn=_fake_spawn)
+    made, _, stop, worker = _open_proc_with_scripted_ser(monkeypatch)
     try:
-        assert made.open(3, "COM3", 1000000) is True
+        assert made.hello(timeout=2.0)
         got: list[str] = []
         assert made.add_listener(got.append) is True
         made.send_row("0 8 80 80 80 80")
@@ -95,6 +94,8 @@ def test_bcon_proc_forwards_sent_rows_to_listeners(monkeypatch) -> None:
             time.sleep(0.05)
         assert got == ["0 8 80 80 80 80", "4 8 80 80 80 80"]
     finally:
+        stop.set()
+        worker.join(1.0)
         made.close()
 
 
@@ -120,10 +121,13 @@ def test_sender_links_input_log_on_bcon_and_records() -> None:
             return len(data)
 
     transport.ser = FakeSer()
+    # 送出形式の単体試験は HELLO 確立後を前提とする。
+    transport._hello_established = True
     sender = Sender.Sender(
         is_show_serial=False, input_log_emit=lines.append, transport=transport
     )
     assert sender.isInputLogLinked() is True
+    assert sender.startLiveWorker()
     keys = KeyPress(sender)
     keys.input(Button.A)
     keys.inputEnd(Button.A)

@@ -331,19 +331,9 @@ def test_proc_send_imu_queues_without_rpc(monkeypatch):
     """IMUは同期RPCを通らず、子が50フレーム書く。統計は親側で数える。"""
     import time as _time
 
-    import core.transport.bcon as _bcon
-    from core.transport import bcon_proc
     from core.transport.bcon_protocol import T_IMU_SAMPLE
 
-    sers: list[_ScriptedSer] = []
-
-    def _factory(*args: Any, **kwargs: Any) -> _ScriptedSer:
-        ser = _ScriptedSer()
-        sers.append(ser)
-        return ser
-
-    monkeypatch.setattr(_bcon.serial, "Serial", _factory)
-    made = bcon_proc.BconProcTransport(_spawn=_fake_spawn)
+    made, sers, stop, worker = _open_proc_with_scripted_ser(monkeypatch)
     calls: list[str] = []
     real_call = made._call
 
@@ -353,7 +343,8 @@ def test_proc_send_imu_queues_without_rpc(monkeypatch):
 
     made._call = _counting  # type: ignore[method-assign]
     try:
-        assert made.open(3, "COM3", 1000000) is True
+        assert made.hello(timeout=2.0)
+        calls.clear()
         for i in range(50):
             assert made.send_imu(i, 0, 4096, 0, 0, 0) is True
         assert calls == [], f"IMUが同期RPCを通った: {calls}"
@@ -372,6 +363,8 @@ def test_proc_send_imu_queues_without_rpc(monkeypatch):
         assert len(frames) == 50, f"子のIMUフレームが{len(frames)}件"
         assert all(f[2] == 12 for f in frames)
     finally:
+        stop.set()
+        worker.join(1.0)
         made.close()
 
 
@@ -456,6 +449,8 @@ def test_proc_live_loop_and_hooks(monkeypatch):
         lambda row, show=True: hooked.append(("end", row)),
     )
     try:
+        assert made.hello(timeout=2.0)
+        hooked.clear()
         assert made.start_live_loop() is True
         assert made.live_loop_running() is True
         made.send_row("0 8 80 80 80 80")
@@ -475,6 +470,33 @@ def test_proc_live_loop_and_hooks(monkeypatch):
         assert any(kind == "begin" for kind, _row in hooked)
         assert made.stop_live_loop() is True
         assert made.live_loop_running() is False
+    finally:
+        stop.set()
+        worker.join(1.0)
+        made.close()
+
+
+def test_proc_child_input_hold_and_current_baud(monkeypatch):
+    """入力の門は子で判定し、親はフレームごとの RPC を追加しない。"""
+    from core.transport.bcon_protocol import T_STATE
+
+    made, sers, stop, worker = _open_proc_with_scripted_ser(monkeypatch)
+    try:
+        assert made.current_baud() == 1000000
+        assert not made.hold_input(False)
+        made.send_row("10 08")
+        # 会話 RPC を barrier とし、その前の stage が子で処理済みになる。
+        assert made.current_baud() == 1000000
+        assert not any(frame[1] == T_STATE for frame in _all_written(sers))
+        assert made.hello(timeout=2.0)
+        assert made.hold_input(True)
+        made.send_row("10 08")
+        assert made.current_baud() == 1000000
+        assert not any(frame[1] == T_STATE for frame in _all_written(sers))
+        assert made.hold_input(False)
+        made.send_row("10 08")
+        assert made.current_baud() == 1000000
+        assert any(frame[1] == T_STATE for frame in _all_written(sers))
     finally:
         stop.set()
         worker.join(1.0)

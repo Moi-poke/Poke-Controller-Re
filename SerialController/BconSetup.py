@@ -1,30 +1,13 @@
-"""BconSetup.py - bcon の初期設定とCONFIG操作をする小窓。
+"""BCON 設定。接続の写しを表示し、サービスの直列操作へ要求を渡す。
 
-bcon へ開→HELLO→live開始の順で繋ぎ、CAPTURE_START / BEACON_START /
-STATUS_REQ / PING / WIRED_MODE / KEY_DELETE / COLOR_SET を送り、
-応答フレーム（STATUS / PONG / PLAYER_INFO / errcode）を読む。
-S・N は操作系（Controller / Keyboard・live経路）で、RUMBLE送出は
-対象外のためここには置かない。色変更（COLOR_SET）は別コマンドに
-寄せずここ1か所に置く。
-読み書きは作業スレッドで行い、画面の更新だけ after() で戻す。
-GUI スレッドで線を待たない。
-
-前提: シリアルが開いていること。live の STATE が流れていても構わないが、
-接続ボタンは STATE を止めてから HELLO を送り、HELLO_ACK の前に
-STATE を流さない（HELLOなし既定受付に甘えない）。UNSUPPORTED /
-DOWNGRADED なら NEUTRAL を保ち版を表示して止める（送り続けハングに
-しない）。WIRED_MODE 切替後は再起動が入るため復帰後に再HELLOから
-やり直すこと。
-
-WakeSetup.py とは並置で、共通化は動作確認後に抽出する。
-凍結のため WakeSetup.py は1行も変えず、ここからも読まない。
+Tk の値は操作要求前に読み、受信コールバックは UiInbox とログキューへ積む。
+ポートと HELLO、入力送信、受信の所有者は SerialService とする。
 """
 
 from __future__ import annotations
 
 import logging
 import queue
-import threading
 import time
 import tkinter as tk
 import tkinter.messagebox as tkmsg
@@ -33,6 +16,7 @@ from collections.abc import Callable
 from typing import Any
 
 from LogPane import DropOldestQueue
+from core.connection_state import ConnectionSnapshot
 from core.procon_color import (
     _CONFIG_TYPE_NAMES as _CONFIG_TYPE_NAMES,
     build_color_payload as build_color_payload,
@@ -43,29 +27,18 @@ from core.procon_color import (
     send_config_frame as send_config_frame,
 )
 from core.transport.bcon import decode_rumble
-from core.transport.bcon_baud import (
-    BAUD_DEFAULT_INDEX,
-    BAUD_DISPLAY_LABELS,
-    baud_adopt_message,
-    baud_bps_for_index,
-    baud_index_for_label,
-    baud_index_sendable,
-    baud_revert_message,
-)
 from core.transport.bcon_protocol import (
-    BAUD_TABLE,
-    DEFAULT_BAUD_INDEX,
     T_BEACON_START,
     T_CAPTURE_START,
     T_COLOR_SET,
     T_KEY_DELETE,
-    T_PLAYER_INFO,
-    T_RUMBLE,
 )
-from loguru import logger
+from core.ui_inbox import UiInbox, post_latest_to_gui
+from services.serial_service import SerialService
 from ui.tooltip import Tooltip
 
-BCON_WINDOW_TITLE = "Switch-Bcon設定"
+BCON_WINDOW_TITLE = "BCON 設定"
+_LOGGER = logging.getLogger(__name__)
 
 # 計測の間引き幅。debugへの書き出しはこの秒数に1件までにする。
 # per-frameのI/Oにしないための枠で、数え自体は毎回行う。
@@ -82,7 +55,6 @@ BCON_FLUSH_MAX = 512
 # ログ欄に残す行数。Textは行数に比例して重くなる。
 BCON_MAX_LINES = 1000
 
-_LOGGER = logging.getLogger(__name__)
 
 # 取込秒数の受付域。Pico側は秒1-60、範囲外は ERRCODE 0x10 で拒否する。
 # 範囲外は送らず注意だけ出す（送って拒否させる運用にしない）。
@@ -116,14 +88,6 @@ STATUS_FLAG_WIRED = 0x20
 # 色の読みと荷造り・errcode説明の実体は core/procon_color.py にある。
 # ここでは旧名のまま読めるよう再公開だけする（利用者台本は
 # Commands/CommandColor.py から読む）。
-
-
-def _sender_opened(sender: Any) -> bool:
-    """送り先の線が開いているか。口が無い・壊れていれば偽（例外なし）。"""
-    try:
-        return bool(sender.isOpened())
-    except Exception:
-        return False
 
 
 def parse_capture_seconds(raw: Any) -> int | None:
@@ -238,27 +202,6 @@ def update_color_preview(entries: Any, canvas: Any, items: Any) -> None:
             continue
 
 
-def read_bcon_current_bps(transport: Any) -> int | None:
-    """表示用に現在baudを読む。取れなければNone（落とさない）。
-
-    transportの _current_baud と同じ ser.baudrate を見るが、UIの
-    復帰文言（新旧bps入り）を作るための表示専用である。切替の実体には
-    触れない。
-    """
-    try:
-        ser = getattr(transport, "ser", None)
-        if ser is None:
-            return None
-        rate = getattr(ser, "baudrate", None)
-        if rate is None:
-            return None
-        return int(rate)
-    except (TypeError, ValueError):
-        return None
-    except Exception:
-        return None
-
-
 def format_status_flags(flags: Any) -> str:
     """STATUS flagsを日本語の並びへ。D/M表示切替の相当情報はこれで見る。"""
     try:
@@ -366,117 +309,31 @@ def _pre_status_snapshot(transport: Any) -> dict[str, Any] | None:
         return None
 
 
-def connect_bcon(
-    transport: Any,
-    log: Callable[[str], None],
-    sender: Any = None,
-    hello_timeout: float = 3.0,
-) -> bool:
-    """開→HELLO→live開始の順で繋ぐ。HELLO_ACKの前にSTATEを流さない。
-
-    Task 5 からの引継ぎである。通常の接続（Sender.openSerial）は live
-    対応で worker を自動起動するため、HELLOを通す前に S 行→STATE が
-    流れる。ここでは STATE を止めてから HELLO を送り、通ってから起こす。
-    UNSUPPORTED / DOWNGRADED / 不通は NEUTRAL を保ち（HELLO内で1発保つ）
-    版を表示して止める。送り続けハングにしない。止めた live は起こさず
-    返す。直したら接続を押し直すか、繋ぎ直すこと。例外は投げない。
-    """
-    try:
-        if not is_bcon_transport(transport):
-            log("Transportがbconではありません。bconを選んで接続してください。")
-            return False
-        try:
-            opened = bool(transport.is_open())
-        except Exception:
-            log("bconの開閉状態が読めません。繋ぎ直してください。")
-            return False
-        if not opened:
-            log("シリアルが開いていません。先にメイン画面で接続してください。")
-            return False
-        # まず STATE を止める。120Hz loop と Sender 側 worker の双方を
-        # 落とす。片方だけだと残った方が送り続ける。
-        try:
-            stop_loop = getattr(transport, "stop_live_loop", None)
-            if callable(stop_loop):
-                stop_loop()
-        except Exception:
-            pass
-        if sender is not None:
-            try:
-                stop_worker = getattr(sender, "stopLiveWorker", None)
-                if callable(stop_worker):
-                    stop_worker()
-            except Exception:
-                pass
-        # HELLO待ちのあいだにキーボード・パッドの apply* が溜めた古い
-        # 押下/離しを捨てる。止める前の_workerは落ちているため
-        # _live_closing も立っておらず、捨てないと開始後に幻のタップが
-        # 流れる。持たない運搬器でも落とさない（getattr＋握り潰し）。
-        if sender is not None:
-            try:
-                discard_live = getattr(sender, "discardLive", None)
-                if callable(discard_live):
-                    discard_live()
-            except Exception:
-                pass
-        try:
-            hello_ok = bool(transport.hello(timeout=hello_timeout))
-        except Exception:
-            log("HELLOで例外が出ました。配線・電源を確認してください。")
-            return False
-        if not hello_ok:
-            log(
-                "HELLOが通りませんでした。NEUTRALを保ち止めます。"
-                "版・配線・baudを確認してください。"
-                "liveは止めたままです。直したら接続を押し直すか、繋ぎ直してください。"
-            )
-            return False
-        log("HELLOが通りました。liveを開始します。")
-        try:
-            start_loop = getattr(transport, "start_live_loop", None)
-            loop_ok = bool(start_loop()) if callable(start_loop) else False
-        except Exception:
-            loop_ok = False
-        if not loop_ok:
-            # 120Hz loopが起こせなくても HELLO は通っているため即送で
-            # 続ける。送れないよりはましであり、順序（HELLO先）は守れる。
-            log("120Hz loopが起こせないため即送で続けます。")
-        if sender is not None:
-            try:
-                start_worker = getattr(sender, "startLiveWorker", None)
-                if callable(start_worker):
-                    start_worker()
-            except Exception:
-                pass
-        return True
-    except Exception:
-        try:
-            log("接続手順で例外が出ました。繋ぎ直してください。")
-        except Exception:
-            pass
-        return False
-
-
 class BconSetup:
     """bcon設定の小窓。1つだけ開く前提で使う。"""
 
     def __init__(
         self,
         master: Any,
-        sender: Any,
+        service: SerialService,
         *,
         embedded: bool = False,
-        sender_provider: Callable[[], Any] | None = None,
+        command_busy: Callable[[], bool] | None = None,
     ) -> None:
-        """embedded=True なら master（タブ枠）の中へ組む。別窓は作らない。
-
-        sender_provider は送り先を都度引く口。serial サービスは Sender を
-        作り直しうるため、タブのように長く生きる側は握り込まず引き直す。
-        """
-        self._sender = sender
-        self._sender_provider = sender_provider
+        """接続と会話の所有者はサービス。画面は写しと操作要求だけを扱う。"""
+        self._service = service
+        self._command_busy = command_busy or (lambda: False)
+        self._snapshot = service.connection_snapshot()
+        self._unsupported: set[str] = set()
+        self._color_loaded = False
+        self.inbox = UiInbox()
+        self._visible = False
+        self._visibility_revision = 0
+        self._poll_id: Any = None
+        self._connection_unsub: Callable[[], None] | None = None
+        self._log_unsub: Callable[[], None] | None = None
         self._embedded = embedded
-        self._queue: queue.Queue = DropOldestQueue(maxsize=BCON_QUEUE_MAX)
+        self._queue: DropOldestQueue = DropOldestQueue(maxsize=BCON_QUEUE_MAX)
         self._queue_dropped_total = 0
         self._busy = False
         self._stop = False
@@ -493,15 +350,9 @@ class BconSetup:
         self._rx_total = 0
         self._rx_start_t = 0.0
         self._counters_log_t = 0.0
-        # PLAYER_INFO の購読（Task 4）。unsub と張り先を1組で持つ。
-        # 張り先を覚えるのは、運搬器が替わったときだけ張り直すため。
-        self._rx_unsub: Callable[[], None] | None = None
-        self._rx_transport: Any = None
         # 取込期限の保存証拠とafter予約。期限は要求秒数＋余白の壁時計。
         self._capture_saved_seen = False
         self._capture_deadline_id: Any = None
-        # タブで本体色の問合せを済ませたか（表示のたびに線を叩かない）
-        self._color_asked = False
 
         if embedded:
             # タブ枠は Notebook が持つ。close で枠ごと壊さず中身（_body）だけ壊す
@@ -537,6 +388,10 @@ class BconSetup:
         # 実行中は全ボタンを止める。止めた旨の表示だけ別に置く。
         self._busy_label = ttk.Label(col_ops, text="")
         self._busy_label.pack(anchor=tk.W)
+        self._summary = ttk.Label(
+            col_ops, text="未接続", wraplength=330, justify=tk.LEFT
+        )
+        self._summary.pack(fill=tk.X, pady=(0, 8))
 
         grp_connect = ttk.LabelFrame(col_ops, text="接続", padding=8)
         grp_connect.pack(fill=tk.X, pady=(0, 8))
@@ -544,7 +399,7 @@ class BconSetup:
         grp_connect.columnconfigure(1, weight=1, uniform="btn")
         self._btn_connect = ttk.Button(
             grp_connect,
-            text="接続（HELLO→開始）",
+            text="HELLO をやり直す",
             command=self._on_connect,
         )
         self._btn_connect.grid(
@@ -584,13 +439,14 @@ class BconSetup:
             pady=2,
         )
         self._seconds = tk.IntVar(value=15)
-        ttk.Spinbox(
+        self._seconds_input = ttk.Spinbox(
             grp_pair,
             from_=1,
             to=60,
             width=4,
             textvariable=self._seconds,
-        ).grid(row=0, column=1, sticky=tk.EW, padx=2, pady=2)
+        )
+        self._seconds_input.grid(row=0, column=1, sticky=tk.EW, padx=2, pady=2)
         ttk.Label(grp_pair, text="秒").grid(
             row=0,
             column=2,
@@ -630,6 +486,12 @@ class BconSetup:
             padx=2,
             pady=2,
         )
+
+        ttk.Label(
+            grp_pair,
+            text="無線モード・Pico と Switch が未接続・取込時間内に Joy-Con の HOME を長押し。PC と Pico の接続は維持",
+            wraplength=310,
+        ).grid(row=2, column=0, columnspan=4, sticky=tk.W, pady=4)
 
         grp_mode = ttk.LabelFrame(
             col_ops,
@@ -815,40 +677,14 @@ class BconSetup:
             command=self._on_color,
         )
         self._btn_color.grid(row=1, column=1, sticky=tk.EW, padx=2, pady=2)
+        self._color_entries = color_entries
         self._refresh_color_preview()
-        if embedded:
-            # タブは起動時に作られ、線が開く前から居る。開いた後で最初に
-            # 表示された時に問う（別窓は従来どおり開いた時に問う）。
-            self.window.bind("<Map>", self._on_tab_mapped, add="+")
-        else:
-            self._query_color_on_open()
-
         grp_baud = ttk.LabelFrame(col_info, text="通信速度", padding=8)
         grp_baud.pack(fill=tk.X, pady=(0, 8))
-        grp_baud.columnconfigure(1, weight=1)
-        ttk.Label(grp_baud, text="baud").grid(
-            row=0,
-            column=0,
-            sticky=tk.W,
-            padx=2,
-            pady=2,
-        )
-        self._baud_var = tk.StringVar(value=BAUD_DISPLAY_LABELS[BAUD_DEFAULT_INDEX])
-        self._baud_cb = ttk.Combobox(
-            grp_baud,
-            width=8,
-            state="readonly",
-            textvariable=self._baud_var,
-            values=[BAUD_DISPLAY_LABELS[i] for i in sorted(BAUD_TABLE)],
-        )
-        self._baud_cb.grid(row=0, column=1, sticky=tk.EW, padx=2, pady=2)
-        Tooltip(self._baud_cb, "通信速度。通常は既定のままでよい")
-        self._btn_baud = ttk.Button(
-            grp_baud,
-            text="速度を変更",
-            command=self._on_baud,
-        )
-        self._btn_baud.grid(row=0, column=2, sticky=tk.EW, padx=2, pady=2)
+        self._actual_baud = ttk.Label(grp_baud, text="実際の速度: 不明")
+        self._actual_baud.pack(anchor=tk.W)
+        self._btn_hunt = ttk.Button(grp_baud, text="速度を探す", command=self._on_hunt)
+        self._btn_hunt.pack(fill=tk.X)
 
         grp_log = ttk.LabelFrame(col_info, text="ログ", padding=8)
         grp_log.pack(fill=tk.BOTH, expand=True, pady=(0, 8))
@@ -930,18 +766,11 @@ class BconSetup:
         )
         Tooltip(
             self._btn_color,
-            "4つの LED の色を Pico に送る（再接続後に反映）。",
-        )
-        Tooltip(
-            self._btn_baud,
-            "通信速度を切り替える。失敗したときは元の速度に戻る。",
+            "コントローラ本体の色を Pico に送る（プレイヤーLEDの色ではありません）。",
         )
         if embedded:
             self._reflow_columns()
-
-        self._poll()
-        # 既に bcon で繋がっていれば、窓を開いた時点から実況を受ける。
-        self._bind_player_info(getattr(self._current_sender(), "transport", None))
+        self.set_visible(True)
 
     def _reflow_columns(self) -> None:
         """タブの幅に合わせて、操作列と情報列を左右に並べるか縦に積むか決める。"""
@@ -984,18 +813,16 @@ class BconSetup:
             pass
 
     # -- 画面まわり ------------------------------------------------------
-    # WakeSetup と同一規律である。作業は別スレッド、画面更新だけ after()、
-    # 閉じた後の届けは積まない・残さない。共通化は動作確認後に行う。
+    # 通信はサービスへ渡し、画面の更新はGUI側のpollだけで行う。
 
     def close(self) -> None:
         """窓を閉じる。二重に呼ばれても安全にする。"""
         if getattr(self, "_closed", False):
             return
+        self.set_visible(False)
+        self.inbox.close()
         self._closed = True
         self._stop = True
-        # 購読を先に外す。外れた後のフレームは _on_rx_frame の _closed 門で
-        # 積まれず、間に合った分も下の捨てで消える。
-        self._unbind_player_info()
         # 取込期限の予約を消す。閉じた後の期限表示は出さない。
         self._cancel_capture_deadline()
         # 溜まった届けは捨てる。_pollは止まるため残すと1件漏れる。
@@ -1016,33 +843,70 @@ class BconSetup:
         except Exception:
             pass
 
-    def _set_busy(self, busy: bool) -> None:
+    def _set_busy(self) -> None:
+        snapshot = self._service.connection_snapshot()
+        busy = bool(snapshot.operation) or self._command_busy()
         self._busy = busy
-        state = tk.DISABLED if busy else tk.NORMAL
-        for btn in (
-            self._btn_connect,
-            self._btn_cap,
-            self._btn_beacon,
-            self._btn_reconnect,
-            self._btn_status,
-            self._btn_ping,
-            self._btn_winfo,
-            self._btn_w0,
-            self._btn_w1,
-            self._btn_e0,
-            self._btn_e1,
-            self._btn_e2,
-            self._btn_bootsel,
-            self._btn_baud,
-            self._btn_clear,
-            self._btn_keys,
-            self._btn_color,
+        ready = snapshot.opened and snapshot.phase == "ready" and not busy
+        recovery = (
+            snapshot.opened and snapshot.phase in {"ready", "failed"} and not busy
+        )
+        for name in (
+            "_btn_cap",
+            "_btn_beacon",
+            "_btn_reconnect",
+            "_btn_status",
+            "_btn_ping",
+            "_btn_winfo",
+            "_btn_w0",
+            "_btn_w1",
+            "_btn_e0",
+            "_btn_e1",
+            "_btn_e2",
+            "_btn_bootsel",
+            "_btn_clear",
+            "_btn_keys",
+            "_btn_color",
         ):
-            btn.configure(state=state)
-        # 実行中の表示だけ別に置く。__new__素体の検査は持たないため getattr。
-        label = getattr(self, "_busy_label", None)
-        if label is not None:
-            label.configure(text="実行中…" if busy else "")
+            getattr(self, name).configure(state=tk.NORMAL if ready else tk.DISABLED)
+        saved = len(snapshot.player_info) >= 2 and decode_player_save(
+            snapshot.player_info[1]
+        )
+        self._btn_beacon.configure(state=tk.NORMAL if ready and saved else tk.DISABLED)
+        for widget in [self._seconds_input, *self._color_entries]:
+            widget.configure(state=tk.NORMAL if ready else tk.DISABLED)
+        for widget in (self._btn_connect, self._btn_hunt):
+            widget.configure(state=tk.NORMAL if recovery else tk.DISABLED)
+        optional = {
+            "状態確認中": (self._btn_status, self._btn_winfo),
+            "疎通確認中": (self._btn_ping,),
+            "BOOTSEL移行中": (self._btn_bootsel,),
+            "無線切替中": (self._btn_w0,),
+            "有線切替中": (self._btn_w1,),
+            "種別切替中": (self._btn_e0, self._btn_e1, self._btn_e2),
+            "Switch再接続要求中": (self._btn_reconnect,),
+        }
+        for action in self._unsupported:
+            for widget in optional.get(action, ()):
+                widget.configure(state=tk.DISABLED)
+        self._busy_label.configure(
+            text=f"{snapshot.operation}…" if snapshot.operation else ""
+        )
+
+    def _admit(self, *, recovery: bool = False) -> bool:
+        if self._command_busy():
+            self._queue.put(("log", "コマンドを停止してから変更してください。"))
+            return False
+        snapshot = self._service.connection_snapshot()
+        if not snapshot.opened:
+            self._queue.put(("log", "未接続です。シリアルタブで接続してください。"))
+            return False
+        if snapshot.operation:
+            return False
+        if snapshot.phase != "ready" and not (recovery and snapshot.phase == "failed"):
+            self._queue.put(("log", "HELLO をやり直すか、速度を探してください。"))
+            return False
+        return True
 
     def _append(self, text: str) -> None:
         try:
@@ -1117,7 +981,6 @@ class BconSetup:
             except Exception:
                 continue
         # 保存証拠は表示と別に覚える。BEACONでは立てない。
-        self._note_player_save(flags)
         self._note_player_imu_range(flags)
 
     def _note_player_imu_range(self, flags: Any) -> None:
@@ -1153,7 +1016,9 @@ class BconSetup:
     def _note_player_save(self, flags: Any) -> None:
         """PLAYER_INFO flags bit2を見たら保存済みを覚える。例外は出さない。"""
         try:
-            if decode_player_save(int(flags) & 0xFF):
+            if self._capture_deadline_id is not None and decode_player_save(
+                int(flags) & 0xFF
+            ):
                 self._capture_saved_seen = True
         except (TypeError, ValueError):
             pass
@@ -1169,74 +1034,133 @@ class BconSetup:
         except Exception:
             pass
 
-    def _follow_sender(self) -> None:
-        """送り先の運搬器が替わっていたら PLAYER_INFO の購読を張り直す。
-
-        別窓は開いた時点の運搬器を使えばよいが、タブは起動時から居て
-        Transport 切替・再接続をまたぐ。ボタンを押すまで実況が止まる
-        のを避けるため、poll のたびに同一性だけ見る（替わった時だけ張る）。
-        """
-        try:
-            transport = getattr(self._current_sender(), "transport", None)
-        except Exception:
+    def set_visible(self, visible: bool) -> None:
+        """非表示時は購読と予約を外し、下書きと表示済みログを保持する。"""
+        if self._closed or self._visible == visible:
             return
-        if transport is not getattr(self, "_rx_transport", None):
-            self._bind_player_info(transport)
-
-    def _on_tab_mapped(self, _event: Any = None) -> None:
-        """タブが表示されたら、線が開いていて未問合せのときだけ色を問う。"""
-        if self._color_asked or getattr(self, "_closed", False):
+        self._visible = visible
+        self._visibility_revision += 1
+        if not visible:
+            for name in ("_connection_unsub", "_log_unsub"):
+                unsubscribe = getattr(self, name)
+                setattr(self, name, None)
+                if unsubscribe is not None:
+                    unsubscribe()
+            self._cancel_capture_deadline()
+            if self._poll_id is not None:
+                self.window.after_cancel(self._poll_id)
+                self._poll_id = None
             return
-        if not _sender_opened(self._current_sender()):
-            return
-        self._color_asked = True
-        self._query_color_on_open()
+        self._connection_unsub = self._service.subscribe_connection(
+            self._receive_snapshot
+        )
+        self._log_unsub = self._service.subscribe_connection_log(self._receive_log)
+        self._poll()
 
-    def _current_sender(self) -> Any:
-        """今の送り先。provider があればそれを引き、無ければ渡された物。"""
-        provider = getattr(self, "_sender_provider", None)
-        if callable(provider):
+    def _receive_snapshot(self, _snapshot: ConnectionSnapshot) -> None:
+        if self._visible and not self._closed:
+            post_latest_to_gui(
+                self,
+                "connection",
+                lambda: self._apply_snapshot(self._service.connection_snapshot()),
+            )
+
+    def _receive_log(self, generation: int, text: str) -> None:
+        if self._visible and not self._closed:
+            self._queue.put(("generation_log", (generation, text)))
+
+    def _apply_snapshot(self, snapshot: ConnectionSnapshot) -> None:
+        if not self._visible or self._closed:
+            return
+        if snapshot.generation != self._service.connection_snapshot().generation:
+            return
+        previous = self._snapshot
+        if snapshot.generation != previous.generation or snapshot.phase in {
+            "disconnected",
+            "opening",
+            "failed",
+            "closing",
+            "restarting",
+            "bootloader",
+        }:
+            self._cancel_capture_deadline()
+            self._capture_saved_seen = False
+            self._unsupported.clear()
+        self._snapshot = snapshot
+        self._update_player_lamps(snapshot.player_info)
+        if (
+            snapshot.player_info != previous.player_info
+            and len(snapshot.player_info) >= 2
+        ):
+            self._note_player_save(snapshot.player_info[1])
+        if snapshot.rumble:
             try:
-                return provider()
-            except Exception:
-                _LOGGER.exception("送り先の取得に失敗しました")
-                return None
-        return self._sender
+                left, right = decode_rumble(snapshot.rumble)
+                self._vib_label.configure(text=f"振動: L={left} R={right}")
+            except (TypeError, ValueError):
+                self._vib_label.configure(text="振動: 不明")
+        else:
+            self._vib_label.configure(text="振動: 未受信")
+        self._render_summary()
+        self._set_busy()
+        if (
+            snapshot.phase == "ready"
+            and not snapshot.operation
+            and not self._color_loaded
+        ):
+            self._load_initial_color()
 
-    def _query_color_on_open(self) -> None:
-        """窓を開いたら本体色を問い、4欄へ前埋めする。線待ちは別スレッド。"""
-        try:
-            sender = self._current_sender()
-            transport = getattr(sender, "transport", None)
-        except Exception:
+    def _load_initial_color(self) -> None:
+        if not self._colors or self._command_busy():
             return
-        if transport is None or not is_bcon_transport(transport):
+        draft = tuple(var.get() for var in self._colors)
+        if draft != COLOR_DEFAULTS:
+            self._color_loaded = True
             return
-        # タブは接続前から存在する。線が閉じている間は問わない
-        # （問うと失敗扱いで 000000 へ潰し、利用者の入力を消してしまう）。
-        if getattr(self, "_embedded", False) and not _sender_opened(sender):
-            return
+        generation = self._service.connection_snapshot().generation
 
-        def job() -> None:
-            try:
-                payload = request_color(transport)
-            except Exception:
-                payload = None
-            if getattr(self, "_closed", False):
-                return
-            try:
-                if payload is not None:
-                    self._queue.put(("color_prefill", bytes(payload)))
-                else:
-                    self._queue.put(("color_prefill", b""))
-            except Exception:
-                pass
+        def work(transport: Any) -> bool:
+            payload = request_color(transport)
+            self._post_result("color_prefill", (generation, draft, payload))
+            return payload is not None
 
-        try:
-            thread = threading.Thread(target=self._guarded, args=(job,), daemon=True)
-            thread.start()
-        except Exception:
-            pass
+        self._color_loaded = self._service.run_bcon_operation("本体色読取中", work)
+
+    def _render_summary(self) -> None:
+        snapshot = self._snapshot
+        phases = {
+            "disconnected": "未接続",
+            "opening": "ポートを開いています",
+            "hello": "HELLO 確認中",
+            "ready": "接続済み",
+            "failed": "接続失敗",
+            "closing": "切断中",
+            "restarting": "再起動待ち",
+            "bootloader": "書込み待ち",
+        }
+        hello = "未確認"
+        if snapshot.hello_ack is not None:
+            adopted, major, minor, result = snapshot.hello_ack
+            hello = f"採用 {adopted} / FW {major}.{minor} / 結果 {result}"
+        status = "未受信（不明）"
+        if snapshot.status_received_at is not None:
+            age = max(0.0, time.monotonic() - snapshot.status_received_at)
+            status = f"{age:.1f}秒前" + ("（古い情報）" if age > 3 else "")
+        mode = "不明"
+        if snapshot.status is not None:
+            mode = "有線" if snapshot.status[0] & STATUS_FLAG_WIRED else "無線"
+            if (
+                snapshot.status_received_at is None
+                or time.monotonic() - snapshot.status_received_at > 3
+            ):
+                mode += "（古い情報）"
+        baud = f"{snapshot.baud}bps" if snapshot.baud is not None else "不明"
+        self._summary.configure(
+            text=f"{phases[snapshot.phase]}: {snapshot.message}\n"
+            f"ポート: {snapshot.port_name or '未選択'} / {baud}\n"
+            f"HELLO: {hello}\nSwitch 接続方式: {mode} / STATUS: {status}"
+        )
+        self._actual_baud.configure(text=f"実際の速度: {baud}")
 
     def _arm_capture_deadline(self, seconds: int) -> None:
         """取込期限を張る。要求秒数＋余白の壁時計で1発だけ鳴らす。"""
@@ -1270,13 +1194,7 @@ class BconSetup:
             pass
 
     def _on_capture_deadline(self) -> None:
-        """取込期限が来たら保存の有無を1行出す。BEACONは見ない。
-
-        完了後は取込用の購読だけ外し、残りカスを捨てる。完了文だけ
-        残し、待ち行列を静寂へ戻す（T1数えのqsize証跡）。二重でも
-        落とさず、次の運搬器へは張り直せる。他の購読者は持たないため
-        壊さない。
-        """
+        """取込期限時にPLAYER_INFOの保存証拠を報告し、期限だけ解除する。"""
         self._capture_deadline_id = None
         if getattr(self, "_closed", False):
             # 閉じ競合でも購読だけは外す（持ち込まない）。
@@ -1335,71 +1253,8 @@ class BconSetup:
         return stale
 
     def _teardown_capture(self) -> None:
-        """取込完了時の後片付け。購読解除＋残りカス捨て＋期限取消。
-
-        完了・閉鎖・持替の3口で同じ後始末を通す。二重・未購読でも
-        落とさない（_unbind側で無害化）。外すのは自分の購読だけであり、
-        他の購読者（live/状態確認の口）は壊さない。外した後は
-        _rx_transportも消えるため、次の運搬器へは張り直せる。
-        """
-        try:
-            self._unbind_player_info()
-        except Exception:
-            pass
-        try:
-            self._cancel_capture_deadline()
-        except Exception:
-            pass
-        try:
-            self._drain_stale_capture_entries()
-        except Exception:
-            pass
-
-    def _unbind_player_info(self) -> None:
-        """PLAYER_INFO の購読を外す。二重・未購読でも落とさない。
-
-        外した後は _rx_transport も消すため、次に繋いだ先へは張り直す。
-        例外は投げない（閉じ手順を止めない）。
-        """
-        unsub = getattr(self, "_rx_unsub", None)
-        self._rx_unsub = None
-        self._rx_transport = None
-        if callable(unsub):
-            try:
-                unsub()
-            except Exception:
-                pass
-
-    def _bind_player_info(self, transport: Any) -> None:
-        """PLAYER_INFO の購読を張る。bcon 以外・口なしは黙って諦める。
-
-        別スレッド（接続の作業スレッド）からも呼ばれる。重複除けと
-        ポンプの起こし直しは subscribe_rx 側の責務である。別の運搬器へ
-        替わっていたら古い購読を先に外す。閉じた後は張らない。
-        """
-        if getattr(self, "_closed", False):
-            return
-        subscribe = getattr(transport, "subscribe_rx", None)
-        if not callable(subscribe) or not is_bcon_transport(transport):
-            return
-        if getattr(self, "_rx_transport", None) is not transport:
-            # 持替では古い購読を先に外し、残りカスと期限も片付ける。
-            # 外すのは自分の購読だけであり、他の購読者は壊さない。
-            self._teardown_capture()
-        try:
-            unsub = subscribe(self._on_rx_frame)
-        except Exception:
-            return
-        if getattr(self, "_closed", False):
-            # 閉じ手順と競合した場合は張った端から外す（持ち込まない）。
-            if callable(unsub):
-                try:
-                    unsub()
-                except Exception:
-                    pass
-            return
-        self._rx_transport = transport
-        self._rx_unsub = unsub if callable(unsub) else None
+        self._cancel_capture_deadline()
+        self._drain_stale_capture_entries()
 
     def _ensure_counters(self) -> None:
         # __new__素体の検査体でも数えが動くよう欠品分だけ足す。
@@ -1465,228 +1320,71 @@ class BconSetup:
         except Exception:
             pass
 
-    def _on_rx_frame(self, frame: Any) -> None:
-        """RXポンプ（別スレッド）から届く1フレーム。PLAYER_INFO/RUMBLEだけ拾う。
-
-        ここはスレッド親和の境界である。widget・after()・Tk変数には
-        触れず、スレッド安全な _queue へ積むだけにする。画面反映は
-        GUIスレッドの _poll が行う。閉じた後は積まない（1件漏れ防止）。
-        RUMBLEは decode_rumble で (L, R) へ直して積む。短い欠片は
-        (0, 0) へ倒し、例外は投げない。
-        """
-        try:
-            type_ = int(frame[0]) & 0xFF
-        except (TypeError, ValueError, IndexError):
-            return
-        # ftype別の数えは選別の前に行う（積まないframeも母数に入れる）。
-        # worker親和のためqueueと数えだけ触り、widget・after()は触らない。
-        self._ensure_counters()
-        self._rx_counts[type_] = self._rx_counts.get(type_, 0) + 1
-        self._rx_total += 1
-        if not self._rx_start_t:
-            self._rx_start_t = time.perf_counter()
-        if type_ == T_RUMBLE:
-            try:
-                payload = bytes(frame[1])
-            except (TypeError, ValueError, IndexError):
-                payload = b""
-            # 閉じ門（完了後始末と共有）。外れた後の到着は積まず捨てる。
-            # 解除自体は購読外しで止めるが、競合の1件はここで落とす。
-            if getattr(self, "_closed", False) or getattr(self, "_stop", False):
-                return
-            try:
-                left, right = decode_rumble(payload)
-                entry = (int(left) & 0xFF, int(right) & 0xFF)
-            except Exception:
-                entry = (0, 0)
-            try:
-                self._queue.put(("rumble", entry))
-            except Exception:
-                pass
-            return
-        if type_ != T_PLAYER_INFO:
-            return
-        try:
-            payload = bytes(frame[1])
-        except (TypeError, ValueError, IndexError):
-            return
-        # 閉じ門（完了後始末と共有）。外れた後の到着は積まず捨てる。
-        if getattr(self, "_closed", False) or getattr(self, "_stop", False):
-            return
-        if len(payload) >= 2:
-            # 保存証拠は作業スレッド側でも覚える。BEACON系は見ない。
-            self._note_player_save(payload[1])
-            self._queue.put(("player_info", (payload[0], payload[1])))
-        else:
-            # 短い欠片は全消灯へ倒す（古い点灯を残さない）。
-            self._queue.put(("player_info", b""))
-
     def _poll(self) -> None:
-        """作業スレッドからの届けを画面へ出す。
-
-        閉じ排水は完了後始末と対になる。捨てた件数はT1数えへ残し、
-        待ち行列を静寂へ戻す（qsize→idleの証跡）。
-        """
-        self._ensure_counters()
-        tick_start = time.perf_counter()
-        drained = 0
-        try:
-            peak = self._queue.qsize()
-            if peak > self._queue_max_qsize:
-                self._queue_max_qsize = peak
-        except Exception:
-            pass
-        if getattr(self, "_stop", False) or getattr(self, "_closed", False):
-            # 閉じた後の届けは捨てる。残すと待ち行列に1件漏れる。
-            try:
-                while True:
-                    self._queue.get_nowait()
-                    drained += 1
-            except queue.Empty:
-                pass
-            except Exception:
-                pass
-            self._note_poll_tick(tick_start, drained)
+        self._poll_id = None
+        if self._closed or not self._visible:
             return
-        if getattr(self, "_embedded", False):
-            self._follow_sender()
-            # 中身の大きさが変わったら求める大きさも直す。body の要求幅は手で
-            # 決めているので、中身が育っても知らせは来ない（列は横いっぱいに
-            # 広げてあり、列の実寸も変わらない）。巡回のついでに測り直す。
-            self._reflow_columns()
-        batch: list[Any] = []
-        try:
-            while len(batch) < BCON_FLUSH_MAX:
-                batch.append(self._queue.get_nowait())
-                drained += 1
-        except queue.Empty:
-            pass
-        except Exception:
-            pass
-        try:
-            take_dropped = getattr(self._queue, "take_dropped", None)
-            dropped = int(take_dropped()) if callable(take_dropped) else 0
-        except Exception:
-            dropped = 0
-        if dropped:
+        self.inbox.drain()
+        start = time.perf_counter()
+        self._ensure_counters()
+        self._queue_max_qsize = max(self._queue_max_qsize, self._queue.qsize())
+        current = self._service.connection_snapshot().generation
+        drained = 0
+        for _ in range(BCON_FLUSH_MAX):
             try:
-                self._queue_dropped_total += dropped
-            except Exception:
-                pass
-        lines: list[str] = []
-        if dropped:
-            lines.append(f"... {dropped}行省略 ...\n")
-        has_player = False
-        pending_player: Any = None
-        has_rumble = False
-        pending_rumble: Any = None
-        busy_done = False
-        pending_arm: int | None = None
-        for item in batch:
-            try:
-                kind, text = item
-            except (TypeError, ValueError):
-                continue
-            if kind == "log":
-                lines.append(f"{text}\n")
-            elif kind == "done":
-                busy_done = True
-                if text:
-                    lines.append(f"{text}\n")
-            elif kind == "player_info":
-                pending_player = text
-                has_player = True
-            elif kind == "rumble":
-                pending_rumble = text
-                has_rumble = True
-            elif kind == "capture_arm":
-                try:
-                    pending_arm = int(text)
-                except (TypeError, ValueError):
-                    pending_arm = None
+                kind, value = self._queue.get_nowait()
+            except queue.Empty:
+                break
+            drained += 1
+            if kind == "generation_log":
+                generation, text = value
+                if generation == current:
+                    self._append(text)
+            elif kind == "unsupported":
+                generation, action = value
+                if generation == current:
+                    self._unsupported.add(action)
             elif kind == "color_prefill":
-                try:
-                    payload = bytes(text) if text else b""
-                except (TypeError, ValueError):
-                    payload = b""
-                if len(payload) == 12:
-                    for index, var in enumerate(getattr(self, "_colors", [])):
-                        try:
-                            var.set(
-                                f"{payload[index * 3]:02x}"
-                                f"{payload[index * 3 + 1]:02x}"
-                                f"{payload[index * 3 + 2]:02x}"
-                            )
-                        except Exception:
-                            pass
-                    try:
+                generation, draft, payload = value
+                if (
+                    generation == current
+                    and tuple(var.get() for var in self._colors) == draft
+                ):
+                    if payload is None:
+                        self._append(COLOR_READ_FALLBACK_NOTE)
+                    else:
+                        for index, var in enumerate(self._colors):
+                            var.set(bytes(payload[index * 3 : index * 3 + 3]).hex())
                         self._refresh_color_preview()
-                    except Exception:
-                        pass
-                else:
-                    for var in getattr(self, "_colors", []):
-                        try:
-                            var.set("000000")
-                        except Exception:
-                            pass
-                    try:
-                        self._refresh_color_preview()
-                    except Exception:
-                        pass
-                    lines.append(f"{COLOR_READ_FALLBACK_NOTE}\n")
-        if has_player:
-            # 復号前の (lamp, flags) か、短い欠片の b"" が来る。
-            if isinstance(pending_player, tuple) and len(pending_player) == 2:
-                self._update_player_lamps(pending_player[0], pending_player[1])
-            else:
-                self._update_player_lamps(pending_player)
-        if has_rumble:
-            # _on_rx_frame が積んだ (L, R)。生bytesが来ても読む。
-            try:
-                if isinstance(pending_rumble, tuple) and len(pending_rumble) == 2:
-                    left = int(pending_rumble[0]) & 0xFF
-                    right = int(pending_rumble[1]) & 0xFF
-                else:
-                    raw = (
-                        bytes(pending_rumble)
-                        if isinstance(pending_rumble, (bytes, bytearray, memoryview))
-                        else b""
+            elif kind == "log":
+                self._append(str(value))
+            elif kind == "capture_cancel":
+                generation, revision = value
+                if generation == current and revision == self._visibility_revision:
+                    self._cancel_capture_deadline()
+            elif kind == "capture_arm":
+                generation, revision, seconds, sent_at = value
+                if generation == current and revision == self._visibility_revision:
+                    remaining = max(
+                        0,
+                        seconds
+                        + CAPTURE_DEADLINE_MARGIN_S
+                        - (time.monotonic() - sent_at),
                     )
-                    left, right = decode_rumble(raw)
-                    left, right = int(left) & 0xFF, int(right) & 0xFF
-            except Exception:
-                left, right = 0, 0
-            lines.append(f"振動 L={left} R={right}\n")
-        if busy_done:
-            try:
-                self._set_busy(False)
-            except Exception:
-                pass
-        if pending_arm is not None:
-            # 取込期限はGUI側で張る。送出直後の壁時計起点に寄せる。
-            try:
-                self._arm_capture_deadline(pending_arm)
-            except Exception:
-                pass
-        if lines:
-            try:
-                at_bottom = self._log.yview()[1] >= 0.999
-            except Exception:
-                at_bottom = True
-            try:
-                self._log.configure(state=tk.NORMAL)
-                self._log.insert(tk.END, "".join(lines))
-                self._trim_log()
-                if at_bottom:
-                    self._log.see(tk.END)
-                self._log.configure(state=tk.DISABLED)
-            except Exception:
-                pass
-        self._note_poll_tick(tick_start, drained)
-        try:
-            self.window.after(120, self._poll)
-        except Exception:
-            pass
+                    self._cancel_capture_deadline()
+                    self._capture_deadline_id = self.window.after(
+                        int(remaining * 1000), self._on_capture_deadline
+                    )
+        dropped = self._queue.take_dropped()
+        if dropped:
+            self._queue_dropped_total += dropped
+            self._append(f"... {dropped}行省略 ...")
+        self._render_summary()
+        self._set_busy()
+        if self._embedded:
+            self._reflow_columns()
+        self._note_poll_tick(start, drained)
+        self._poll_id = self.window.after(120, self._poll)
 
     def _note_poll_tick(self, tick_start: float, drained: int) -> None:
         # 1 tickの吐き出し数と壁msを残す（H2切り分け用・GUI側のみ）。
@@ -1702,617 +1400,317 @@ class BconSetup:
             pass
         self._maybe_log_counters()
 
-    def _run(self, func) -> None:
-        """作業を別スレッドで走らせる。二重起動しない。"""
-        if self._busy:
-            return
-        self._set_busy(True)
-        thread = threading.Thread(target=self._guarded, args=(func,), daemon=True)
-        thread.start()
+    def _run(
+        self,
+        work: Callable[[Any], bool],
+        label: str,
+        *,
+        restarts_device: bool = False,
+        bootloader: bool = False,
+    ) -> bool:
+        if not self._admit():
+            return False
+        if self._service.run_bcon_operation(
+            label, work, restarts_device=restarts_device, bootloader=bootloader
+        ):
+            self._set_busy()
+            return True
+        return False
 
-    def _guarded(self, func) -> None:
-        try:
-            func()
-        except Exception as e:  # noqa: BLE001 - 画面へ出して終わる
-            # 閉じた後の届けは捨てる。溜めても誰も取り出さない。
-            if not getattr(self, "_closed", False):
-                try:
-                    self._queue.put(("log", f"error: {e!r}"))
-                except Exception:
-                    pass
-        finally:
-            # 閉じた後の完了は積まない。積むと1件漏れて使用中が戻らない。
-            if not getattr(self, "_closed", False):
-                try:
-                    self._queue.put(("done", ""))
-                except Exception:
-                    pass
+    def _post_result(self, kind: str, value: Any) -> None:
+        if not self._closed:
+            self._queue.put((kind, value))
 
-    def _transport(self) -> Any | None:
-        sender = self._current_sender()
-        transport = getattr(sender, "transport", None)
-        if transport is None:
-            self._queue.put(("log", "シリアルが開いていません。先に接続してください。"))
-            return None
-        # bcon ならここで PLAYER_INFO の実況も繋ぐ。接続（HELLO）でも
-        # 状態確認でも、操作ボタンの入口はこの1か所を通る。
-        self._bind_player_info(transport)
-        return transport
+    def _operation_log(self, action: str | None = None) -> Callable[[str], None]:
+        generation = self._service.connection_snapshot().generation
 
-    def _require_bcon(self) -> Any | None:
-        """bconの運搬器だけ返す。違う方式には CONFIG を送らない。"""
-        transport = self._transport()
-        if transport is None:
-            return None
-        if not is_bcon_transport(transport):
-            self._queue.put(
-                ("log", "Transportがbconではありません。bconを選んで接続してください。")
-            )
-            return None
-        return transport
+        def log(text: str) -> None:
+            self._post_result("generation_log", (generation, text))
+            if action and text.startswith("この通信方式は"):
+                self._post_result("unsupported", (generation, action))
 
-    def _config_result(self, transport: Any, what: str, pre_status: Any = None) -> None:
-        """CONFIG送出の直後に STATUS を読み、errcode の意味を出す。
+        return log
 
-        errcode は直近エラーを粘着保持する（正常復帰でも0へ戻らない）。
-        pre_status（送出前のSTATUS写し）があれば前後差分で今回の可否を
-        判定する。差分が無ければ粘着扱いで受け付け扱いにする。有線中の
-        CAPTURE / BEACON は 0x10 / 0x11 で拒否されるため、有線なら
-        「無線にする」＋再起動の案内を添える。
-        """
-        try:
-            request = getattr(transport, "request_status", None)
-            status = request(timeout=1.0) if callable(request) else None
-        except Exception:
-            status = None
+    def _config_result(
+        self,
+        transport: Any,
+        what: str,
+        pre_status: Any = None,
+        *,
+        log: Callable[[str], None] | None = None,
+    ) -> bool:
+        """STATUSの前後差分で拒否を判定し、粘着errcodeを失敗にしない。"""
+        emit = log or self._operation_log()
+        status = self._request_status(transport, emit)
         if status is None:
-            self._queue.put(("log", f"{what}を送りました。STATUS応答がありません。"))
-            return
-        try:
-            errcode = int(status.get("errcode", 0)) & 0xFF
-            wired = bool(int(status.get("flags", 0)) & STATUS_FLAG_WIRED)
-        except (TypeError, ValueError, AttributeError):
-            self._queue.put(
-                ("log", f"{what}を送りました。{format_status_block(status)}")
-            )
-            return
-        if errcode == 0x00:
-            self._queue.put(
-                ("log", f"{what}を受け付けました。{format_status_block(status)}")
-            )
-            return
-        # 差分判定用の事前写しを取り出す。形が壊れていたら絶対判定へ倒す。
-        pre: dict[str, Any] | None = None
-        if isinstance(pre_status, dict):
-            try:
-                pre = {
-                    "errcode": int(pre_status.get("errcode", 0)) & 0xFF,
-                    "err_drop": int(pre_status.get("err_drop", 0)),
-                    "err_crc": int(pre_status.get("err_crc", 0)),
-                    "last_seq": int(pre_status.get("last_seq", 0)),
-                    "flags": int(pre_status.get("flags", 0)),
-                }
-            except (TypeError, ValueError, AttributeError):
-                pre = None
-        try:
-            post_drop = int(status.get("err_drop", 0))
-            post_crc = int(status.get("err_crc", 0))
-        except (TypeError, ValueError, AttributeError):
-            pre = None
-        if pre is not None:
-            # 今回の送出で輸送計数が動いたら新規の拒否として扱う。
-            if post_drop != pre["err_drop"] or post_crc != pre["err_crc"]:
-                pass
-            # 計数は不動だがerrcodeだけ変わったら今回の層事象として扱う。
-            elif errcode != pre["errcode"]:
-                pass
-            else:
-                # errcode同一・計数不動は粘着（過去の記録）のため受け付け扱い。
-                self._queue.put(
-                    (
-                        "log",
-                        f"{what}を受け付けました。"
-                        f"（注記: 直近errcode 0x{errcode:02X} は過去の記録のため今回の判定から除外しました）"
-                        f"{format_status_block(status)}",
-                    )
-                )
-                return
+            return False
+        errcode = int(status.get("errcode", 0)) & 0xFF
+        unchanged = isinstance(pre_status, dict) and all(
+            int(status.get(key, 0)) == int(pre_status.get(key, 0))
+            for key in ("errcode", "err_drop", "err_crc")
+        )
+        if errcode == 0 or unchanged:
+            sticky = "（直近errcodeは過去の記録です）" if errcode else ""
+            emit(f"{what}を受け付けました。{sticky}{format_status_block(status)}")
+            return True
         note = f"{what}は拒否されました（{describe_bcon_errcode(errcode)}）。"
-        if wired and errcode in (0x10, 0x11):
-            note += "有線中のため拒否されます。先に「無線にする」で切り替え、再起動後に「接続」からやり直してください。"
-        if what == "BEACON" and errcode == 0x11:
-            note += (
-                "前提: 無線モードで起動・Switch未接続・取込窓内でのHOME長押しが必要です"
-            )
-        note += format_status_block(status)
-        self._queue.put(("log", note))
+        if int(status.get("flags", 0)) & STATUS_FLAG_WIRED and errcode in (0x10, 0x11):
+            note += "先に「無線にする」で切り替え、再起動後にシリアルタブで接続してください。"
+        emit(note + format_status_block(status))
+        return False
 
-    # -- 操作 ------------------------------------------------------------
+    def _request_status(
+        self, transport: Any, log: Callable[[str], None]
+    ) -> dict[str, Any] | None:
+        request = getattr(transport, "request_status", None)
+        if not callable(request):
+            log("この通信方式は状態確認に対応していません。")
+            return None
+        try:
+            status = request(timeout=1.0)
+        except Exception as exc:
+            log(f"状態を取得できませんでした: {exc}")
+            return None
+        if not isinstance(status, dict):
+            log("Pico から応答がありません。ポート・通信速度を確認してください。")
+            return None
+        try:
+            for key in ("flags", "last_seq", "err_crc", "err_drop", "errcode"):
+                int(status[key])
+        except (KeyError, TypeError, ValueError):
+            log("STATUS の応答形式が不正です。以前の状態は更新しません。")
+            return None
+        return status
 
     def _on_connect(self) -> None:
-        def job() -> None:
-            transport = self._transport()
-            if transport is None:
-                return
-            connected = connect_bcon(
-                transport,
-                lambda text: self._queue.put(("log", text)),
-                self._current_sender(),
-            )
-            # タブは接続前から居るため、繋がった今が色を読める最初の機会
-            if connected and getattr(self, "_embedded", False):
-                self._color_asked = True
-                self._query_color_on_open()
+        if self._admit(recovery=True):
+            self._service.retry_bcon_hello()
+            self._set_busy()
 
-        self._run(job)
+    def _on_hunt(self) -> None:
+        if self._admit(recovery=True):
+            self._service.hunt_bcon_baud()
+            self._set_busy()
 
     def _on_capture(self) -> None:
+        if not self._admit():
+            return
         try:
-            raw = self._seconds.get()
+            seconds = parse_capture_seconds(self._seconds.get())
         except (tk.TclError, ValueError, TypeError):
-            raw = None
-        seconds = parse_capture_seconds(raw)
+            seconds = None
         if seconds is None:
-            # _runを通さないため使用中にはならない。注意だけ置いて終わる。
+            self._queue.put(("log", "取込時間は1～60秒で指定してください。"))
+            return
+        snapshot = self._service.connection_snapshot()
+        if snapshot.status is None or snapshot.status[0] & (STATUS_FLAG_WIRED | 0x40):
             self._queue.put(
                 (
                     "log",
-                    f"取込秒数は{CAPTURE_MIN_S}-{CAPTURE_MAX_S}秒で入れてください。送りません。",
+                    "無線モードで Pico と Switch が未接続の状態を確認してください。",
                 )
             )
             return
+        self._capture_saved_seen = False
+        generation = snapshot.generation
+        revision = self._visibility_revision
+        log = self._operation_log()
 
-        def job() -> None:
-            transport = self._require_bcon()
-            if transport is None:
-                return
-            self._queue.put(
-                (
-                    "log",
-                    f"CAPTURE_START {seconds}s を送ります。範囲外は送りません。"
-                    "前提: 無線モードで起動・Switch未接続・取込窓内でのHOME長押しが必要です",
-                )
-            )
-            # 送出前の写しを先に取る。線に触れない。口が無ければNone。
-            pre = _pre_status_snapshot(transport)
-            if not send_config_frame(
-                transport, T_CAPTURE_START, bytes([seconds & 0xFF])
-            ):
-                self._queue.put(("log", "送信に失敗しました。"))
-                return
-            self._config_result(transport, "取込", pre_status=pre)
-            # 取込期限は送出起点の壁時計で切る。表示は期限側で出す。
-            try:
-                self._queue.put(("capture_arm", seconds))
-            except Exception:
-                pass
+        def work(transport: Any) -> bool:
+            pre = self._request_status(transport, log)
+            if pre is None or int(pre["flags"]) & (STATUS_FLAG_WIRED | 0x40):
+                log("無線モードで Pico と Switch が未接続の状態を確認してください。")
+                self._post_result("capture_cancel", (generation, revision))
+                return False
+            sent_at = time.monotonic()
+            if not send_config_frame(transport, T_CAPTURE_START, bytes([seconds])):
+                log("送信に失敗しました。")
+                self._post_result("capture_cancel", (generation, revision))
+                return False
+            if not self._config_result(transport, "取込", pre, log=log):
+                self._post_result("capture_cancel", (generation, revision))
+                return False
+            self._post_result("capture_arm", (generation, revision, seconds, sent_at))
+            return True
 
-        self._run(job)
+        if self._run(work, "取込開始中"):
+            self._arm_capture_deadline(seconds)
 
     def _on_beacon(self) -> None:
-        def job() -> None:
-            transport = self._require_bcon()
-            if transport is None:
-                return
-            self._queue.put(("log", "BEACON_START を送ります。"))
-            # 送出前の写しを先に取る。線に触れない。口が無ければNone。
-            pre = _pre_status_snapshot(transport)
-            if not send_config_frame(transport, T_BEACON_START, b""):
-                self._queue.put(("log", "送信に失敗しました。"))
-                return
-            self._config_result(transport, "BEACON", pre_status=pre)
+        if not self._admit():
+            return
+        snapshot = self._service.connection_snapshot()
+        if len(snapshot.player_info) < 2 or not decode_player_save(
+            snapshot.player_info[1]
+        ):
+            self._queue.put(("log", "保存した入力をまだ確認できていません。"))
+            return
+        self._send_config(T_BEACON_START, b"", "再生開始中", "BEACON")
 
-        self._run(job)
+    def _send_config(
+        self, frame_type: int, payload: bytes, label: str, what: str
+    ) -> None:
+        log = self._operation_log()
+
+        def work(transport: Any) -> bool:
+            pre = _pre_status_snapshot(transport)
+            if not send_config_frame(transport, frame_type, payload):
+                log("送信に失敗しました。")
+                return False
+            return self._config_result(transport, what, pre, log=log)
+
+        self._run(work, label)
 
     def _on_status(self) -> None:
-        def job() -> None:
-            transport = self._require_bcon()
-            if transport is None:
-                return
-            try:
-                request = getattr(transport, "request_status", None)
-                status = request(timeout=1.0) if callable(request) else None
-            except Exception:
-                status = None
-            if status is None:
-                self._queue.put(("log", "応答がありません。"))
-                return
-            self._queue.put(("log", format_status_block(status)))
-            try:
-                player = getattr(transport, "last_player_info", None)
-                info = bytes(player()) if callable(player) else b""
-            except Exception:
-                info = b""
-            if info:
-                self._queue.put(("log", f"PLAYER_INFO: {info.hex(' ')}"))
-                # 状態確認はランプ表示も最新へ引き直す（Task 4）。
-                self._queue.put(("player_info", info))
-            else:
-                # 未受信・短い欠片は全消灯へ倒す（古い点灯を残さない）。
-                self._queue.put(("log", "PLAYER_INFO: （なし）"))
-                self._queue.put(("player_info", b""))
-            try:
-                rumble_fn = getattr(transport, "last_rumble", None)
-                rumble = bytes(rumble_fn()) if callable(rumble_fn) else b""
-            except Exception:
-                # 規約: except にはログ。振動は表示だけなので操作は続ける。
-                logger.debug("RUMBLE の取得に失敗", exc_info=True)
-                rumble = b""
-            if rumble:
-                try:
-                    left, right = decode_rumble(rumble)
-                    left, right = int(left) & 0xFF, int(right) & 0xFF
-                except Exception:
-                    left, right = 0, 0
-                self._queue.put(("log", f"RUMBLE: L={left} R={right}"))
-            else:
-                self._queue.put(("log", "振動:（なし）"))
+        log = self._operation_log("状態確認中")
 
-        self._run(job)
+        def work(transport: Any) -> bool:
+            status = self._request_status(transport, log)
+            if status is None:
+                return False
+            log(format_status_block(status))
+            return True
+
+        self._run(work, "状態確認中")
 
     def _on_ping(self) -> None:
-        def job() -> None:
-            transport = self._require_bcon()
-            if transport is None:
-                return
-            try:
-                ping = getattr(transport, "ping", None)
-                rtt = ping(timeout=1.0) if callable(ping) else None
-            except Exception:
-                rtt = None
-            if rtt is None:
-                self._queue.put(("log", "応答がありません。"))
-                return
-            try:
-                millis = float(rtt) * 1000.0
-            except (TypeError, ValueError):
-                self._queue.put(("log", "PONG: 疎通OK（往復の読み取りに失敗）"))
-                return
-            self._queue.put(
-                ("log", f"PONG: 疎通OK（往復 {millis:.1f}ms・SEQエコー一致）")
-            )
+        log = self._operation_log("疎通確認中")
 
-        self._run(job)
+        def work(transport: Any) -> bool:
+            ping = getattr(transport, "ping", None)
+            if not callable(ping):
+                log("この通信方式は疎通確認に対応していません。")
+                return False
+            rtt = ping(timeout=1.0)
+            if rtt is None:
+                log("Pico から応答がありません。ポート・通信速度を確認してください。")
+                return False
+            log(f"PONG: 疎通OK（往復 {float(rtt) * 1000:.1f}ms）")
+            return True
+
+        self._run(work, "疎通確認中")
 
     def _on_wired_show(self) -> None:
-        def job() -> None:
-            transport = self._require_bcon()
-            if transport is None:
-                return
-            try:
-                request = getattr(transport, "request_status", None)
-                status = request(timeout=1.0) if callable(request) else None
-            except Exception:
-                status = None
-            if status is None:
-                self._queue.put(("log", "応答がありません。"))
-                return
-            try:
-                wired = bool(int(status.get("flags", 0)) & STATUS_FLAG_WIRED)
-            except (TypeError, ValueError, AttributeError):
-                self._queue.put(("log", format_status_block(status)))
-                return
-            mode = "有線" if wired else "無線"
-            self._queue.put(("log", f"現在は{mode}です。{format_status_block(status)}"))
+        log = self._operation_log("状態確認中")
 
-        self._run(job)
+        def work(transport: Any) -> bool:
+            status = self._request_status(transport, log)
+            if status is None:
+                return False
+            mode = "有線" if int(status.get("flags", 0)) & STATUS_FLAG_WIRED else "無線"
+            log(f"現在は{mode}です。{format_status_block(status)}")
+            return True
+
+        self._run(work, "接続方式確認中")
+
+    def _confirmed_method(
+        self,
+        method_name: str,
+        args: tuple[Any, ...],
+        label: str,
+        confirmation: str,
+        *,
+        restarts_device: bool = False,
+        bootloader: bool = False,
+    ) -> None:
+        if not self._admit():
+            return
+        if tkmsg.askquestion("確認", confirmation, parent=self.window) != "yes":
+            return
+        log = self._operation_log(label)
+
+        def work(transport: Any) -> bool:
+            method = getattr(transport, method_name, None)
+            if not callable(method):
+                log("この通信方式はこの操作に対応していません。")
+                return False
+            ok = method(*args, timeout=1.0) is True
+            if not ok:
+                log("Pico から応答がありません。ポート・通信速度を確認してください。")
+            return ok
+
+        self._run(work, label, restarts_device=restarts_device, bootloader=bootloader)
 
     def _on_wired_off(self) -> None:
-        if tkmsg.askquestion("確認", "W 0: 無線に戻します。続けますか?") != "yes":
-            return
-
-        def job() -> None:
-            transport = self._require_bcon()
-            if transport is None:
-                return
-            try:
-                setter = getattr(transport, "set_wired_mode", None)
-                ok = bool(setter(False, timeout=1.0)) if callable(setter) else False
-            except Exception:
-                ok = False
-            if not ok:
-                self._queue.put(("log", "応答がありません。"))
-                return
-            self._queue.put(
-                (
-                    "log",
-                    "無線へ切り替えました。Flash保存・約500ms後自発再起動します。"
-                    "再起動中のSTATE送出は止め、復帰後に再HELLOからやり直してください。"
-                    "復帰後は取込・BEACONが使えます。",
-                )
-            )
-
-        self._run(job)
+        self._confirmed_method(
+            "set_wired_mode",
+            (False,),
+            "無線切替中",
+            "無線に切り替えます。保存後、約0.5秒で再起動します。続けますか？",
+            restarts_device=True,
+        )
 
     def _on_wired_on(self) -> None:
-        if (
-            tkmsg.askquestion(
-                "確認", "W 1: 有線(USB直結・BT停止) に切り替えます。続けますか?"
-            )
-            != "yes"
-        ):
-            return
-
-        def job() -> None:
-            transport = self._require_bcon()
-            if transport is None:
-                return
-            try:
-                setter = getattr(transport, "set_wired_mode", None)
-                ok = bool(setter(True, timeout=1.0)) if callable(setter) else False
-            except Exception:
-                ok = False
-            if not ok:
-                self._queue.put(("log", "応答がありません。"))
-                return
-            self._queue.put(
-                (
-                    "log",
-                    "有線へ切り替えました。Flash保存・約500ms後自発再起動します。"
-                    "再起動中のSTATE送出は止め、復帰後に再HELLOからやり直してください。"
-                    "有線起動では無線一式を上げません。有線中の取込・BEACON要求は"
-                    "0x10 / 0x11 で拒否されます。撮り直し・再生は「無線にする」＋再起動が必要です。",
-                )
-            )
-
-        self._run(job)
+        self._confirmed_method(
+            "set_wired_mode",
+            (True,),
+            "有線切替中",
+            "有線（USB直結・Bluetooth停止）に切り替えます。保存後、約0.5秒で再起動します。続けますか？",
+            restarts_device=True,
+        )
 
     def _on_emulate_set(self, role: int) -> None:
         names = ("Pro Controller", "Joy-Con (L)", "Joy-Con (R)")
-        label = names[role] if 0 <= int(role or 0) < len(names) else str(role)
-        if (
-            tkmsg.askquestion("確認", f"E {role}: {label} に切替えます。続けますか?")
-            != "yes"
-        ):
+        if role not in range(len(names)):
             return
-
-        def job(role_value: int = int(role)) -> None:
-            transport = self._require_bcon()
-            if transport is None:
-                return
-            try:
-                setter = getattr(transport, "set_emulate_mode", None)
-                ok = (
-                    bool(setter(role_value, timeout=1.0)) if callable(setter) else False
-                )
-            except Exception:
-                ok = False
-            if not ok:
-                self._queue.put(("log", "応答がありません。"))
-                return
-            self._queue.put(
-                (
-                    "log",
-                    f"{names[role_value]}へ切替えました。"
-                    "Flash保存・約500ms後自発再起動します。"
-                    "再起動中のSTATE送出は止め、復帰後に再HELLOからやり直してください。",
-                )
-            )
-
-        self._run(job)
+        self._confirmed_method(
+            "set_emulate_mode",
+            (role,),
+            "種別切替中",
+            f"{names[role]}に切り替えます。保存後、約0.5秒で再起動します。続けますか？",
+            restarts_device=True,
+        )
 
     def _on_bootsel(self) -> None:
-        if (
-            tkmsg.askquestion(
-                "確認",
-                "BOOTSELへ入ります。再起動後はCOMが外れます。続けますか?",
-                parent=self.window,
-            )
-            != "yes"
-        ):
-            return
-
-        def job() -> None:
-            transport = self._require_bcon()
-            if transport is None:
-                return
-            try:
-                request = getattr(transport, "request_bootsel", None)
-                ok = bool(request(timeout=1.0)) if callable(request) else False
-            except Exception:
-                ok = False
-            if not ok:
-                self._queue.put(
-                    (
-                        "log",
-                        "BOOTSEL要求に応答なしでした。配線・電源を確認してください。",
-                    )
-                )
-                return
-            self._queue.put(
-                (
-                    "log",
-                    "BOOTSELへ入りました。約500ms後に再起動します。"
-                    "再起動中のSTATE送出は止め、COMが外れたら"
-                    "RPI-RP2ドライブ表示・COM再出現まで待ってください。"
-                    "復帰後はポートを選び直して再接続し、再HELLOからやり直してください。"
-                    "再接続後は取込・BEACONが使えます。",
-                )
-            )
-
-        self._run(job)
+        self._confirmed_method(
+            "request_bootsel",
+            (),
+            "BOOTSEL移行中",
+            "ファームウェア書込み用に再起動します。約0.5秒後にポートが外れます。続けますか？",
+            bootloader=True,
+        )
 
     def _on_reconnect(self) -> None:
-        """Pico の待機状態を明示的に解除して再接続を試みる。
-
-        Switch がコントローラを受け付けない状態 (1台制限など) では Pico は
-        拒否されて page を止め待機する。時間では自動では復帰しないので、
-        運用者が明示的に起こす。実コントローラーのボタン押下に相当する。
-        送信はワーカースレッドから行い、応答はキューで GUI へ戻す。
-        """
-
-        def job() -> None:
-            transport = self._require_bcon()
-            if transport is None:
-                return
-            try:
-                request = getattr(transport, "request_reconnect", None)
-                ok = bool(request(timeout=1.0)) if callable(request) else False
-            except Exception:
-                ok = False
-            if not ok:
-                self._queue.put(
-                    (
-                        "log",
-                        "再接続要求に応答なしでした。FWがT_RECONNECT(0x3B)対応か、"
-                        "COM Survivalを確認してください。",
-                    )
-                )
-                return
-            self._queue.put(
-                (
-                    "log",
-                    "再接続を試みます。Switch側でコントローラを受け付ける状態"
-                    "（別コントローラを解除済み）にしてから行ってください。"
-                    "接続できたかはUART0ログの hid open で確認してください。",
-                )
-            )
-
-        self._run(job)
-
-    def _on_baud(self) -> None:
-        """baud切替。確認の上で作業スレッドから set_baud_index を呼ぶ。
-
-        切替の実体（BAUD_SET送出・adopt確認・失敗時の旧レート自動復帰）は
-        transport層の責務である。UIは送ってよいindexだけ送り、確定文言か
-        復帰文言（transportが戻した旨＋baud_hunt案内）を出す。_tx_holdに
-        は触らない。
-        """
-        try:
-            label = self._baud_var.get()
-        except (tk.TclError, ValueError, TypeError, AttributeError):
-            label = None
-        index = baud_index_for_label(label)
-        if index is None or not baud_index_sendable(index):
-            # _runを通さないため使用中にはならない。注意だけ置いて終わる。
-            self._queue.put(("log", f"baud指定が不正のため送りません: {label!r}。"))
-            return
-        new_bps = baud_bps_for_index(index)
-        if (
-            tkmsg.askquestion(
-                "確認",
-                f"baudを{label}（{new_bps}bps）へ切替えます。続けますか?",
-                parent=self.window,
-            )
-            != "yes"
-        ):
-            return
-
-        def job(index_value: int = index, bps_value: int = new_bps) -> None:
-            transport = self._require_bcon()
-            if transport is None:
-                return
-            old_bps = read_bcon_current_bps(transport)
-            try:
-                setter = getattr(transport, "set_baud_index", None)
-                ok = (
-                    bool(setter(index_value, timeout=2.0))
-                    if callable(setter)
-                    else False
-                )
-            except Exception:
-                ok = False
-            if ok:
-                self._queue.put(("log", baud_adopt_message(bps_value)))
-                return
-            if old_bps is None:
-                old_bps = BAUD_TABLE[DEFAULT_BAUD_INDEX]
-            self._queue.put(("log", baud_revert_message(bps_value, old_bps)))
-
-        self._run(job)
+        self._confirmed_method(
+            "request_reconnect",
+            (),
+            "Switch再接続要求中",
+            "Switch がコントローラを受け付ける状態で再接続を試します。続けますか？",
+        )
 
     def _on_clear(self) -> None:
-        if tkmsg.askquestion("確認", "BEACON相当とClassic鍵を破棄しますか?") != "yes":
+        if not self._admit():
             return
-
-        def job() -> None:
-            transport = self._require_bcon()
-            if transport is None:
-                return
-            # 「取込を破棄」は BEACON無効化相当である。bcon に破棄専用フレームは無く、
-            # 最も近い KEY_DELETE（Classic鍵全削除）で賄う。「ペア鍵を全削除」と同じ線を
-            # 送るが、案内は破棄側に寄せる。
-            if not send_config_frame(transport, T_KEY_DELETE, b""):
-                self._queue.put(("log", "送信に失敗しました。"))
-                return
-            self._queue.put(
-                (
-                    "log",
-                    "破棄しました（BEACON無効化相当・Classic鍵全削除）。"
-                    "Switch側の登録解除も必要です。",
-                )
-            )
-
-        self._run(job)
-
-    def _on_delete_keys(self) -> None:
         if (
             tkmsg.askquestion(
                 "確認",
-                "Pico側リンク鍵を全削除します(Switch側の登録解除も必要)。続けますか?",
+                "取込とClassic鍵を破棄します。取り消せません。Switch側の登録解除も必要です。続けますか？",
+                parent=self.window,
             )
-            != "yes"
+            == "yes"
         ):
+            self._send_config(T_KEY_DELETE, b"", "取込破棄中", "取込破棄")
+
+    def _on_delete_keys(self) -> None:
+        if not self._admit():
             return
-
-        def job() -> None:
-            transport = self._require_bcon()
-            if transport is None:
-                return
-            if not send_config_frame(transport, T_KEY_DELETE, b""):
-                self._queue.put(("log", "送信に失敗しました。"))
-                return
-            self._queue.put(
-                (
-                    "log",
-                    "Classic鍵を全削除しました。"
-                    "Switch側の「コントローラーとの接続をきる」（登録解除）も行ってください。",
-                )
+        if (
+            tkmsg.askquestion(
+                "確認",
+                "Pico のペア鍵をすべて削除します。取り消せません。Switch側の登録解除も必要です。続けますか？",
+                parent=self.window,
             )
-
-        self._run(job)
+            == "yes"
+        ):
+            self._send_config(T_KEY_DELETE, b"", "ペア鍵削除中", "ペア鍵削除")
 
     def _on_color(self) -> None:
-        try:
-            raws = [var.get() for var in self._colors]
-        except (tk.TclError, ValueError, TypeError, AttributeError):
-            raws = []
-        slots: list[tuple[int, int, int] | None] = [
-            parse_color_hex(raw) for raw in raws
-        ]
-        if len(slots) != 4 or any(slot is None for slot in slots):
-            # _runを通さないため使用中にはならない。注意だけ置いて終わる。
-            self._queue.put(
-                (
-                    "log",
-                    "色はRRGGBBの6桁で4つ入れてください（本体・本体2・左・右）。送りません。",
-                )
-            )
+        if not self._admit():
             return
-
-        def job() -> None:
-            transport = self._require_bcon()
-            if transport is None:
-                return
-            try:
-                payload = build_color_payload(slots)
-            except ValueError as e:
-                self._queue.put(("log", f"色の組が不正のため送りません: {e}"))
-                return
-            self._queue.put(("log", f"COLOR_SET {payload.hex(' ')} を送ります。"))
-            # 送出前の写しを先に取る。線に触れない。口が無ければNone。
-            pre = _pre_status_snapshot(transport)
-            if not send_config_frame(transport, T_COLOR_SET, payload):
-                self._queue.put(("log", "送信に失敗しました。"))
-                return
-            self._queue.put(
-                (
-                    "log",
-                    "色変更を送りました。有線中は再列挙して読み直してください。"
-                    "Switchの色キャッシュに注意（再接続後に反映されます）。"
-                    "色変更はここ1か所に置いています。",
-                )
-            )
-            self._config_result(transport, "色変更", pre_status=pre)
-
-        self._run(job)
+        slots = [parse_color_hex(var.get()) for var in self._colors]
+        try:
+            payload = build_color_payload(slots)
+        except ValueError:
+            self._queue.put(("log", "色はRRGGBBの6桁で4つ入れてください。"))
+            return
+        self._send_config(T_COLOR_SET, payload, "色変更中", "色変更")

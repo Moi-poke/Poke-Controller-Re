@@ -7,8 +7,8 @@ bconの120Hz送出が実線で保たれているかを量る。使い方は
 変換器のlatency timer設定（FTDI既定16msは120Hzの致命傷）を
 --latency-noteに添えて前後比較する（例 `--latency-note "FTDI timer=1ms"`）。
 TXをRXへ折返したloopback配線では自STATEがRXへ戻りSEQ連続性
-（seq_gap）も見られる。Picoが居ないloopbackではHELLO応答が無いため
---no-helloで送出だけ量る。出力は1行
+（seq_gap）も見られる。計測には互換版PicoとのHELLOが必要である。
+HELLO応答のないloopback配線では計測できない。出力は1行
 `p50=X.XXms p99=Y.YYms sent=N seq_gap=M err_crc=+0 err_drop=+0`＋CSV。
 """
 
@@ -68,11 +68,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="変換器設定の覚書（例 'FTDI timer=1ms'。CSV先頭へ残る）",
     )
     parser.add_argument("--csv", default=None, help="CSVの出先（既定は自動名）")
-    parser.add_argument(
-        "--no-hello",
-        action="store_true",
-        help="HELLOを飛ばす（Picoの居ないloopback用）",
-    )
     return parser.parse_args(argv)
 
 
@@ -143,7 +138,7 @@ def _windows_tick_1ms() -> Callable[[], None]:
 
 
 def _run(argv: list[str] | None = None) -> int:
-    """開→（HELLO）→中立120Hz→要約＋CSV→閉じる。失敗は文言＋非ゼロ。"""
+    """開→HELLO→中立120Hz→要約＋CSV→閉じる。失敗は非ゼロ。"""
     args = parse_args(argv)
     try:
         secs = float(args.secs)
@@ -173,10 +168,12 @@ def _run(argv: list[str] | None = None) -> int:
         )
         return 1
     tx_times: list[float] = []
+    neutral_row = "end"
 
     def _on_begin(row: str, show: bool = True) -> None:
-        _ = (row, show)
-        tx_times.append(time.perf_counter())
+        _ = show
+        if row == neutral_row:
+            tx_times.append(time.perf_counter())
 
     try:
         made.set_hooks(_on_begin, None)
@@ -187,19 +184,26 @@ def _run(argv: list[str] | None = None) -> int:
     except Exception:
         pass
     try:
+        if not made.hello(timeout=3.0):
+            print("HELLOを確認できないため計測を中止します。", file=sys.stderr)
+            try:
+                made.close()
+            except Exception:
+                pass
+            return 1
+    except Exception as e:
+        print(f"HELLOに失敗したため計測を中止します: {e!r}", file=sys.stderr)
+        try:
+            made.close()
+        except Exception:
+            pass
+        return 1
+    try:
         status0 = dict(made.last_status())
         stats0 = dict(made.live_stats())
     except Exception:
         status0 = {"err_crc": 0, "err_drop": 0}
         stats0 = {"sent": 0, "seq_gap": 0}
-    if not bool(getattr(args, "no_hello", False)):
-        try:
-            if not made.hello(timeout=3.0):
-                print("HELLOが通りません。送出だけ量ります。", file=sys.stderr)
-        except Exception:
-            print("HELLOで例外のため送出だけ量ります。", file=sys.stderr)
-    else:
-        print("HELLOを飛ばします（loopback想定）。", file=sys.stderr)
     try:
         # 基準は最初の実STATUSで取り直す。起動直後の保持は全0のため、
         # そのまま比べるとPico累積（別セッション分）まで差分に混ざる。
@@ -209,8 +213,14 @@ def _run(argv: list[str] | None = None) -> int:
     except Exception:
         pass
     try:
-        made.send_row("end")
-        made.start_live_loop()
+        made.send_row(neutral_row)
+        if not made.start_live_loop():
+            print("送出loopを起動できませんでした。", file=sys.stderr)
+            try:
+                made.close()
+            except Exception:
+                pass
+            return 1
     except Exception as e:
         print(f"送出開始に失敗しました: {e!r}", file=sys.stderr)
         made.close()
@@ -247,6 +257,9 @@ def _run(argv: list[str] | None = None) -> int:
         gap = int(stats1.get("seq_gap", 0)) - int(stats0.get("seq_gap", 0))
     except (TypeError, ValueError):
         sent, gap = len(tx_times), 0
+    if sent <= 0:
+        print("STATEを送信できなかったため計測結果を出しません。", file=sys.stderr)
+        return 1
     try:
         d_crc = int(status1.get("err_crc", 0)) - int(status0.get("err_crc", 0))
         d_drop = int(status1.get("err_drop", 0)) - int(status0.get("err_drop", 0))
@@ -259,7 +272,7 @@ def _run(argv: list[str] | None = None) -> int:
         "baud": args.baud,
         "secs": secs,
         "latency_note": getattr(args, "latency_note", ""),
-        "no_hello": bool(getattr(args, "no_hello", False)),
+        "no_hello": False,
         "samples": len(deltas),
     }
     try:

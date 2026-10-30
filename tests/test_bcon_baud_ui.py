@@ -100,3 +100,171 @@ def test_label_and_index_roundtrip_covers_table():
     for index in sorted(BAUD_TABLE):
         label = baud_ui.baud_label_for_index(index)
         assert baud_ui.baud_index_for_label(label) == index
+
+
+class _Var:
+    def __init__(self, value):
+        self.value = value
+
+    def get(self):
+        return self.value
+
+    def set(self, value):
+        self.value = value
+
+
+def _baud_host(*, opened=False, phase="disconnected", baud=None, index=3):
+    from types import SimpleNamespace
+
+    from core.connection_state import ConnectionSnapshot
+    from ui.serial_panel import SerialPanelMixin
+
+    snapshot = ConnectionSnapshot(
+        generation=1, phase=phase, transport_name="bcon", opened=opened, baud=baud
+    )
+    service = SimpleNamespace(
+        snapshot=snapshot,
+        requests=[],
+        connection_snapshot=lambda: service.snapshot,
+        uses_bcon=lambda name: name in {"bcon", "switch-bcon", "switch-bcon-proc"},
+        change_bcon_baud=lambda selected: service.requests.append(selected) or True,
+    )
+    host = SerialPanelMixin.__new__(SerialPanelMixin)
+    host.serial = service
+    host._closing = False
+    host._pending_transport_switch = None
+    host._connection_view = snapshot
+    host.transport_name = _Var("switch-bcon")
+    host.bcon_baud = _Var("2M")
+    host.settings = SimpleNamespace(bcon_baud_index=_Var(index), baud_rate=_Var(4800))
+    host.saved = []
+    host._on_setting_changed = lambda: host.saved.append(
+        host.settings.bcon_baud_index.get()
+    )
+    host._connection_change_allowed = lambda: True
+    host._refresh_connection_controls = lambda: None
+    host._refreshBaudUi = lambda: None
+    host._refresh_bcon_tab = lambda: None
+    host._refresh_bcon_rows = lambda: None
+    host._render_connection_summary = lambda: None
+    host._update_title = lambda: None
+    host._unbindKeyboardFocus = lambda: None
+    host._clearGamepadMirror = lambda: None
+    host._gamepad_active = SimpleNamespace(clear=lambda: None)
+    host.is_use_keyboard = _Var(False)
+    host.is_use_gamepad = _Var(False)
+    return host
+
+
+def test_offline_baud_selection_saves_only_bcon_index():
+    host = _baud_host()
+    host.applyBaudRate()
+    assert host.settings.bcon_baud_index.get() == 4
+    assert host.settings.baud_rate.get() == 4800
+    assert host.saved == [4]
+    assert host.serial.requests == []
+
+
+def test_connected_baud_saves_only_after_confirmed_snapshot():
+    from dataclasses import replace
+
+    host = _baud_host(opened=True, phase="ready", baud=1000000)
+    host.applyBaudRate()
+    assert host.serial.requests == [4]
+    assert host.settings.bcon_baud_index.get() == 3
+    assert not host.saved
+    confirmed = replace(host.serial.snapshot, baud=2000000)
+    host.serial.snapshot = confirmed
+    host._apply_connection_snapshot(confirmed)
+    assert host.settings.bcon_baud_index.get() == 4
+    assert host.saved == [4]
+    assert host.settings.baud_rate.get() == 4800
+
+
+def test_unconfirmed_baud_failure_keeps_saved_index():
+    from dataclasses import replace
+
+    host = _baud_host(opened=True, phase="ready", baud=1000000)
+    host.applyBaudRate()
+    failed = replace(host.serial.snapshot, phase="failed", baud=None)
+    host.serial.snapshot = failed
+    host._apply_connection_snapshot(failed)
+    assert host.settings.bcon_baud_index.get() == 3
+    assert host.bcon_baud.get() == "1M"
+    assert not host.saved
+
+
+def test_periodic_status_does_not_recreate_input_listeners():
+    from dataclasses import replace
+
+    host = _baud_host(opened=True, phase="hello", baud=None)
+    host.is_use_keyboard.set(True)
+    host.is_use_gamepad.set(True)
+    enabled = []
+    host._bindKeyboardFocus = lambda: enabled.append("keyboard")
+    host.activateGamepad = lambda: enabled.append("gamepad")
+    ready = replace(host.serial.snapshot, phase="ready", baud=1000000)
+    host.serial.snapshot = ready
+    host._apply_connection_snapshot(ready)
+    status = replace(ready, status=(0x20, 1, 0, 0, 0), status_received_at=1.0)
+    host.serial.snapshot = status
+    host._apply_connection_snapshot(status)
+    assert enabled == ["keyboard", "gamepad"]
+
+
+def test_refresh_reselects_only_the_saved_device_when_it_returns(tk_root, monkeypatch):
+    import tkinter as tk
+    from tkinter import ttk
+
+    from ui.serial_panel import SerialPanelMixin
+
+    host = _baud_host()
+    host.settings.com_port_name = _Var("COM65001")
+    host.com_port_name = tk.StringVar(master=tk_root, value="COM65001")
+    host.com_port_text = tk.StringVar(master=tk_root)
+    host.com_port = tk.IntVar(master=tk_root)
+    host.com_port_cb = ttk.Combobox(tk_root, textvariable=host.com_port_text)
+    for name in (
+        "reloadComPort",
+        "disconnectComPort",
+        "refreshComPort",
+        "bcon_hunt_button",
+    ):
+        setattr(host, name, ttk.Button(tk_root))
+    host.transport_cb = ttk.Combobox(tk_root)
+    host.baud_rate_cb = ttk.Combobox(tk_root)
+    host.com_port_notice = ttk.Label(tk_root)
+    host._refresh_connection_controls = (
+        lambda: SerialPanelMixin._refresh_connection_controls(host)
+    )
+    ports = []
+    monkeypatch.setattr("WindowUtils.listComPorts", lambda: ports)
+    try:
+        for available, expected in (
+            ([("COM65001", "saved")], "COM65001"),
+            ([], ""),
+            ([("COM65002", "other")], ""),
+            ([("COM65002", "other"), ("COM65001", "saved")], "COM65001"),
+        ):
+            ports[:] = available
+            host.refreshComPorts()
+            assert host.com_port_name.get() == expected
+            assert host.reloadComPort.instate(["!disabled"]) == bool(expected)
+            assert host.settings.com_port_name.get() == "COM65001"
+            assert host.saved == []
+            assert host.serial.requests == []
+        host.refreshComPorts(keep_current=False)
+        assert host.com_port_name.get() == ""
+        assert host.reloadComPort.instate(["disabled"])
+    finally:
+        for widget in (
+            host.com_port_cb,
+            host.reloadComPort,
+            host.disconnectComPort,
+            host.refreshComPort,
+            host.bcon_hunt_button,
+            host.transport_cb,
+            host.baud_rate_cb,
+            host.com_port_notice,
+        ):
+            widget.destroy()

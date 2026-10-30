@@ -71,6 +71,10 @@ class Transport(abc.ABC):
         _ = extra
         return False
 
+    def last_open_error(self) -> str | None:
+        """最後の open の失敗理由。未対応の方式は理由なし。"""
+        return None
+
     def close(self) -> None:
         """線を閉じる。"""
 

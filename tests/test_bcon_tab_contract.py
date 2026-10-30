@@ -10,7 +10,7 @@ from typing import Any
 
 import pytest
 
-BCON_TAB_TEXT = "Bcon"
+BCON_TAB_TEXT = "BCON"
 
 
 class _FakeTab:
@@ -30,6 +30,7 @@ class _FakeNotebook:
         self._tabs = list(tabs)
         self.texts: dict[str, str] = {}
         self.selected: str = ""
+        self.hidden: set[str] = set()
 
     def tabs(self) -> tuple[str, ...]:
         return tuple(str(tab) for tab in self._tabs)
@@ -38,6 +39,13 @@ class _FakeNotebook:
         self._tabs = [tab for tab in self._tabs if str(tab) != str(child)]
         self._tabs.insert(pos, child)
         self.texts[str(child)] = str(kw.get("text", ""))
+        self.hidden.discard(str(child))
+
+    def tab(self, child: _FakeTab, _option: str) -> str:
+        return "hidden" if str(child) in self.hidden else "normal"
+
+    def hide(self, child: _FakeTab) -> None:
+        self.hidden.add(str(child))
 
     def forget(self, child: _FakeTab) -> None:
         self._tabs = [tab for tab in self._tabs if str(tab) != str(child)]
@@ -79,7 +87,11 @@ class _FakeSetup:
         self.sender = sender
         self.kw = kw
         self.closed = 0
+        self.visible = True
         _FakeSetup.made.append(self)
+
+    def set_visible(self, visible: bool) -> None:
+        self.visible = visible
 
     def close(self) -> None:
         self.closed += 1
@@ -105,6 +117,9 @@ def _make_app(monkeypatch: pytest.MonkeyPatch, transport: str) -> Any:
     app.serial = _FakeSerial()
     app.transport_name = _FakeVar(transport)
     app._bcon_setup = None
+    from types import SimpleNamespace
+
+    app.runner = SimpleNamespace(is_busy=lambda: False)
     return app
 
 
@@ -173,10 +188,8 @@ def test_Given_bcon方式を選択_When_タブを更新_Then_シリアルの直�
     setup = _FakeSetup.made[0]
     assert setup.master is app.tab_bcon
     assert setup.kw.get("embedded") is True
-    # 送り先は作り直されうるので、握り込まず都度引ける口を渡す
-    provider = setup.kw.get("sender_provider")
-    assert callable(provider)
-    assert provider() is app.serial.sender
+    assert setup.sender is app.serial
+    assert callable(setup.kw["command_busy"])
 
 
 def test_Given_legacy方式を選択_When_タブを更新_Then_タブは出ない(
@@ -193,7 +206,7 @@ def test_Given_legacy方式を選択_When_タブを更新_Then_タブは出な�
     assert _FakeSetup.made == []
 
 
-def test_Given_bconタブ表示中_When_legacyへ切替_Then_タブを外し中身を閉じる(
+def test_Given_bconタブ表示中_When_legacyへ切替_Then_タブを隠し中身を保持する(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # Given
@@ -205,10 +218,11 @@ def test_Given_bconタブ表示中_When_legacyへ切替_Then_タブを外し中�
     app.transport_name.set("legacy_text")
     app._refresh_bcon_tab()
 
-    # Then: 購読・期限予約を残さないよう close を通す
-    assert ".nb.bcon" not in app.setting_nb.tabs()
-    assert setup.closed == 1
-    assert app._bcon_setup is None
+    # Then: 購読・期限予約を外し、同じ中身を保持する
+    assert not app._bcon_tab_shown()
+    assert setup.closed == 0
+    assert setup.visible is False
+    assert app._bcon_setup is setup
 
 
 def test_Given_bconタブ表示中_When_再度更新_Then_作り直さない(
@@ -227,7 +241,7 @@ def test_Given_bconタブ表示中_When_再度更新_Then_作り直さない(
     assert app.setting_nb.tabs().count(".nb.bcon") == 1
 
 
-def test_Given_切替を往復_When_再びbcon_Then_新しく作り直す(
+def test_Given_切替を往復_When_再びbcon_Then_同じ中身を再表示する(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # Given
@@ -241,9 +255,9 @@ def test_Given_切替を往復_When_再びbcon_Then_新しく作り直す(
     app._refresh_bcon_tab()
 
     # Then
-    assert len(_FakeSetup.made) == 2
-    assert _FakeSetup.made[0].closed == 1
-    assert _FakeSetup.made[1].closed == 0
+    assert len(_FakeSetup.made) == 1
+    assert _FakeSetup.made[0].closed == 0
+    assert _FakeSetup.made[0].visible is True
     assert app.setting_nb.tabs()[1] == ".nb.bcon"
 
 
@@ -312,109 +326,11 @@ def test_Given_bconタブ表示中_When_終了処理_Then_中身を閉じる(
     assert app._bcon_setup is None
 
 
-# -- BconSetup 側（窓を作らず __new__＋stub で閉鎖規律を見る）----------------
+def test_embedded_close_preserves_notebook_frame() -> None:
+    from bcon_ui_support import setup
 
-
-class _StubWidget:
-    def __init__(self) -> None:
-        self.destroyed = 0
-
-    def winfo_exists(self) -> bool:
-        return True
-
-    def destroy(self) -> None:
-        self.destroyed += 1
-
-
-def test_Given_埋め込みのBconSetup_When_閉じる_Then_タブ枠は残し中身だけ壊す() -> None:
-    # Given: タブ枠は Notebook が持つ。close で枠ごと壊すと次に作り直せない
-    import queue
-
-    from BconSetup import BconSetup
-
-    obj: Any = BconSetup.__new__(BconSetup)
-    obj._sender = object()
-    obj._queue = queue.Queue()
-    obj._busy = True
-    obj._stop = False
-    obj._closed = False
-    obj.window = _StubWidget()
-    obj._body = _StubWidget()
+    obj = setup()
     obj._embedded = True
-
-    # When
     obj.close()
-
-    # Then
-    assert obj.window.destroyed == 0
-    assert obj._body.destroyed == 1
-    assert obj._busy is False
-
-
-def test_Given_埋め込みのBconSetup_When_送り先が作り直される_Then_最新を引く() -> None:
-    # Given: serial サービスは Sender を作り直しうる。窓を開いた時点の
-    #   Sender を握り続けると、タブは古い（閉じた）運搬器へ送ってしまう。
-    from BconSetup import BconSetup
-
-    class _Sender:
-        def __init__(self, transport: object) -> None:
-            self.transport = transport
-
-    first, second = _Sender("old"), _Sender("new")
-    current = {"sender": first}
-    obj: Any = BconSetup.__new__(BconSetup)
-    obj._sender = first
-    obj._sender_provider = lambda: current["sender"]
-
-    # When
-    current["sender"] = second
-
-    # Then
-    assert obj._current_sender() is second
-
-
-def test_Given_別窓モードのBconSetup_When_送り先を引く_Then_渡された物を返す() -> None:
-    from BconSetup import BconSetup
-
-    sender = object()
-    obj: Any = BconSetup.__new__(BconSetup)
-    obj._sender = sender
-
-    assert obj._current_sender() is sender
-
-
-def test_Menubar_のBcon設定はタブを選ぶ(capsys: pytest.CaptureFixture[str]) -> None:
-    from Menubar import PokeController_Menubar
-
-    calls: list[bool] = []
-
-    class _App:
-        def select_bcon_tab(self) -> bool:
-            calls.append(True)
-            return True
-
-    obj: Any = PokeController_Menubar.__new__(PokeController_Menubar)
-    obj.app = _App()
-
-    obj.OpenBconSetup()
-
-    assert calls == [True]
-    assert capsys.readouterr().out == ""
-
-
-def test_Menubar_のBcon設定はタブが無いとき理由を出す(
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    from Menubar import PokeController_Menubar
-
-    class _App:
-        def select_bcon_tab(self) -> bool:
-            return False
-
-    obj: Any = PokeController_Menubar.__new__(PokeController_Menubar)
-    obj.app = _App()
-
-    obj.OpenBconSetup()
-
-    out = capsys.readouterr().out
-    assert "switch-bcon" in out
+    assert not obj.window.destroyed
+    assert obj._body.destroyed

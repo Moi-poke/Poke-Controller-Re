@@ -14,6 +14,7 @@ from collections.abc import Iterator
 from typing import Any
 
 import pytest
+from bcon_ui_support import Service
 from ui.audio_panel import AudioPanelMixin
 from ui.serial_panel import SerialPanelMixin
 
@@ -22,32 +23,33 @@ from ui.serial_panel import SerialPanelMixin
 MAX_TAB_WIDTH = 340
 
 
-class _Bcon:
-    name = "bcon"
-
-
 class _Host(SerialPanelMixin, AudioPanelMixin):
     """組み立てに要る口だけを持つ偽物。処理の入口は何もしない関数で返す。"""
 
-    def __init__(self, window: tk.Toplevel) -> None:
+    def __init__(
+        self, window: tk.Toplevel, *, tab_master: tk.Misc | None = None
+    ) -> None:
         self.root = window
-        self.tab_serial = ttk.Frame(window)
+        self.tab_serial = ttk.Frame(tab_master if tab_master is not None else window)
         self.tab_audio = ttk.Frame(window)
-        self.tab_serial.pack(side="left", anchor="nw")
-        self.tab_audio.pack(side="left", anchor="nw")
+        if tab_master is None:
+            self.tab_serial.pack(side="left", anchor="nw")
+            self.tab_audio.pack(side="left", anchor="nw")
         self.baud_rate_state = "readonly"
         self.transport_name = tk.StringVar(master=window, value="legacy_text")
         self.arbitration_mode = tk.StringVar(master=window, value="off")
-        self.serial = type("_Serial", (), {"sender": None})()
+        self.serial = Service()
+        from types import SimpleNamespace
+
+        self.runner = SimpleNamespace(is_busy=lambda: False)
+        self._closing = False
+        self.cb_use_keyboard = None
+        self.cb_use_gamepad = None
 
     def __getattr__(self, name: str) -> Any:
         if name.startswith("__"):
             raise AttributeError(name)
         return lambda *args, **kwargs: None
-
-    def _bcon_transport(self) -> Any:
-        sender = self.serial.sender
-        return _Bcon() if sender == "bcon" else None
 
 
 @pytest.fixture
@@ -60,6 +62,8 @@ def host(tk_root: tk.Tk) -> Iterator[_Host]:
         window.update()
         yield h
     finally:
+        if "h" in locals():
+            h._cancel_player_lamp_patrol()
         window.destroy()
 
 
@@ -74,13 +78,18 @@ def test_the_serial_tab_fits_a_narrow_tab_area(host: _Host) -> None:
 
 def test_the_serial_tab_still_fits_when_the_bcon_rows_appear(host: _Host) -> None:
     # When: switched to bcon, which shows the LED / rumble / wired rows.
-    host.serial.sender = "bcon"
+    host.transport_name.set("switch-bcon")
     host._refresh_bcon_rows()
     host.root.update()
 
     # Then: 出てくる行を足しても幅は収まり、隠れていた部品は見えている。
     assert host.serial_lf.winfo_reqwidth() <= _limit(host.serial_lf)
-    for widget in host._bcon_only_widgets():
+    for widget in (
+        host.bcon_status_label,
+        host.bcon_status,
+        host.bcon_wired_label,
+        host.bcon_row,
+    ):
         assert widget.winfo_ismapped(), widget
 
 
@@ -183,7 +192,7 @@ def bcon(tk_root: tk.Tk) -> Iterator[Any]:
     window = tk.Toplevel(tk_root)
     tab = ttk.Frame(window)
     tab.pack(fill="both", expand=True)
-    setup = BconSetup(tab, None, embedded=True, sender_provider=lambda: None)
+    setup = BconSetup(tab, Service(), embedded=True)
     try:
         yield window, tab, setup
     finally:
@@ -248,7 +257,7 @@ def test_a_bcon_tab_built_while_hidden_asks_for_its_full_size_once_shown(
     window.update()
     tab = ttk.Frame(notebook)
     notebook.add(tab, text="Bcon")
-    setup = BconSetup(tab, None, embedded=True, sender_provider=lambda: None)
+    setup = BconSetup(tab, Service(), embedded=True)
     try:
         window.update()
 
@@ -283,3 +292,96 @@ def test_the_bcon_tab_grows_when_its_content_grows(bcon: Any) -> None:
 
     # Then: 求める大きさも追従する（古い大きさのまま中身が欠けない）。
     assert tab.winfo_reqwidth() >= setup._col_info.winfo_reqwidth()
+
+
+@pytest.mark.parametrize("viewport_size", [(620, 285), (850, 350), (320, 285)])
+def test_serial_primary_controls_fit_the_visible_scrolled_notebook(
+    tk_root: tk.Tk,
+    viewport_size: tuple[int, int],
+) -> None:
+    """他タブが幅を要求しても、接続操作と確認結果は初期表示の可視範囲に収まる。"""
+    from core.connection_state import ConnectionSnapshot
+    from ui.combo_fit import fit_combo_width
+    from ui.scroll_host import ScrollHost
+
+    window = tk.Toplevel(tk_root)
+    window.geometry(f"{viewport_size[0]}x{viewport_size[1]}")
+    scroll = ScrollHost(window)
+    scroll.pack(fill="both", expand=True)
+    scroll.inner.columnconfigure(0, weight=1)
+    scroll.inner.rowconfigure(0, weight=1)
+    notebook = ttk.Notebook(scroll.inner)
+    notebook.grid(row=0, column=0, sticky="nsew")
+    h = _Host(window, tab_master=notebook)
+    notebook.add(h.tab_serial, text="シリアル")
+    notebook.add(ttk.Frame(notebook, width=1000, height=200), text="別の設定")
+    h._build_serial_frame()
+    h.transport_name.set("switch-bcon")
+    h._refresh_bcon_rows()
+    h.com_port_cb["values"] = ["COM3: USB Serial Port (COM3)"]
+    fit_combo_width(h.com_port_cb, min_chars=12, max_chars=32)
+    h.com_port_name.set("COM3")
+    h._connection_view = ConnectionSnapshot(
+        generation=1,
+        phase="ready",
+        transport_name="bcon",
+        port_name="COM3",
+        baud=2000000,
+        opened=True,
+        hello_ack=(4, 1, 2, 0),
+    )
+    h._render_connection_summary()
+    h.transport_description.config(text="Switch の入力を送信します。" * 3)
+    try:
+        window.update()
+        # アプリの SelectedTabHeight と同じく、選択タブの要求高さを scroll へ渡す。
+        notebook.config(height=h.tab_serial.winfo_reqheight())
+        scroll.relayout()
+        window.update()
+        assert notebook.winfo_width() > scroll.canvas.winfo_width()
+
+        def inside(widget: tk.Misc) -> None:
+            assert widget.winfo_ismapped()
+            left, top = widget.winfo_rootx(), widget.winfo_rooty()
+            assert left >= scroll.canvas.winfo_rootx()
+            assert top >= scroll.canvas.winfo_rooty()
+            assert (
+                left + widget.winfo_width()
+                <= scroll.canvas.winfo_rootx() + scroll.canvas.winfo_width()
+            )
+            assert (
+                top + widget.winfo_height()
+                <= scroll.canvas.winfo_rooty() + scroll.canvas.winfo_height()
+            )
+
+        for widget in (
+            h.com_port_cb,
+            h.refreshComPort,
+            h.reloadComPort,
+            h.disconnectComPort,
+            h.connection_status,
+            h.connection_details,
+        ):
+            inside(widget)
+        assert scroll.canvas.xview()[0] == 0.0
+        assert scroll.canvas.yview()[0] == 0.0
+        window.geometry(f"{max(320, viewport_size[0] - 100)}x{viewport_size[1]}")
+        window.update()
+        for widget in (
+            h.com_port_cb,
+            h.refreshComPort,
+            h.reloadComPort,
+            h.disconnectComPort,
+            h.connection_status,
+            h.connection_details,
+        ):
+            inside(widget)
+        assert (
+            h.transport_description.winfo_rooty()
+            >= h.transport_cb.winfo_rooty() + h.transport_cb.winfo_height()
+        )
+        # 二次設定には縦スクロールで到達できるだけの要求高さを残す。
+        assert h.tab_serial.winfo_reqheight() >= h.serial_lf.winfo_reqheight()
+    finally:
+        h._cancel_player_lamp_patrol()
+        window.destroy()

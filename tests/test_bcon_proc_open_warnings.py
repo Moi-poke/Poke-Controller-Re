@@ -99,13 +99,16 @@ def test_open_logs_child_result_false(caplog: Any) -> None:
             call_id = msg[1]
         except Exception:
             return
-        evt_q.put(("reply", call_id, True, False))
+        evt_q.put(
+            ("reply", call_id, True, {"opened": False, "error": "USB disconnected"})
+        )
 
     helper = threading.Thread(target=_reply_false, daemon=True)
     try:
         helper.start()
         with caplog.at_level(logging.WARNING, logger="core.transport.bcon_proc"):
             assert made.open(3, "COM3", 1000000) is False
+            assert made.last_open_error() == "USB disconnected"
     finally:
         helper.join(5.0)
         made.close()

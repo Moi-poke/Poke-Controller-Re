@@ -10,7 +10,7 @@ Window から「Sender の生成・通信方式の切替・接続／切断・キ
   ・接続手順（止める→閉じる→開く→作り直す）は入口が増えるたびに
     片方だけ直す事故が起きる。手順はここだけに置く。
   ・tkinter を触らない。設定値は通常の Python 値で受け取り、
-    利用者への通知は notify_user（Window は print を渡す）へ出す。
+    接続ログは subscribe_connection_log、その他の通知は notify_user へ出す。
     ヘッドレスの検証でそのまま動く。
 
 キーボード操作の寿命もここが持つ。開き直すと KeyPress を作り直すが、
@@ -25,7 +25,8 @@ import os
 import threading
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from concurrent.futures import Future, ThreadPoolExecutor
+from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import Any
 
@@ -33,10 +34,20 @@ from Gamepad import SwitchGamepadController
 from Keyboard import SwitchKeyboardController
 from core import transport
 from core.Keys import KeyPress
+from core.connection_state import ConnectionPhase, ConnectionSnapshot
+from core.procon_color import is_bcon_transport
 from core.serial.arbitration import list_arbitration_modes, resolve_arbitration_mode
 from core.serial.sender import Sender
+from core.transport.bcon_protocol import (
+    BAUD_TABLE,
+    T_HELLO_ACK,
+    T_PLAYER_INFO,
+    T_RUMBLE,
+    T_STATUS,
+)
 from loguru import logger
 from services import run_journal
+from services.bcon_connect import connect_bcon
 from services.run_journal import read_m_counts
 
 # 開閉判定の使い回し猶予(秒)。GuiAssets.SER_OPENED_TTL_S と同じ値に揃える。
@@ -79,7 +90,10 @@ class SerialService:
         gamepad_active: Callable[[], bool] | None = None,
         log_dir: str | None = None,
     ) -> None:
-        """notify_user は利用者への1行通知（Window は print を渡す）。
+        """notify_user は接続ログ以外の1行通知（Window は print を渡す）。
+
+        接続ログは subscribe_connection_log で受け取る。GUI は世代付きで
+        inbox に積み、表示時に現在世代と一致するものだけを表示する。
 
         base_dir は transport プラグインフォルダの相対解決用。
         input_log_emit は入力ログの送り先（LogPane.emitInputLog）。
@@ -130,6 +144,23 @@ class SerialService:
         self._open_snapshot = False
         self._open_snapshot_at = 0.0
         self._open_refreshing = False
+        # この錠は受付と写しだけを守る。通信待ちや callback 中には保持しない。
+        self._connection_lock = threading.RLock()
+        self._connection = ConnectionSnapshot()
+        self._connection_callbacks: list[Callable[[ConnectionSnapshot], None]] = []
+        self._connection_logs: list[Callable[[int, str], None]] = []
+        self._connection_cancel = threading.Event()
+        self._connection_busy = False
+        self._connection_completion: dict[str, Any] = {}
+        self._connection_shutdown = False
+        self._connection_executor = ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="SerialConnection"
+        )
+        self._connection_worker_id: int | None = None
+        self._connection_rx_unsub: Callable[[], None] | None = None
+        self._last_connect: tuple[int, str, int, bool, str] | None = None
+        self._shutdown_future: Future[bool] | None = None
+        self._connection_jobs: list[Future[Any]] = []
 
     def set_log_dir(self, path: str) -> None:
         """走行記録CSVの置き場を変える（検証用）。"""
@@ -299,8 +330,8 @@ class SerialService:
         if self.sender is not None:
             self.sender.setArbitration(mode=mode, cooldown=cooldown)
 
-    def switch_transport(
-        self, name: str, transport_logger: Any = None
+    def _switch_transport_body(
+        self, name: str, transport_logger: Any, generation: int
     ) -> tuple[bool, bool]:
         """選択された通信方式へ差し替える。
 
@@ -327,17 +358,297 @@ class SerialService:
         # 実体の同一性で行い、替わっていなければ失敗として扱う。
         if not linked and self.sender.transport is not new_transport:
             message = f"通信方式を {name} に切り替えられませんでした。"
-            self._notify(message)
-            logger.warning(message)
+            self._connection_log(generation, message)
             return (False, False)
         message = f"通信方式を {name} に切り替えました。"
-        self._notify(message)
-        logger.info(message)
+        self._connection_log(generation, message)
         if not linked:
-            self._notify("  注記: この方式では入力ログを出せません。")
+            self._connection_log(generation, "この方式では入力ログを出せません。")
         return (True, linked)
 
-    # -- 接続 -----------------------------------------------------------------
+    # -- 接続の受付と不変な写し -----------------------------------------------
+
+    def connection_snapshot(self) -> ConnectionSnapshot:
+        with self._connection_lock:
+            return self._connection
+
+    def subscribe_connection(
+        self, callback: Callable[[ConnectionSnapshot], None]
+    ) -> Callable[[], None]:
+        with self._connection_lock:
+            self._connection_callbacks.append(callback)
+            snapshot = self._connection
+        self._call_connection(callback, snapshot)
+
+        def unsubscribe() -> None:
+            with self._connection_lock:
+                if callback in self._connection_callbacks:
+                    self._connection_callbacks.remove(callback)
+
+        return unsubscribe
+
+    def subscribe_connection_log(
+        self, callback: Callable[[int, str], None]
+    ) -> Callable[[], None]:
+        """接続ログを世代付きで通知する。ヘッドレスの購読にも共通の口。"""
+        with self._connection_lock:
+            self._connection_logs.append(callback)
+
+        def unsubscribe() -> None:
+            with self._connection_lock:
+                if callback in self._connection_logs:
+                    self._connection_logs.remove(callback)
+
+        return unsubscribe
+
+    @staticmethod
+    def _call_connection(callback: Callable[..., None], *args: Any) -> None:
+        try:
+            callback(*args)
+        except Exception:
+            logger.exception("接続状態の通知に失敗しました")
+
+    def _current(self, generation: int) -> bool:
+        with self._connection_lock:
+            return (
+                self._connection.generation == generation
+                and not self._connection_cancel.is_set()
+            )
+
+    def _publish(
+        self, generation: int, *, _receiving: bool = False, **changes: Any
+    ) -> None:
+        with self._connection_lock:
+            if _receiving and self._connection.phase not in {
+                "opening",
+                "hello",
+                "ready",
+            }:
+                return
+            if not self._current(generation):
+                return
+            # ready の確定は後始末が終わった受付解放と同じ錠の中で行う。
+            if not _receiving and self._connection_busy:
+                if changes.get("phase") == "ready":
+                    self._connection_completion.update(changes)
+                    return
+                # 失敗・切断・再起動の進捗も、後始末中は操作名を残す。
+                if changes.get("operation", "") is None:
+                    changes.pop("operation")
+            self._connection = replace(self._connection, **changes)
+            snapshot = self._connection
+            callbacks = tuple(self._connection_callbacks)
+        for callback in callbacks:
+            if not self._current(generation):
+                break
+            self._call_connection(callback, snapshot)
+
+    def _connection_log(self, generation: int, message: str) -> None:
+        with self._connection_lock:
+            if not self._current(generation):
+                return
+            callbacks = tuple(self._connection_logs)
+        logger.info(message)
+        for callback in callbacks:
+            if not self._current(generation):
+                break
+            self._call_connection(callback, generation, message)
+
+    def _advance_locked(self, phase: ConnectionPhase, message: str) -> int:
+        """受付の錠を保持した呼出元だけが世代を変更する。"""
+        self._connection_completion = {}
+        self._connection_cancel.set()
+        generation = self._connection.generation + 1
+        self._connection_cancel = threading.Event()
+        self._connection = replace(
+            self._connection,
+            generation=generation,
+            phase=phase,
+            opened=False,
+            operation=message,
+            message=message,
+            baud=None,
+            hello_ack=None,
+            status=None,
+            status_received_at=None,
+            player_info=b"",
+            rumble=b"",
+        )
+        return generation
+
+    def _begin_connection(
+        self,
+        phase: ConnectionPhase | None = None,
+        message: str = "",
+    ) -> tuple[int, ConnectionSnapshot] | None:
+        # sync/async とも同じ受付錠を使い、実処理は一つの executor が直列化する。
+        with self._connection_lock:
+            previous = self._connection
+            accepted = not self._connection_shutdown and not self._connection_busy
+            generation = previous.generation
+            if accepted:
+                self._connection_busy = True
+                self._connection_completion = {}
+                if phase is not None:
+                    generation = self._advance_locked(phase, message)
+                else:
+                    self._connection = replace(self._connection, operation=message)
+        if not accepted:
+            self._connection_log(generation, "別の操作が実行中です。")
+            return None
+        if phase is not None:
+            self._note_open(False)
+            self._publish(generation)
+        return generation, previous
+
+    def _submit_connection(
+        self, generation: int, work: Callable[[], Any]
+    ) -> Future[Any]:
+        def job() -> Any:
+            self._connection_worker_id = threading.get_ident()
+            try:
+                if self._current(generation):
+                    return work()
+                return None
+            except Exception as exc:
+                opened = False
+                if self._current(generation):
+                    try:
+                        opened = bool(
+                            self.sender is not None and self.sender.isOpened()
+                        )
+                    except Exception:
+                        pass
+                self._clear_connection(generation, "failed", str(exc), opened=opened)
+                self._connection_log(generation, f"接続操作に失敗しました: {exc}")
+                return None
+            finally:
+                self._finish_connection_job(generation)
+
+        with self._connection_lock:
+            if not self._current(generation) or self._connection_shutdown:
+                skipped: Future[Any] = Future()
+                skipped.set_result(None)
+                return skipped
+            future = self._connection_executor.submit(job)
+            self._connection_jobs = [
+                item for item in self._connection_jobs if not item.done()
+            ]
+            self._connection_jobs.append(future)
+        return future
+
+    def _finish_connection_job(self, generation: int) -> None:
+        with self._connection_lock:
+            if not self._current(generation):
+                return
+            switching = self._connection.operation == "通信方式切替"
+            failed = self._connection.phase == "failed"
+            changes = dict(self._connection_completion)
+            if switching and not failed:
+                changes = dict(
+                    phase="disconnected",
+                    message="未接続",
+                    opened=False,
+                    baud=None,
+                    hello_ack=None,
+                    status=None,
+                    status_received_at=None,
+                    player_info=b"",
+                    rumble=b"",
+                )
+            changes["operation"] = None
+            self._connection = replace(self._connection, **changes)
+            self._connection_completion = {}
+            self._connection_busy = False
+            snapshot = self._connection
+            callbacks = tuple(self._connection_callbacks)
+        # この後は旧ジョブの状態変更をしない。通知から同世代の操作も受付可能。
+        for callback in callbacks:
+            with self._connection_lock:
+                if self._connection is not snapshot:
+                    break
+            self._call_connection(callback, snapshot)
+
+    def _clear_connection(
+        self,
+        generation: int,
+        phase: ConnectionPhase,
+        message: str,
+        *,
+        opened: bool = False,
+    ) -> None:
+        with self._connection_lock:
+            if self._current(generation):
+                self._connection_completion = {}
+        self._publish(
+            generation,
+            phase=phase,
+            message=message,
+            opened=opened,
+            operation=None,
+            baud=None,
+            hello_ack=None,
+            status=None,
+            status_received_at=None,
+            player_info=b"",
+            rumble=b"",
+        )
+
+    def _subscribe_connection_rx(self, target: Any, generation: int) -> None:
+        if self._connection_rx_unsub is not None:
+            self._connection_rx_unsub()
+            self._connection_rx_unsub = None
+        if not is_bcon_transport(target):
+            return
+
+        def receive(frame: Any) -> None:
+            if not self._current(generation):
+                return
+            if self.connection_snapshot().phase not in {"opening", "hello", "ready"}:
+                return
+            try:
+                kind, payload = int(frame[0]), bytes(frame[1])
+                if kind == T_HELLO_ACK and len(payload) == 4:
+                    self._publish(generation, _receiving=True, hello_ack=tuple(payload))
+                elif kind == T_STATUS and len(payload) == 7:
+                    self._publish(
+                        generation,
+                        _receiving=True,
+                        status=(
+                            payload[0],
+                            payload[1],
+                            int.from_bytes(payload[2:4], "little"),
+                            int.from_bytes(payload[4:6], "little"),
+                            payload[6],
+                        ),
+                        status_received_at=time.monotonic(),
+                    )
+                elif kind == T_PLAYER_INFO:
+                    self._publish(generation, _receiving=True, player_info=payload)
+                elif kind == T_RUMBLE:
+                    self._publish(generation, _receiving=True, rumble=payload)
+            except (TypeError, ValueError, IndexError):
+                return
+
+        self._connection_rx_unsub = target.subscribe_rx(receive)
+
+    def request_connect(
+        self,
+        port_num: int,
+        port_name: str,
+        baud: int,
+        keyboard_enabled: bool,
+        setting_path: str,
+    ) -> bool:
+        accepted = self._begin_connection("opening", "接続しています。")
+        if accepted is None:
+            return False
+        generation, _ = accepted
+        args = (port_num, port_name, baud, keyboard_enabled, setting_path)
+        self._submit_connection(
+            generation, lambda: self._connect_body(generation, *args)
+        )
+        return True
 
     def connect(
         self,
@@ -347,60 +658,459 @@ class SerialService:
         keyboard_enabled: bool,
         setting_path: str,
     ) -> tuple[bool, bool]:
-        """ポートを開く。既に開いていれば閉じてから開き直す。
+        accepted = self._begin_connection("opening", "接続しています。")
+        if accepted is None:
+            return False, False
+        generation, _ = accepted
+        args = (port_num, port_name, baud, keyboard_enabled, setting_path)
+        if threading.get_ident() == self._connection_worker_id:
+            try:
+                return self._connect_body(generation, *args)
+            finally:
+                self._finish_connection_job(generation)
+        result = self._submit_connection(
+            generation, lambda: self._connect_body(generation, *args)
+        ).result()
+        return result if isinstance(result, tuple) else (False, False)
 
-        戻り値は (繋がったか, キーボード操作が有効か)。
-        開き直す前にキーボードは必ず止める。KeyPress を作り直すため、
-        古い KeyPress を持つ Keyboard を残すと押しっぱなしの記録が残る。
-        """
-        if self.sender is None:
-            return (False, False)
-        # 開き直す前に必ず止める。呼び出し元が止めているかどうかに
-        # 依存しない。
+    def _connect_body(
+        self,
+        generation: int,
+        port_num: int,
+        port_name: str,
+        baud: int,
+        keyboard_enabled: bool,
+        setting_path: str,
+    ) -> tuple[bool, bool]:
+        sender = self.sender
+        if sender is None:
+            self._clear_connection(generation, "failed", "通信方式が未設定です。")
+            return False, False
+        target = sender.transport
         self.stop_keyboard()
         self.stop_gamepad()
-
-        # 旧コードは自分自身を再帰呼び出ししていた。閉じてそのまま開けばよい。
-        if self.sender.isOpened():
-            self._notify("Port is already opened and being closed.")
-            self.sender.closeSerial()
-
         self.key_press = None
-        if self.sender.openSerial(port_num, port_name, baud):
-            self._note_open(True)
-            via = self.sender.getTransportName()
-            message = f"COM Port {port_name} connected successfully ({via} / {baud}bps)"
-            self._notify(message)
-            logger.debug(message)
-            # この KeyPress はキーボード操作専用。
-            # 入力の優先付けで「人の手入力」として扱われるよう名札を付ける。
-            self.key_press = KeyPress(self.sender, source="keyboard")
-            keyboard_active = False
+        if sender.isOpened():
+            self._connection_log(generation, "既存の接続を閉じて接続し直します。")
+            sender.closeSerial()
+            if sender.isOpened():
+                self._clear_connection(
+                    generation, "failed", "既存の接続を閉じられませんでした。"
+                )
+                return False, False
+        if not self._current(generation):
+            return False, False
+        name = sender.getTransportName()
+        self._publish(
+            generation, transport_name=name, port_name=port_name or str(port_num)
+        )
+        self._subscribe_connection_rx(target, generation)
+        self._last_connect = (port_num, port_name, baud, keyboard_enabled, setting_path)
+        opened = bool(sender.openSerial(port_num, port_name, baud))
+        if not self._current(generation):
+            return False, False
+        self._note_open(opened)
+        if not opened:
+            reason_getter = getattr(target, "last_open_error", None)
+            reason = reason_getter() if callable(reason_getter) else None
+            message = (
+                f"{port_name or port_num} を開けませんでした。USB 接続と、"
+                "他のアプリが使用中でないか確認してください。"
+            )
+            if reason:
+                message += f" {reason}"
+            self._clear_connection(generation, "failed", message)
+            self._connection_log(generation, message)
+            return False, False
+        self._publish(generation, opened=True)
+        if is_bcon_transport(target):
+            if not self._establish_bcon(generation, target, sender):
+                return False, False
+        else:
+            if not self._prepare_connection_inputs(generation, sender):
+                return False, False
+            self._publish(
+                generation, phase="ready", baud=baud, message="接続済み（HELLO 対象外）"
+            )
+            self._connection_log(
+                generation,
+                f"{port_name or port_num} に接続しました（{name} / {baud}bps）。",
+            )
+        if not self._current(generation):
+            return False, False
+        return True, bool(keyboard_enabled and self.keyboard is not None)
+
+    def _prepare_connection_inputs(self, generation: int, sender: Any) -> bool:
+        """ready 通知の前に入力の受け先を用意し、再試行では重複生成しない。"""
+        if not self._current(generation):
+            return False
+        if self.key_press is None:
+            self.key_press = KeyPress(sender, source="keyboard")
+        if self._last_connect is not None and self.keyboard is None:
+            _, _, _, keyboard_enabled, setting_path = self._last_connect
             if keyboard_enabled:
-                keyboard_active = self.set_keyboard_enabled(True, setting_path) is None
-            return (True, keyboard_active)
+                self.set_keyboard_enabled(True, setting_path)
+        return self._current(generation)
 
-        self.key_press = None
+    def _establish_bcon(self, generation: int, target: Any, sender: Any) -> bool:
+        if not all(
+            callable(getattr(target, name, None))
+            for name in (
+                "hello",
+                "hold_input",
+                "stop_live_loop",
+                "start_live_loop",
+                "current_baud",
+            )
+        ):
+            if self.connection_snapshot().phase != "ready":
+                self._clear_connection(
+                    generation,
+                    "failed",
+                    "この通信方式はこの操作に対応していません。",
+                    opened=bool(target.is_open()),
+                )
+            self._connection_log(
+                generation, "この通信方式はこの操作に対応していません。"
+            )
+            return False
+        self._publish(
+            generation,
+            phase="hello",
+            message="HELLO を確認しています。",
+            baud=None,
+            hello_ack=None,
+            status=None,
+            status_received_at=None,
+            player_info=b"",
+            rumble=b"",
+        )
+        ok = connect_bcon(
+            target,
+            lambda text: self._connection_log(generation, text),
+            sender,
+            is_current=lambda: self._current(generation),
+        )
+        if not self._current(generation):
+            return False
+        if not ok:
+            self._clear_connection(
+                generation,
+                "failed",
+                "HELLO を確認できませんでした。",
+                opened=bool(target.is_open()),
+            )
+            return False
+        rate_getter = getattr(target, "current_baud", None)
+        rate = rate_getter() if callable(rate_getter) else None
+        if not self._current(generation):
+            return False
+        if rate is not None and self._last_connect is not None:
+            port_num, port_name, _, keyboard_enabled, setting_path = self._last_connect
+            self._last_connect = (
+                port_num,
+                port_name,
+                rate,
+                keyboard_enabled,
+                setting_path,
+            )
+        if not self._prepare_connection_inputs(generation, sender):
+            return False
+        snapshot = self.connection_snapshot()
+        message = (
+            f"BCON {snapshot.port_name} に接続しました（{snapshot.transport_name} / "
+            f"{rate if rate is not None else '不明'}bps、HELLO 確認済み）。"
+        )
+        self._publish(
+            generation,
+            phase="ready",
+            opened=True,
+            baud=rate,
+            operation=None,
+            message=message,
+        )
+        self._connection_log(generation, message)
+        return True
+
+    def request_switch_transport(self, name: str, transport_logger: Any = None) -> bool:
+        accepted = self._begin_connection("opening", "通信方式を切り替えています。")
+        if accepted is None:
+            return False
+        generation, previous = accepted
+        self._publish(generation, operation="通信方式切替")
+        self._submit_connection(
+            generation,
+            lambda: self._switch_connection(
+                generation, name, transport_logger, previous
+            ),
+        )
+        return True
+
+    def switch_transport(
+        self, name: str, transport_logger: Any = None
+    ) -> tuple[bool, bool]:
+        accepted = self._begin_connection("opening", "通信方式を切り替えています。")
+        if accepted is None:
+            return False, False
+        generation, previous = accepted
+        self._publish(generation, operation="通信方式切替")
+        if threading.get_ident() == self._connection_worker_id:
+            try:
+                return self._switch_connection(
+                    generation, name, transport_logger, previous
+                )
+            finally:
+                self._finish_connection_job(generation)
+        result = self._submit_connection(
+            generation,
+            lambda: self._switch_connection(
+                generation, name, transport_logger, previous
+            ),
+        ).result()
+        return result if isinstance(result, tuple) else (False, False)
+
+    def _switch_connection(
+        self,
+        generation: int,
+        name: str,
+        transport_logger: Any,
+        previous: ConnectionSnapshot,
+    ) -> tuple[bool, bool]:
+        self.stop_keyboard()
+        self.stop_gamepad()
+        changed, linked = self._switch_transport_body(
+            name, transport_logger, generation
+        )
+        if not self._current(generation):
+            return False, False
+        sender = self.sender
+        if sender is None:
+            return False, False
         self._note_open(False)
-        message = f"COM Port {port_name} を開けませんでした ({baud}bps)"
-        self._notify(message)
-        logger.warning(message)
-        return (False, False)
+        self._publish(generation, transport_name=sender.getTransportName())
+        if not changed and not linked:
+            self._publish(
+                generation,
+                phase="failed",
+                message="通信方式を切り替えられませんでした。",
+                opened=bool(sender.isOpened()),
+            )
+            return False, False
+        # 方式の切替だけを行う。GUI は完了後、移動先の baud で接続を依頼する。
+        return changed, linked
 
     def disconnect(self) -> None:
-        """ポートを閉じる（Disconnect Port ボタン）。
+        with self._connection_lock:
+            if self._connection_shutdown:
+                return
+            self._connection_busy = True
+            self._connection_completion = {}
+            generation = self._advance_locked("closing", "切断しています。")
+        self._publish(generation)
+        self._note_open(False)
+        self._submit_connection(generation, lambda: self._disconnect_body(generation))
 
-        keyPress を捨てるだけでは Keyboard のリスナーが生き残る。
-        閉じたあとも打鍵を拾い、閉じた Sender へ書きに行く。切断と
-        キーボードは同時に止める。
-        """
+    def _disconnect_body(self, generation: int) -> bool:
         self.stop_keyboard()
         self.stop_gamepad()
-        if self.sender is not None and self.sender.isOpened():
-            self._notify("Port is closed.")
-            self.sender.closeSerial()
-        self._note_open(False)
+        sender = self.sender
+        was_open = bool(sender is not None and sender.isOpened())
+        if self._connection_rx_unsub is not None:
+            self._connection_rx_unsub()
+            self._connection_rx_unsub = None
+        if sender is not None:
+            sender.closeSerial()
         self.key_press = None
+        self._note_open(False)
+        closed = not (sender is not None and sender.isOpened())
+        port = self.connection_snapshot().port_name
+        self._clear_connection(
+            generation,
+            "disconnected" if closed else "failed",
+            "未接続" if closed else "切断できませんでした。",
+        )
+        if was_open and closed:
+            self._connection_log(generation, f"{port} を切断しました。")
+        return was_open and closed
+
+    def _bcon_request(self, label: str, work: Callable[[int, Any, Any], Any]) -> bool:
+        accepted = self._begin_connection(message=label)
+        if accepted is None:
+            return False
+        generation, _ = accepted
+        self._publish(generation, operation=label)
+
+        def job() -> None:
+            sender = self.sender
+            target = getattr(sender, "transport", None)
+            if target is None or not is_bcon_transport(target):
+                self._connection_log(
+                    generation, "この通信方式はこの操作に対応していません。"
+                )
+            elif not target.is_open():
+                self._clear_connection(
+                    generation, "failed", "シリアルが開いていません。"
+                )
+            else:
+                work(generation, target, sender)
+
+        self._submit_connection(generation, job)
+        return True
+
+    def retry_bcon_hello(self) -> bool:
+        return self._bcon_request("HELLO", self._establish_bcon)
+
+    def change_bcon_baud(self, index: int) -> bool:
+        def work(generation: int, target: Any, sender: Any) -> None:
+            method = getattr(target, "set_baud_index", None)
+            if (
+                not callable(method)
+                or index not in BAUD_TABLE
+                or not all(
+                    callable(getattr(target, name, None))
+                    for name in ("hold_input", "current_baud")
+                )
+            ):
+                self._connection_log(
+                    generation, "この通信方式はこの操作に対応していません。"
+                )
+                return
+            old = self.connection_snapshot().baud
+            self._publish(
+                generation,
+                phase="hello",
+                baud=None,
+                hello_ack=None,
+                status=None,
+                status_received_at=None,
+                player_info=b"",
+                rumble=b"",
+            )
+            if not target.hold_input(True):
+                raise RuntimeError("入力を停止できませんでした。")
+            changed = bool(method(index))
+            if not self._current(generation):
+                return
+            current_baud = target.current_baud()
+            # 失敗時も旧速度で HELLO が通るまでは復帰と見なさない。
+            if not changed and (old is None or current_baud != old):
+                self._clear_connection(
+                    generation,
+                    "failed",
+                    "通信速度を確認できませんでした。",
+                    opened=True,
+                )
+                return
+            if self._establish_bcon(generation, target, sender) and not changed:
+                self._connection_log(
+                    generation,
+                    "速度変更に失敗しました。元の通信速度で HELLO を確認しました。",
+                )
+
+        return self._bcon_request("通信速度変更", work)
+
+    def hunt_bcon_baud(self) -> bool:
+        def work(generation: int, target: Any, sender: Any) -> None:
+            method = getattr(target, "baud_hunt", None)
+            if not callable(method) or not all(
+                callable(getattr(target, name, None))
+                for name in ("hold_input", "current_baud")
+            ):
+                self._connection_log(
+                    generation, "この通信方式はこの操作に対応していません。"
+                )
+                return
+            self._publish(
+                generation,
+                phase="hello",
+                baud=None,
+                hello_ack=None,
+                status=None,
+                status_received_at=None,
+                player_info=b"",
+                rumble=b"",
+            )
+            if not target.hold_input(True):
+                raise RuntimeError("入力を停止できませんでした。")
+            rate = method(candidates=list(BAUD_TABLE.values()))
+            if not self._current(generation):
+                return
+            if rate is None:
+                self._clear_connection(
+                    generation,
+                    "failed",
+                    "通信速度を検出できませんでした。",
+                    opened=True,
+                )
+                return
+            self._establish_bcon(generation, target, sender)
+
+        return self._bcon_request("通信速度検出", work)
+
+    def run_bcon_operation(
+        self,
+        label: str,
+        work: Callable[[Any], bool],
+        *,
+        restarts_device: bool = False,
+        bootloader: bool = False,
+    ) -> bool:
+        def operation(generation: int, target: Any, sender: Any) -> None:
+            restart = restarts_device or bootloader
+            if restart:
+                if not all(
+                    callable(getattr(target, name, None))
+                    for name in ("hold_input", "stop_live_loop")
+                ):
+                    self._connection_log(
+                        generation, "この通信方式はこの操作に対応していません。"
+                    )
+                    return
+                if (
+                    not target.hold_input(True)
+                    or not target.stop_live_loop()
+                    or not sender.stopLiveWorker()
+                ):
+                    raise RuntimeError("入力送信を停止できませんでした。")
+                sender.releaseAll()
+                sender.discardLive()
+                self._clear_connection(
+                    generation,
+                    "bootloader" if bootloader else "restarting",
+                    "操作しています。",
+                    opened=True,
+                )
+                self._publish(generation, operation=label)
+            try:
+                ok = bool(work(target))
+            except Exception as exc:
+                self._connection_log(
+                    generation, f"{label} を完了できませんでした: {exc}"
+                )
+                ok = False
+            if not self._current(generation):
+                return
+            if restart and ok:
+                message = (
+                    "ファームウェア書込み後に『更新』→『接続』を行ってください。"
+                    if bootloader
+                    else "Pico が再起動します。ポートが戻ったら『更新』→『接続』で接続してください。"
+                )
+                self._clear_connection(
+                    generation, "bootloader" if bootloader else "restarting", message
+                )
+                self._note_open(False)
+                self._connection_log(generation, message)
+            elif not ok:
+                self._connection_log(generation, f"{label} に失敗しました。")
+                if restart and target.is_open():
+                    self._establish_bcon(generation, target, sender)
+                elif not target.is_open():
+                    self._clear_connection(
+                        generation, "failed", "接続が閉じられました。"
+                    )
+
+        return self._bcon_request(label, operation)
 
     # -- キーボード -------------------------------------------------------------
 
@@ -584,6 +1294,13 @@ class SerialService:
         sender = self.sender
         if sender is None:
             return False
+        if self.connection_snapshot().phase in {
+            "disconnected",
+            "closing",
+            "restarting",
+            "bootloader",
+        }:
+            return False
         now = time.monotonic()
         with self._open_lock:
             same = self._open_sender is sender
@@ -597,24 +1314,42 @@ class SerialService:
         return value
 
     def _start_open_refresh(self, sender: Any) -> None:
-        """裏で開閉を問い直し、写しを直す。Tk は待たない。"""
+        """開閉の再確認も接続 worker 上で行う。"""
+        generation = self.connection_snapshot().generation
 
         def job() -> None:
             try:
+                if not self._current(generation):
+                    return
                 value = bool(sender.isOpened())
+                if not self._current(generation):
+                    return
+                self._note_open(value)
+                snapshot = self.connection_snapshot()
+                if not value and snapshot.opened:
+                    self._clear_connection(
+                        generation, "failed", "接続が閉じられました。"
+                    )
             except Exception:
-                value = False
-            with self._open_lock:
-                # その間に送り先が差し替わっていたら古い答えは捨てる。
-                if self.sender is sender:
-                    self._open_sender = sender
-                    self._open_snapshot = value
-                    self._open_snapshot_at = time.monotonic()
-                self._open_refreshing = False
+                if self._current(generation):
+                    self._note_open(False)
+                    self._clear_connection(
+                        generation, "failed", "接続状態を確認できませんでした。"
+                    )
+            finally:
+                with self._open_lock:
+                    self._open_refreshing = False
 
         try:
-            threading.Thread(target=job, daemon=True).start()
-        except Exception:
+            with self._connection_lock:
+                if self._connection_shutdown:
+                    raise RuntimeError("終了処理中です。")
+                future = self._connection_executor.submit(job)
+                self._connection_jobs = [
+                    item for item in self._connection_jobs if not item.done()
+                ]
+                self._connection_jobs.append(future)
+        except RuntimeError:
             with self._open_lock:
                 self._open_refreshing = False
 
@@ -638,18 +1373,45 @@ class SerialService:
             self.sender.flushInputLog()
 
     def shutdown(self) -> bool:
-        """終了時の後始末。キーボードを止め、開いていれば閉じる。
-
-        戻り値は「閉じたか」。呼び出し側は切断の表示に使う。
-        """
-        self.stop_keyboard()
-        self.stop_gamepad()
-        if self.sender is not None and self.sender.isOpened():
-            self.sender.closeSerial()
+        """世代を無効化し、未開始ジョブを取消して一度だけ閉じる。"""
+        with self._connection_lock:
+            first = self._shutdown_future is None
+            if first:
+                self._connection_shutdown = True
+                self._connection_busy = True
+                self._shutdown_future = Future()
+                generation = self._advance_locked("closing", "終了しています。")
+            else:
+                generation = self._connection.generation
+            result = self._shutdown_future
+            pending = tuple(self._connection_jobs) if first else ()
+        assert result is not None
+        own_worker = threading.get_ident() == self._connection_worker_id
+        if first:
             self._note_open(False)
-            return True
-        self._note_open(False)
-        return False
+            self._publish(generation)
+            for future in pending:
+                future.cancel()
+
+            def close() -> None:
+                self._connection_worker_id = threading.get_ident()
+                try:
+                    closed = self._disconnect_body(generation)
+                except Exception as exc:
+                    logger.warning(f"終了時の切断に失敗しました: {exc}")
+                    closed = False
+                self._finish_connection_job(generation)
+                result.set_result(closed)
+
+            if own_worker:
+                close()
+                self._connection_executor.shutdown(wait=False, cancel_futures=True)
+            else:
+                self._connection_executor.submit(close)
+                self._connection_executor.shutdown(wait=False)
+        if own_worker and not result.done():
+            return False
+        return bool(result.result())
 
     # -- 走行記録（コマンドの開始・終了に付随する診断） ----------------------
     # 10走0成功のような切り分けに使う。何が・どの条件で走り、PC側で

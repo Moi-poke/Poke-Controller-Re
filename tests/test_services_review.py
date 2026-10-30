@@ -169,8 +169,8 @@ def test_match_rejects_symlink_escape(tmp_path: Path) -> None:
     assert res.status == "failed"
 
 
-def test_switch_transport_failure_returns_false() -> None:
-    """差し替えに失敗したら成功の知らせを出さない。"""
+def test_switch_transport_failure_keeps_target_and_finishes_failed() -> None:
+    """失敗した切替は既存の送信先を保ち、失敗状態を完了する。"""
     from core.serial.sender import Sender
     from fakes import FakeTransport
     from services.serial_service import SerialService
@@ -179,21 +179,37 @@ def test_switch_transport_failure_returns_false() -> None:
         def stopLiveWorker(self, timeout: float = 1.0) -> bool:
             return False
 
-    notices: list[str] = []
+    connection_logs: list[tuple[int, str]] = []
     service = SerialService(
-        notify_user=notices.append, base_dir=".", input_log_emit=lambda line: None
+        notify_user=lambda message: None,
+        base_dir=".",
+        input_log_emit=lambda line: None,
     )
-    service.sender = StuckSender(is_show_serial=False, transport=FakeTransport())
-    old_name = service.sender.getTransportName()
-    switched, linked = service.switch_transport("pico_uart")
-    assert (switched, linked) == (False, False)
-    assert service.sender.getTransportName() == old_name
-    assert not any("切り替えました" in m for m in notices)
-    assert any("失敗" in m or "できません" in m or "られません" in m for m in notices)
+    unsubscribe = service.subscribe_connection_log(
+        lambda generation, message: connection_logs.append((generation, message))
+    )
+    try:
+        service.sender = StuckSender(is_show_serial=False, transport=FakeTransport())
+        old_name = service.sender.getTransportName()
+        switched, linked = service.switch_transport("pico_uart")
+
+        assert (switched, linked) == (False, False)
+        assert service.sender.getTransportName() == old_name
+        snapshot = service.connection_snapshot()
+        assert snapshot.phase == "failed"
+        assert snapshot.operation is None
+        assert snapshot.transport_name == old_name
+        assert connection_logs
+        assert all(
+            generation == snapshot.generation for generation, _ in connection_logs
+        )
+    finally:
+        unsubscribe()
+        service.shutdown()
 
 
-def test_switch_to_unlinked_still_reports_switched() -> None:
-    """入力ログの無い方式への切替は成功扱いを保つ。"""
+def test_switch_to_unlinked_updates_target_and_connection_log_consumer() -> None:
+    """ログ非対応方式でも切替結果と確定状態を通知する。"""
     from typing import Any
 
     from core import Transport
@@ -222,10 +238,17 @@ def test_switch_to_unlinked_still_reports_switched() -> None:
             _ = (row, measure_perf)
 
     assert Transport.register_transport("dummy_nolog_review", DummyNoLog) is True
+    service: SerialService | None = None
+    unsubscribe = None
     try:
-        notices: list[str] = []
         service = SerialService(
-            notify_user=notices.append, base_dir=".", input_log_emit=lambda line: None
+            notify_user=lambda message: None,
+            base_dir=".",
+            input_log_emit=lambda line: None,
+        )
+        connection_logs: list[tuple[int, str]] = []
+        unsubscribe = service.subscribe_connection_log(
+            lambda generation, message: connection_logs.append((generation, message))
         )
         service.build_sender(
             SenderSpec(
@@ -243,9 +266,23 @@ def test_switch_to_unlinked_still_reports_switched() -> None:
         )
         _ = FakeTransport
         switched, linked = service.switch_transport("dummy_nolog_review")
+
         assert (switched, linked) == (True, False)
-        assert any("切り替えました" in m for m in notices)
+        assert service.sender is not None
+        assert service.sender.getTransportName() == "dummy_nolog_review"
+        snapshot = service.connection_snapshot()
+        assert snapshot.phase == "disconnected"
+        assert snapshot.operation is None
+        assert snapshot.transport_name == "dummy_nolog_review"
+        assert connection_logs
+        assert all(
+            generation == snapshot.generation for generation, _ in connection_logs
+        )
     finally:
+        if unsubscribe is not None:
+            unsubscribe()
+        if service is not None:
+            service.shutdown()
         assert Transport.unregister_transport("dummy_nolog_review") is True
 
 

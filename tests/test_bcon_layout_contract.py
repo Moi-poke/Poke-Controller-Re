@@ -15,6 +15,7 @@ from collections.abc import Iterator
 from typing import Any
 
 import pytest
+from bcon_ui_support import Service
 
 # 取り消せない操作。押し間違えないよう普段の操作と別のまとまりに置く。
 _DESTRUCTIVE = ("_btn_keys", "_btn_clear", "_btn_bootsel")
@@ -46,9 +47,9 @@ def bcon(request: Any, tk_root: tk.Tk) -> Iterator[Any]:
     if request.param:
         tab = ttk.Frame(window)
         tab.pack(fill="both", expand=True)
-        setup = BconSetup(tab, None, embedded=True, sender_provider=lambda: None)
+        setup = BconSetup(tab, Service(), embedded=True)
     else:
-        setup = BconSetup(window, None)
+        setup = BconSetup(window, Service())
     try:
         window.update()
         yield setup
@@ -94,17 +95,18 @@ def test_bcon_buttons_say_what_they_do_instead_of_short_codes(bcon: Any) -> None
 def test_the_reconnect_button_is_disabled_while_another_action_runs(
     bcon: Any,
 ) -> None:
-    # When: an action is running (作業スレッドの間は二重起動させない).
-    bcon._set_busy(True)
+    from dataclasses import replace
 
-    # Then: 再接続を含め全ボタンが押せない。
+    bcon._service.snapshot = replace(
+        bcon._service.snapshot, opened=True, phase="ready", operation="状態確認中"
+    )
+    bcon._set_busy()
     for name, button in _buttons(bcon).items():
         assert str(button.cget("state")) == tk.DISABLED, name
-
-    # When: the action finishes.
-    bcon._set_busy(False)
-
-    # Then: 全ボタンが戻る。
+    bcon._service.snapshot = replace(
+        bcon._service.snapshot, operation=None, player_info=b"\x01\x04"
+    )
+    bcon._set_busy()
     for name, button in _buttons(bcon).items():
         assert str(button.cget("state")) == tk.NORMAL, name
 

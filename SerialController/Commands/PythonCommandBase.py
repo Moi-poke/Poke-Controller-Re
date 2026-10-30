@@ -582,6 +582,18 @@ class PythonCommand(CommandBase.Command, OperateMixin, DialogMixin):
                     continue
 
             if self.keys.ser.openSerial(port, name, baud):
+                from core.procon_color import is_bcon_transport
+
+                target = getattr(self.keys.ser, "transport", None)
+                if target is not None and is_bcon_transport(target):
+                    if not target.hello(timeout=3.0):
+                        self.keys.ser.closeSerial()
+                        self.wait(0.5)
+                        continue
+                    if not self.keys.ser.startLiveWorker():
+                        self.keys.ser.closeSerial()
+                        self.wait(0.5)
+                        continue
                 msg = f"COM Port {name or port} connected successfully"
                 print(msg)
                 logger.debug(msg)

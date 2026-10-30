@@ -22,6 +22,7 @@ from core import InputLog, Transport
 from core.Transport import (
     MIN_SEND_INTERVAL,
 )
+from core.procon_color import is_bcon_transport
 from core.serial import encoding
 from core.serial.arbitration import (
     ARBITRATION_COOLDOWN as ARBITRATION_COOLDOWN,
@@ -136,7 +137,7 @@ class Sender:
         # とは独立した門である。
         self._live_min_dwell_s = 0.016
         # Pico live-state 能力がある線だけ worker を立てる。
-        if self._liveCapable():
+        if self._liveCapable() and not is_bcon_transport(self.transport):
             self.startLiveWorker()
 
     # -- 入力ログの設定 -----------------------------------------------------
@@ -262,7 +263,7 @@ class Sender:
                 self.transport.add_listener(self.input_logger.feed)
             )
             linked = bool(self._input_log_linked)
-            need_live = self._liveCapable()
+            need_live = self._liveCapable() and not is_bcon_transport(self.transport)
         if not linked:
             msg = (
                 "入力ログは、この通信方式（"
@@ -482,7 +483,7 @@ class Sender:
         いれば startLiveWorker が二重には起こさない。
         """
         opened = self.transport.open(portNum, portName, baudrate, **extra)
-        if opened and self._liveCapable():
+        if opened and self._liveCapable() and not is_bcon_transport(self.transport):
             if not self.startLiveWorker():
                 # 直前の close が join を諦めた場合、停止指示を受けた古い
                 # worker がまだ send_row で詰まっている。そのままでは

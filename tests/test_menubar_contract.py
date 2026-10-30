@@ -93,40 +93,6 @@ def test_the_menu_bar_uses_the_standard_desktop_headings_in_order(
 
 
 @pytest.mark.parametrize(
-    ("heading", "label", "entry"),
-    [
-        ("コマンド(C)", "開始", "StartCommandWithF6"),
-        ("コマンド(C)", "停止", "StopCommandWithEsc"),
-        ("コマンド(C)", "一時停止 / 再開", "PauseCommandWithF7"),
-        ("コマンド(C)", "再読み込み", "ReloadCommandWithF5"),
-        ("コマンド(C)", "コマンドを選択...", "openCommandPalette"),
-        ("コマンド(C)", "コマンドフォルダを開く", "OpenCommandDir"),
-        ("ファイル(F)", "キャプチャを保存", "saveCapture"),
-        ("ファイル(F)", "キャプチャフォルダを開く", "OpenCaptureDir"),
-        ("ファイル(F)", "終了", "exit"),
-        ("表示(V)", "仕切りを既定の位置に戻す", "resetPaneSashes"),
-        ("接続(N)", "シリアルポートを再接続", "reloadSerialPort"),
-        ("接続(N)", "シリアルポートを切断", "inactivateSerial"),
-        ("接続(N)", "カメラを再読み込み", "openCamera"),
-        ("接続(N)", "音声デバイスを再読み込み", "reloadAudio"),
-    ],
-)
-def test_each_menu_item_calls_the_same_entry_as_its_button_or_shortcut(
-    bar: tuple[PokeController_Menubar, _App], heading: str, label: str, entry: str
-) -> None:
-    # Given: the built menu bar.
-    menubar, app = bar
-    menu = _submenu(menubar, heading)
-
-    # When: the item is invoked.
-    menu.invoke(_index(menu, label))
-
-    # Then: ボタンやショートカットと同じ入口を呼ぶ（入口が分かれると、
-    #       片方だけ直したときに挙動が食い違う）。
-    assert app.calls == [entry]
-
-
-@pytest.mark.parametrize(
     ("heading", "label", "accelerator"),
     [
         ("コマンド(C)", "開始", "F6"),

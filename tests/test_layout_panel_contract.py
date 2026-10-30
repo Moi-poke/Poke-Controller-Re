@@ -20,6 +20,7 @@ from collections.abc import Iterator
 from typing import Any
 
 import pytest
+from core.connection_state import ConnectionSnapshot
 from ui.camera_panel import CameraPanelMixin
 from ui.layout_panel import LayoutPanelMixin
 from ui.pane_layout import PaneArranger
@@ -49,8 +50,13 @@ class _PreviewDouble(tk.Frame):
 class _Serial:
     opened = True
 
-    def is_open(self) -> bool:
-        return self.opened
+    def connection_snapshot(self) -> ConnectionSnapshot:
+        return ConnectionSnapshot(
+            phase="ready" if self.opened else "disconnected",
+            opened=self.opened,
+            port_name="COM9",
+            transport_name="switch-bcon",
+        )
 
 
 class _Runner:

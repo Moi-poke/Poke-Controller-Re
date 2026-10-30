@@ -15,6 +15,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Final
 
+from core.connection_state import ConnectionSnapshot
+
 # バッジの背景色。Win32 の COLORREF（0x00BBGGRR）で、
 # CaptureArea.setBadge が受け取る形と同じ並び順。
 #   running      … 緑（動いている）
@@ -28,6 +30,12 @@ BADGE_COLORS: Final[dict[str, int]] = {
     "stopping": 0x000080C0,
     "disconnected": 0x002020B0,
     "idle": 0x00505050,
+    "opening": 0x000080C0,
+    "hello": 0x000080C0,
+    "failed": 0x002020B0,
+    "closing": 0x000080C0,
+    "restarting": 0x000080C0,
+    "bootloader": 0x000080C0,
 }
 
 # 1 行に出すコマンド名の上限。Window.TITLE_COMMAND_MAX と同じ値を複製して
@@ -65,12 +73,11 @@ def status_view(
     running_command: str,
     paused: bool,
     stop_waited_ms: int,
-    device: str,
-    opened: bool,
+    connection: ConnectionSnapshot,
 ) -> StatusView:
     """実行状態・接続状態・プロファイル名から、1 行の表し方を決める。
 
-    優先順位は「停止待ち > 実行中/一時停止 > 未接続 > 停止中」。停止待ちを
+    優先順位は「停止待ち > 実行中/一時停止 > 接続フェーズ > 停止中」。停止待ちを
     先頭に出すのは、そのあいだは待つ以外の手が無いから（実行中の表示が
     残ると「まだ動いてるのでは」と誤解される）。
 
@@ -84,7 +91,19 @@ def status_view(
         kind = "paused" if paused else "running"
         mark = _MARK_PAUSED if paused else _MARK_RUNNING
         text = f"{mark} {_clip(running_command)}"
-    elif not device or not opened:
+    elif connection.phase not in {"disconnected", "ready"}:
+        kind = connection.phase
+        text = {
+            "opening": "ポート接続中",
+            "hello": "HELLO 確認中",
+            "failed": "接続失敗",
+            "closing": "切断中",
+            "restarting": "再起動後の接続待ち",
+            "bootloader": "ファームウェア書込み待ち",
+        }[connection.phase]
+    elif (
+        not connection.port_name or not connection.opened or connection.phase != "ready"
+    ):
         kind = "disconnected"
         text = _TEXT_DISCONNECTED
     else:
