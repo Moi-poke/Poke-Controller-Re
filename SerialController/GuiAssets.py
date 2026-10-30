@@ -39,10 +39,10 @@ from core.preview_renderer import (
     BadgeState,
     ImgRectState,
     OverlayState,
-    PreviewRenderer,
     RectState,
     RenderResult,
     StickState,
+    VideoRenderer,
 )
 from loguru import logger
 from ui import preview_clock
@@ -287,15 +287,52 @@ class MouseStick(PythonCommand):
         self.keys.inputEnd(buttons)
 
 
-def _create_preview_surface(host: Any, renderer: str = "auto") -> PreviewRenderer:
-    """指定の描画方式で面を作る。既定は Windows なら GDI 子窓、それ以外は Canvas 実装。
+#: 面の候補。順に「作れるか」「繋げるか」を試し、最初に成立したものを使う。
+#: sdl は GPU（SDL2 の D3D11 / OpenGL / Metal）。gdi は Windows の CPU 描画。
+#: photo はどの OS でも動く最終手段。
+_SURFACE_CANDIDATES: Final[tuple[str, ...]] = ("sdl", "gdi", "photo")
 
-    mac/Linux には GDI が無いので、同じプロトコルを PhotoImage 実装で
-    満たす。プラットフォーム要件であって一般化ではない（設計 8節）。
 
-    ``renderer`` は WindowUtils.RENDERER_VALUES の名前。表に無い値は推測で
-    解釈せず、警告してこのプラットフォームの既定へ戻す（利用者が設定を
-    書き間違えただけなので、起動を落とさない）。
+def _photo_surface(host: Any) -> VideoRenderer:
+    """最終手段の Canvas 面。ここだけは必ず作れる前提で最後に置く。"""
+    from ui.photo_surface import PhotoImageSurface
+
+    return PhotoImageSurface(host)
+
+
+def _build_named_surface(host: Any, name: str) -> VideoRenderer | None:
+    """候補 1 つを組み立てる。この環境に無ければ None（次の候補が引き継ぐ）。"""
+    if name == "sdl":
+        from core.sdl_surface import SdlSurface
+
+        try:
+            return SdlSurface()
+        except OSError as error:
+            # SDL2 の実体が見つからない・読めない環境。起動は止めない。
+            logger.warning("GPU 面（SDL）を作れないため次の面へ落とします: {}", error)
+            return None
+    if name == "gdi":
+        if os.name != "nt":
+            # GDI が無い環境で構築を試みない。CtypesGdiApi の OSError 捕捉は
+            # 実行時の最終防衛として残すが、通常経路ではここで寄せる。
+            logger.warning("この環境に GDI は無いため photo を使います")
+            return None
+        try:
+            return GdiSurface()
+        except OSError as error:
+            # 名前で指定しても、この環境には GDI が無いことがある
+            # （CtypesGdiApi が OSError を上げる）。ここで落とすと
+            # mac/Linux の起動が壊れるので、必ず代替へ落とす。
+            logger.warning("GDI の面を作れないため Canvas 実装に落とします: {}", error)
+            return None
+    return _photo_surface(host)
+
+
+def _surface_order(renderer: str) -> list[str]:
+    """``renderer`` から試す順を作る。
+
+    ``auto`` は GPU → GDI → Canvas の順。明示された名前はそれを先頭にし、
+    下位の面だけを控えに置く（gdi を選んだ人が勝手に GPU へ行かない）。
     """
     if renderer in WindowUtils.RENDERER_VALUES:
         name = renderer
@@ -303,27 +340,29 @@ def _create_preview_surface(host: Any, renderer: str = "auto") -> PreviewRendere
         logger.warning("描画方式 '{}' は候補に無いため 'auto' として扱います", renderer)
         name = "auto"
     if name == "auto":
-        name = "gdi" if os.name == "nt" else "photo"
-    if name == "gdi" and os.name != "nt":
-        # GDI が無い環境で構築を試みない。CtypesGdiApi の OSError 捕捉は
-        # 実行時の最終防衛として残すが、通常経路ではここで寄せる。
-        logger.warning("この環境に GDI は無いため photo を使います")
-        name = "photo"
+        return list(_SURFACE_CANDIDATES)
+    fallbacks = {
+        "sdl": ("gdi", "photo"),
+        "gdi": ("photo",),
+        "photo": (),
+    }
+    return [name, *fallbacks.get(name, ("photo",))]
 
-    surface: PreviewRenderer | None = None
-    if name == "gdi":
-        try:
-            surface = GdiSurface()
-        except OSError as error:
-            # 名前で指定しても、この環境には GDI が無いことがある
-            # （CtypesGdiApi が OSError を上げる）。ここで落とすと
-            # mac/Linux の起動が壊れるので、必ず代替へ落とす。
-            logger.warning("GDI の面を作れないため Canvas 実装に落とします: {}", error)
-    if surface is None:
-        from ui.photo_surface import PhotoImageSurface
 
-        surface = PhotoImageSurface(host)
+def _create_preview_surface(host: Any, renderer: str = "auto") -> VideoRenderer:
+    """指定の描画方式で面を作る。既定は GPU（SDL）で、無ければ下位へ落ちる。
 
+    面の組み立てに失敗した場合はここで次の候補へ移る。組み立ては成功しても
+    ``attach`` で繋げないことがある（GPU 無し・子窓を作れない）ので、その
+    場合は ``CaptureArea`` が 1 段下の面へ切り替える。
+    """
+    for name in _surface_order(renderer):
+        surface = _build_named_surface(host, name)
+        if surface is not None:
+            logger.info("プレビュー面を作成 surface={}", type(surface).__name__)
+            return surface
+    # ここへは来ない想定（photo は必ず作れる）。念のため落とさず返す。
+    surface = _photo_surface(host)
     logger.info("プレビュー面を作成 surface={}", type(surface).__name__)
     return surface
 
@@ -331,10 +370,12 @@ def _create_preview_surface(host: Any, renderer: str = "auto") -> PreviewRendere
 class CaptureArea(tk.Frame):
     """カメラ映像を表示し、マウスでスティック操作を行うウィジェット.
 
-    映像は GDI の子 HWND が持ち、スティック・範囲枠・認識枠は同じ面の
-    renderer が描く。Tk の Canvas 項目は廃止した（設計 0節・8節）。子窓は
-    親の絵より常に上に合成されて Canvas を透かせず、``coords()`` は移動
-    させる項目の古い箱を背景色で塗り直すので映像を消してしまう。
+    映像は子窓（Windows は Tk の Frame の中に作る HWND、それ以外は Tk の窓）
+    が持ち、スティック・範囲枠・認識枠は同じ面の renderer が描く。既定の
+    renderer は GPU（``core/sdl_surface.py``）で、GDI / PhotoImage も同じ
+    契約で差し替えられる。Tk の Canvas 項目は廃止した（設計 0節・8節）。
+    子窓は親の絵より常に上に合成されて Canvas を透かせず、``coords()`` は
+    移動させる項目の古い箱を背景色で塗り直すので映像を消してしまう。
     """
 
     def __init__(
@@ -471,8 +512,7 @@ class CaptureArea(tk.Frame):
         # 映像面。子窓は Frame の HWND に作る（設計 6節）。Windows は
         # 親を動かすときに子を動かすが大きさは変えないので、<Configure> が
         # 無いと最初の geo 指定以降がそのままになる。
-        self._surface: PreviewRenderer = _create_preview_surface(self, renderer)
-        self._surface.attach(int(self.winfo_id()), self.show_size)
+        self._surface: VideoRenderer = self._attach_preview_surface(renderer)
         from ui.photo_surface import SelfTestResult
 
         # 「まだやっていない」。``None`` は既に「self_test を持たない面」の
@@ -485,6 +525,34 @@ class CaptureArea(tk.Frame):
 
     _SELFTEST_POLL_MS: Final[int] = 50
     _SELFTEST_TIMEOUT_S: Final[float] = 2.0
+
+    def _attach_preview_surface(self, renderer: str) -> VideoRenderer:
+        """面を組み立てて繋ぐ。繋げなければ 1 段下の面へ落ちる。
+
+        GPU 面は「作れたが接続できない」がありうる（GPU が無い・SDL の映像
+        初期化に失敗した・子窓を作れない）。そこで起動を止めると、映像が
+        使えないだけでアプリ全体が立ち上がらなくなる。GDI / PhotoImage は
+        従来どおり動くので、落ちた理由をファイルログに残して切り替える。
+        """
+        surface = _create_preview_surface(self, renderer)
+        surface.attach(int(self.winfo_id()), self.show_size)
+        if getattr(surface, "attached", True):
+            return surface
+        failed = type(surface).__name__
+        logger.warning("プレビュー面 {} を接続できないため代替へ切り替えます", failed)
+        next_name = (
+            "photo"
+            if failed == "GdiSurface"
+            else ("gdi" if os.name == "nt" else "photo")
+        )
+        try:
+            surface.release()
+        except Exception as error:  # 壊れた面を片付け損ねても続行する。
+            logger.warning("未接続のプレビュー面を片付けられませんでした: {}", error)
+        fallback = _build_named_surface(self, next_name) or _photo_surface(self)
+        fallback.attach(int(self.winfo_id()), self.show_size)
+        logger.info("プレビュー面を作成 surface={}", type(fallback).__name__)
+        return fallback
 
     def _schedule_selftest(self) -> None:
         """自己検査を遅延実行する。
@@ -604,7 +672,7 @@ class CaptureArea(tk.Frame):
         return badge
 
     @property
-    def surface(self) -> PreviewRenderer:
+    def surface(self) -> VideoRenderer:
         """描画面。終了処理から release() されるための公開口。"""
         return self._surface
 

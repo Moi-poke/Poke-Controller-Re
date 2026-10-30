@@ -1,8 +1,9 @@
 """プレビュー描画の契約層。tkinter にも PIL にも触れない。
 
-設計: docs/superpowers/specs/2026-09-26-gdi-preview-renderer-design.md 5節。
+設計: docs/superpowers/specs/2026-09-26-gdi-preview-renderer-design.md 5節 と
+docs/superpowers/specs/2026-10-30-gpu-preview-renderer-design.md。
 Canvas の項目は廃止し、オーバーレイは「データ」として renderer へ渡す。
-Tk も Win32 も知らないので core/ の境界内に置ける。
+Tk も Win32 も SDL も知らないので core/ の境界内に置ける。
 """
 
 from __future__ import annotations
@@ -119,8 +120,17 @@ class OverlayState:
 
 
 @runtime_checkable
-class PreviewRenderer(Protocol):
-    """合成と提示を分けるのは、合成時間と blit 時間を別々に測るため。"""
+class VideoRenderer(Protocol):
+    """映像面の抽象。アプリ本体はこの契約だけを知り、OS の API を知らない。
+
+    実装は 3 つ: ``core/sdl_surface.py`` の SDL 面（GPU。Windows は D3D11、
+    Linux は OpenGL）、``core/gdi_surface.py`` の GDI 面（Windows の CPU 描画）、
+    ``ui/photo_surface.py`` の PhotoImage 面（どの OS でも動く最終手段）。
+    どれも「映像 → 合成 → 提示」の 3 段を持つ。
+
+    ``compose`` と ``present`` を分けるのは合成時間と提示時間を別々に測るため。
+    ``recompose`` は新しい映像を読まずにオーバーレイだけ描き直す。
+    """
 
     def attach(self, parent_hwnd: int, size: tuple[int, int]) -> None: ...
 
@@ -135,3 +145,42 @@ class PreviewRenderer(Protocol):
     def release(self) -> None: ...
 
     def client_size(self) -> tuple[int, int]: ...
+
+
+#: 旧名。既存の import（``GuiAssets`` / 各面 / テスト）を壊さないための別名で、
+#: 契約は 1 つしかない。新規コードは ``VideoRenderer`` を使う。
+PreviewRenderer = VideoRenderer
+
+
+@dataclass(frozen=True, slots=True)
+class NativeFrameHandle:
+    """GPU 側に既にある 1 枚を指す識別子。**未実装の拡張点**。
+
+    ``kind`` は取り出し元の API 名（``"d3d11_texture"`` / ``"dmabuf"`` /
+    ``"nv12_surface"`` など）、``handle`` はその API のハンドル値。
+    初期実装では使わない。キャプチャ側が GPU 上にフレームを持てるように
+    なったとき、CPU への読み戻しを省く経路（zero-copy）を足すための形だけを
+    先に決めておく。``compose`` は ndarray しか受け取らないので、既存の
+    バックエンドは何も変えずにこの型を無視できる。
+    """
+
+    kind: str
+    handle: int
+    width: int
+    height: int
+    pixel_format: str = "bgra"
+
+
+@runtime_checkable
+class NativeFrameTarget(Protocol):
+    """GPU ハンドルを直接受け取れる面。``VideoRenderer`` の任意の拡張。
+
+    ``compose_native`` を持たない面（GDI / PhotoImage）は、キャプチャ側が
+    native ハンドルを出しても ``isinstance(面, NativeFrameTarget)`` が偽に
+    なるので、呼び出し側は従来どおり ``compose`` へ ndarray を渡せばよい。
+    初期実装の面はまだこれを実装しない（CPU → GPU 転送で足りている）。
+    """
+
+    def compose_native(
+        self, handle: NativeFrameHandle, overlay: OverlayState
+    ) -> RenderResult: ...

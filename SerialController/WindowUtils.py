@@ -32,7 +32,8 @@ FPS_VALUES = [60, 45, 30, 15, 5]
 BAUD_RATE_VALUES = [9600, 4800, 19200, 38400, 57600, 115200]
 # プレビューの固定サイズ。実体は core.display_mode が正（表は複製せず変換だけ）。
 SHOW_SIZE_VALUES = list(SHOW_SIZES)
-RENDERER_VALUES = ["auto", "gdi", "photo"]
+# sdl: GPU（Windows は D3D11 / Linux は OpenGL、SDL2 経由）。auto はこれを第一候補にする。
+RENDERER_VALUES = ["auto", "sdl", "gdi", "photo"]
 COM_PORT_NOT_FOUND = "(ポートが見つかりません)"
 
 

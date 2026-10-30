@@ -1088,12 +1088,15 @@ def test_the_shown_statistic_counts_successful_presents_not_attempted_ones() -> 
 
 def test_attach_surfaces_the_surface_self_test_outcome() -> None:
     # Given: the real __init__ source. A real tk.Frame cannot be constructed
-    # without a display and __init__ is the only place attach() is called, so
-    # this contract is read from the parsed file -- the module's stated
-    # alternative to a live instance.
+    # without a display, so this contract is read from the parsed file -- the
+    # module's stated alternative to a live instance. attach() now lives in
+    # ``_attach_preview_surface`` (it has a fallback path when the chosen
+    # surface cannot be connected), and __init__ reaches it through one call.
     init = class_method(_capture_area_node(), "__init__")
     calls = call_attr_names(init)
-    attach_line = _call_line_of(init, "attach")
+    attach_method = class_method(_capture_area_node(), "_attach_preview_surface")
+    attach_line = _call_line_of(attach_method, "attach")
+    attach_call_line = _call_line_of(init, "_attach_preview_surface")
     selftest_line = _call_line_of(init, "_schedule_selftest")
 
     # Then: (c1) attach reads the self test, and reads it after the attach that
@@ -1106,11 +1109,15 @@ def test_attach_surfaces_the_surface_self_test_outcome() -> None:
         f"run whose child window is covered or clipped says nothing. __init__ "
         f"calls {sorted(calls)}."
     )
-    assert attach_line is not None and selftest_line > attach_line, (
+    assert attach_line is not None, (
+        "(c1) UNMET: _attach_preview_surface never calls attach(), so no surface "
+        "is connected and the self test can never run."
+    )
+    assert attach_call_line is not None and selftest_line > attach_call_line, (
         "(c1) UNMET: _schedule_selftest() is called at line "
-        f"{selftest_line} but attach() is at line {attach_line}. attach creates "
-        "the child HWND and runs the self test, so scheduling it earlier only "
-        "ever sees the 'not_run' default."
+        f"{selftest_line} but the surface is attached at line {attach_call_line}. "
+        "attach creates the child HWND and runs the self test, so scheduling it "
+        "earlier only ever sees the 'not_run' default."
     )
 
     # Then: (c2) and the outcome is neither logged nor kept, which makes the

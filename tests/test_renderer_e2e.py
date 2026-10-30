@@ -103,8 +103,11 @@ EVIDENCE_DIR_ENV: Final[str] = "POKECON_RENDERER_EVIDENCE_DIR"
 #: The budget for the whole real-Tk exercise: construct, settle, run, control.
 WATCHDOG_ENV: Final[str] = "POKECON_RENDERER_WATCHDOG_TIMEOUT_S"
 
-#: The two ``PreviewRenderer`` implementations a ``CaptureArea`` can be built
-#: with on a Windows box, and the two names ``WindowUtils.RENDERER_VALUES`` uses.
+#: The two CPU-side ``VideoRenderer`` implementations on a Windows box, and the
+#: names ``WindowUtils.RENDERER_VALUES`` uses. The GPU surface (``sdl``) is not
+#: in this matrix: it is covered by ``test_sdl_surface_contract.py`` (draw calls,
+#: uploads, overlay geometry) and by a real-screen smoke run, and its guard
+#: probes below are written against GDI's and PhotoImage's ``resize`` bodies.
 RENDERERS: Final[tuple[str, ...]] = ("gdi", "photo")
 
 #: The class each renderer name must actually produce. Asserted rather than

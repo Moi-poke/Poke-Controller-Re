@@ -1,6 +1,9 @@
 # GDI Preview Renderer 窶・1280x720 蝗ｺ螳壼・蜉帛燕謠舌・譛蟆乗ｧ区・
 
-Status: design for review, not yet implemented.
+Status: 実装済み（`core/gdi_surface.py`）。既定の描画面は
+[`2026-10-30-gpu-preview-renderer-design.md`](2026-10-30-gpu-preview-renderer-design.md)
+の GPU 面へ移り、この文書の GDI 面は 2 段目のフォールバック（`renderer = gdi`）と
+して残っている。ここに書かれた CPU 側の計測・制約はそのまま有効。
 Supersedes the `StretchDIBits` + Tk-Canvas-overlay shape of the 60 Hz plan.
 
 ## 0. Why the previous shape was abandoned
