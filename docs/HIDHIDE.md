@@ -15,7 +15,36 @@ HID を見せる。
 - Windows 10/11 64-bit。管理者権限が必要。
 - インストール後、必要なら再起動する。
 
-## 設定
+## GUI から設定する
+
+アプリ内で完結させる場合は、`ツール > HidHide 設定...` を開く
+（コントローラタブのパッド行にある「HidHide セットアップ」からも開ける）。
+管理者権限は要らない。HidHideCLI.exe は設定変更に elevation を要求しない。
+
+- 行のチェックで「HidHide / アプリの許可 / Pro Controller / cloak」を確認する。
+- `セットアップ` で、この Python の許可・接続中の Switch コントローラ
+  の hide・cloak ON を一度に書き込み、そのまま「ゲームパッドで操作」を
+  有効にする（アプリの再起動・挿し直しは不要）。
+- cloak の行の `ONにする / OFFにする` は hide リストを保ったまま入/切する。
+- `解除` は cloak OFF・このアプリの許可解除・Switch コントローラの
+  hide 解除をまとめて行う（他のアプリの hide は触らない）。
+- HidHide の設定アプリ（Configuration Client）を開いていると CLI が
+  ドライバを掴めず失敗する。閉じてから操作する。
+- コントローラの hide は接続中のインスタンスにしか登録できない。
+  未接続なら接続してから `再検出` → `セットアップ` をやり直す。
+- 状態の「hide済み」は、接続中のコントローラの instance path が
+  hide リストにあるかで判定する（別の USB ポートで使った古い entry
+  だけが残っていても「済み」にしない）。
+- HidHideCLI の `--dev-gaming` が途中で切れる環境（日本語のデバイス名で
+  実測）では、OS のデバイス一覧から HID 子の instance path を補って
+  hide する。
+- HidHideCLI は引数エラーを stderr に出して終了コード 0 で止まることが
+  あるため、stderr があれば失敗として表示する（黙って一部だけ適用しない）。
+- CLI の変更は正常終了時に書き込まれる。通常はそのまま HID を開けるが、
+  反映されない環境ではコントローラの挿し直し（またはデバイスの
+  無効→有効）を行う。
+
+## 手動で設定する（CLI）
 
 1. `HidHideCLI.exe --dev-gaming` で対象の `deviceInstancePath` と
    `baseContainerDeviceInstancePath` を調べる。
@@ -45,10 +74,10 @@ GUI の HidHide Configuration Client でも同じ設定ができる。
 - HidHide が **ready**（cloak-on / アプリ許可 / Switch HID を hide）の
   ときだけ、HID 直結のパッド・ジャイロを使う。
 - 未導入・未設定なら、Switch HID のパッド/ジャイロは無効になり、
-  コントローラタブに案内を出す。通常の読み取り経路は HID 直結だけで、
-  SDL はデバッグ用（`POKECON_SDL_DEBUG`）のため、「ゲームパッドで操作」
-  のチェックも無効にする。判定は起動時の1回だけなので、設定後は
-  アプリを再起動する。
+  パッド行に「HidHide セットアップ」を出す。通常の読み取り経路は
+  HID 直結だけで、SDL はデバッグ用（`POKECON_SDL_DEBUG`）のため、
+  「ゲームパッドで操作」のチェックも無効にする。セットアップを
+  適用すると、その場で判定をやり直してチェックを有効にする。
 - 通常は HID 有線のみ。SDL をデバッグ用に解禁するときだけ、起動前に
   `POKECON_SDL_DEBUG=1` を設定する。
 

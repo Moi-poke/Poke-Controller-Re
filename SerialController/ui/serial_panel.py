@@ -406,37 +406,15 @@ class SerialPanelMixin:
             self.tab_serial.config(width=size[0], height=size[1])
 
     def _build_control_frame(self) -> None:
-        self.control_lf = ttk.Labelframe(self.tab_controller)
+        self.control_lf = ttk.Labelframe(
+            self.tab_controller, text="コントローラ", padding=(8, 2)
+        )
+        self.control_lf.columnconfigure(0, weight=1)
+        self.control_lf.columnconfigure(1, weight=1)
 
-        # HidHideが未設定なら、Switch HIDのパッド/ジャイロだけを無効にする。
-        # ゲームパッド操作のチェックも無効にする（下の
-        # _apply_hidhide_gamepad_gate）。通常の読み取り経路は HID 直結だけで、
-        # SDL は POKECON_SDL_DEBUG のときしか使わない。押せてしまうと
-        # 「有効にしたのに動かない」だけになるため、入口ごと閉じる。
-        # 判定は起動時の1回だけ。後から HidHide を設定しても、この画面では
-        # 追わない（再起動で反映する）。
-        self.hidhide_notice: Any = None
-        try:
-            from core.hidhide import detect_hidhide
-
-            status = detect_hidhide()
-            if not status.ready:
-                self.hidhide_notice = ttk.Label(
-                    self.control_lf,
-                    text=(
-                        "HidHideが未設定のため、Switch HIDコントローラ/ジャイロと"
-                        "ゲームパッド操作は使えません（設定後に再起動してください）。"
-                        f"（{status.summary()}）READMEのHidHide手順を確認してください。"
-                    ),
-                    wraplength=520,
-                    foreground="#9a5b00",
-                    justify="left",
-                )
-                self.hidhide_notice.grid(
-                    row=10, column=0, columnspan=2, padx=10, pady=(4, 2), sticky="w"
-                )
-        except Exception:
-            pass
+        # HidHide が未設定なら、ゲームパッド操作のチェックを無効にし、
+        # パッド行の右端に「HidHide セットアップ」を出す。長い案内文は
+        # 置かず、無効な入口の隣に必要な操作を並べる。
 
         self.is_use_keyboard = tk.BooleanVar()
         self.cb_use_keyboard = ttk.Checkbutton(self.control_lf)
@@ -445,7 +423,7 @@ class SerialPanelMixin:
             variable=self.is_use_keyboard,
             command=self._on_keyboard_toggled,
         )
-        self.cb_use_keyboard.grid(column=0, row=0, padx="10", pady="5", sticky="ew")
+        self.cb_use_keyboard.grid(column=0, row=0, padx=6, pady=2, sticky="ew")
         Tooltip(self.cb_use_keyboard, "キーボードのキーを Switch のボタンとして送る")
 
         self.is_use_gamepad = tk.BooleanVar()
@@ -455,7 +433,7 @@ class SerialPanelMixin:
             variable=self.is_use_gamepad,
             command=self._on_gamepad_toggled,
         )
-        self.cb_use_gamepad.grid(column=1, row=0, padx="10", pady="5", sticky="ew")
+        self.cb_use_gamepad.grid(column=1, row=0, padx=6, pady=2, sticky="ew")
         Tooltip(self.cb_use_gamepad, "接続したゲームパッドの入力を Switch へ送る")
         # 状態はここで1回だけ調べ、結果を保持する。設定の流し込み
         # （_apply_settings_to_widgets）は後から is_use_gamepad を
@@ -476,63 +454,72 @@ class SerialPanelMixin:
             variable=self.camera_lf.is_use_right_stick_mouse,
             command=self._on_right_stick_toggled,
         )
-        self.cb_left_stick_mouse.grid(column=0, row=1, padx="10", pady="5", sticky="ew")
-        self.cb_right_stick_mouse.grid(
-            column=1, row=1, padx="10", pady="5", sticky="ew"
-        )
+        self.cb_left_stick_mouse.grid(column=0, row=1, padx=6, pady=2, sticky="ew")
+        self.cb_right_stick_mouse.grid(column=1, row=1, padx=6, pady=2, sticky="ew")
         Tooltip(self.cb_left_stick_mouse, "マウスを動かして左スティックを操作する")
         Tooltip(self.cb_right_stick_mouse, "マウスを動かして右スティックを操作する")
-        # ゲームパッドの選択行。繋がっているパッドを名前で選ぶ。
-        # 番号決め打ちでは、複数台・差し替え時に別の物を掴む。
-        self.gamepad_label = ttk.Label(self.control_lf, text="パッド: ")
-        self.gamepad_label.grid(column=0, row=2, padx="10", pady="2", sticky="w")
+        # パッドの選択と遊びを 1 行にまとめる。HidHide が未設定なら
+        # この行の右端にセットアップを出す（無効なチェックの理由が隣にある）。
         self.gamepad_row = ttk.Frame(self.control_lf)
-        self.gamepad_row.grid(column=1, row=2, padx="10", pady="2", sticky="ew")
+        self.gamepad_row.grid(
+            column=0, row=2, columnspan=2, padx=6, pady=2, sticky="ew"
+        )
+        self.gamepad_row.columnconfigure(1, weight=1)
+        self.gamepad_label = ttk.Label(self.gamepad_row, text="パッド")
+        self.gamepad_label.grid(row=0, column=0, sticky="w")
         self.gamepad_choice = tk.StringVar(value="")
         self.gamepad_cb = ttk.Combobox(
-            self.gamepad_row, textvariable=self.gamepad_choice, width=28
+            self.gamepad_row, textvariable=self.gamepad_choice, width=24
         )
-        self.gamepad_cb.pack(side="left", fill="x", expand=True)
+        self.gamepad_cb.grid(row=0, column=1, padx=(6, 0), sticky="ew")
         self.gamepad_cb.bind("<<ComboboxSelected>>", self._on_gamepad_selected, add="")
         # 手動の再接続。ホットプラグの自動巡回（2秒）で拾えない
         # 中途半端な状態から、SDL/HID のキャッシュを捨てて戻す。
         self.gamepad_reconnect_btn = ttk.Button(
             self.gamepad_row,
             text="再接続",
-            width=8,
+            width=6,
             command=self._on_gamepad_reconnect,
         )
-        self.gamepad_reconnect_btn.pack(side="left", padx=(6, 0))
+        self.gamepad_reconnect_btn.grid(row=0, column=2, padx=(6, 0))
         Tooltip(
             self.gamepad_reconnect_btn,
             "ゲームパッドを探し直す（自動で拾えないとき）",
         )
         # 遊び（デッドゾーン）。既定1638=最大値の5%。drift 時に上げる。
-        self.gamepad_dz_label = ttk.Label(self.control_lf, text="遊び: ")
-        self.gamepad_dz_label.grid(column=0, row=3, padx="10", pady="2", sticky="w")
+        self.gamepad_dz_label = ttk.Label(self.gamepad_row, text="遊び")
+        self.gamepad_dz_label.grid(row=0, column=3, padx=(14, 0), sticky="e")
         self.gamepad_dz = tk.StringVar(value="1638")
         self.gamepad_dz_spin = ttk.Spinbox(
-            self.control_lf,
+            self.gamepad_row,
             textvariable=self.gamepad_dz,
             from_=0,
             to=8192,
             increment=100,
-            width=8,
+            width=7,
         )
-        self.gamepad_dz_spin.grid(column=1, row=3, padx="10", pady="2", sticky="w")
+        self.gamepad_dz_spin.grid(row=0, column=4, padx=(6, 0))
         Tooltip(
             self.gamepad_dz_spin,
             "スティックの小さな傾きを無視する範囲。勝手に動くときに上げる",
         )
         self.gamepad_dz_spin.bind("<FocusOut>", self._on_gamepad_dz_changed, add="")
         self.gamepad_dz_spin.bind("<Return>", self._on_gamepad_dz_changed, add="")
+        # HidHide が未設定のときだけ、パッド行の右端に出す。
+        self.hidhide_setup_btn = ttk.Button(
+            self.gamepad_row,
+            text="HidHide セットアップ",
+            command=self._open_hidhide_setup,
+        )
+        self.hidhide_setup_btn.grid(row=0, column=5, padx=(10, 0))
+        self.hidhide_setup_btn.grid_remove()
         # ゲームパッドの状態行。読取中の名前・経路・生軸値を出す。
         self.gamepad_status = tk.StringVar(value="")
         self.gamepad_status_label = ttk.Label(
             self.control_lf, textvariable=self.gamepad_status
         )
         self.gamepad_status_label.grid(
-            column=0, columnspan=2, row=4, padx="10", pady=(0, 5), sticky="ew"
+            column=0, columnspan=2, row=3, padx=6, pady=(0, 4), sticky="ew"
         )
 
         self.control_lf.config(text="コントローラ")
@@ -594,12 +581,12 @@ class SerialPanelMixin:
         self.simpleConButton = self.controller_dock.pop_button
 
     def _gamepad_enabled_by_hidhide(self) -> bool:
-        """「ゲームパッドで操作」を選べる状態か（起動時の判定）。
+        """「ゲームパッドで操作」を選べる状態か。
 
         HidHide が未設定なら HID 直結パッドは開けない。通常の読み取り
         経路は HID 直結だけで、SDL は POKECON_SDL_DEBUG のときしか使わない
-        ため、チェックを押せても操作はできない。判定は起動時に1回だけ
-        行い、HidHide の状態が後から変わっても再起動までは追わない。
+        ため、チェックを押せても操作はできない。起動時に1回判定し、
+        HidHide 設定の直後（`_after_hidhide_setup`）にやり直す。
         """
         try:
             from core.hidhide import hidhide_ready
@@ -611,15 +598,16 @@ class SerialPanelMixin:
     def _apply_hidhide_gamepad_gate(self) -> None:
         """HidHide 未設定ならゲームパッド操作のチェックを無効にする。
 
-        `_build_control_frame`（組み立て時）と `_apply_settings_to_widgets`
-        （設定の流し込み時）の両方から呼ぶ。後者が設定値を書き戻すため、
-        片方だけでは True が復活してしまう。判定結果は
-        `_hidhide_gamepad_ok` に固定し、ここでは再検出しない。
+        `_build_control_frame`（組み立て時）、`_apply_settings_to_widgets`
+        （設定の流し込み時）、HidHide 設定後（`_after_hidhide_setup`）から
+        呼ぶ。判定結果は `_hidhide_gamepad_ok` に固定し、ここでは再検出
+        しない。未設定のときはパッド行の右端にセットアップを出す。
         """
-        if getattr(self, "_hidhide_gamepad_ok", False):
-            self.cb_use_gamepad.config(state="normal")
+        ok = bool(getattr(self, "_hidhide_gamepad_ok", False))
+        self.cb_use_gamepad.config(state="normal" if ok else "disabled")
+        self._sync_hidhide_setup_button()
+        if ok:
             return
-        self.cb_use_gamepad.config(state="disabled")
         if not self.is_use_gamepad.get():
             return
         # 設定に True が残っていても開始しない。既に動いている場合
@@ -629,6 +617,52 @@ class SerialPanelMixin:
             self.serial.set_gamepad_enabled(False)
         except Exception as e:
             logger.warning(f"ゲームパッド操作を止められませんでした: {e}")
+
+    def _sync_hidhide_setup_button(self) -> None:
+        """HidHide セットアップの入口を、未設定のときだけ出す。"""
+        button = getattr(self, "hidhide_setup_btn", None)
+        if button is None:
+            return
+        try:
+            if getattr(self, "_hidhide_gamepad_ok", False):
+                button.grid_remove()
+            else:
+                button.grid()
+        except tk.TclError:
+            pass
+
+    def _after_hidhide_setup(self) -> bool:
+        """HidHide 設定の直後に、起動時の判定をやり直して使い始める。
+
+        設定が揃っていれば「ゲームパッドで操作」を自動で入れる。
+        コントローラを挿し直さずに HID を開けることを実機で確認済み。
+        """
+        self._hidhide_gamepad_ok = self._gamepad_enabled_by_hidhide()
+        self._apply_hidhide_gamepad_gate()
+        if not self._hidhide_gamepad_ok:
+            return False
+        if self.is_use_gamepad.get():
+            return True
+        try:
+            ready = self.serial.connection_snapshot().phase == "ready"
+        except Exception:
+            ready = False
+        if not ready:
+            return False
+        self.is_use_gamepad.set(True)
+        self.activateGamepad()
+        enabled = bool(self.is_use_gamepad.get())
+        self._on_setting_changed()
+        return enabled
+
+    def _open_hidhide_setup(self) -> None:
+        """HidHide 設定の窓を開く（窓の単一管理は ui.hidhide_setup）。"""
+        try:
+            from ui.hidhide_setup import open_hidhide_setup
+
+            open_hidhide_setup(self.root, on_applied=self._after_hidhide_setup)
+        except Exception as e:
+            logger.warning(f"HidHide設定を開けませんでした: {e}")
 
     def _read_imu_settings(self) -> dict[str, str]:
         """IMU節を読む。無ければ空辞書（呼出側が既定で補う）。"""

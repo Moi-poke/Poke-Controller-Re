@@ -214,6 +214,7 @@ class PokeController_Menubar(tk.Menu):
             label="Discord通知の設定...", command=self.open_discord_notify_setting
         )
         m.add_command(label="Pokemon HOME 連携...", command=self.OpenPokeHomeCoop)
+        m.add_command(label="HidHide 設定...", command=self.OpenHidHideSetup)
 
         m = self.menu_help
         m.add_command(label="ショートカット一覧", command=self.ShowShortcuts)
@@ -418,6 +419,12 @@ class PokeController_Menubar(tk.Menu):
             blockly_editor.stop_blockly_editor()
         except Exception:
             pass
+        try:
+            from ui import hidhide_setup
+
+            hidhide_setup.close_hidhide_setup()
+        except Exception:
+            pass
         for name in (
             "key_config",
             "poke_treeview",
@@ -571,6 +578,15 @@ class PokeController_Menubar(tk.Menu):
             python_version=platform.python_version(),
             profile=str(getattr(app, "profile", "")),
             transport=transport,
+        )
+
+    def OpenHidHideSetup(self) -> None:
+        """HidHide の状態確認・設定変更の窓を開く。実体は ui.hidhide_setup。"""
+        logger.debug("Open HidHide setup window")
+        from ui import hidhide_setup
+
+        hidhide_setup.open_hidhide_setup(
+            self.root, on_applied=getattr(self.app, "_after_hidhide_setup", None)
         )
 
     def exit(self) -> None:

@@ -38,6 +38,7 @@ class HidHideStatus:
     cloak_on: bool = False
     app_whitelisted: bool = False
     hidden_nintendo: bool = False
+    hidden_devices: tuple[str, ...] = ()
     error: str = ""
 
     @property
@@ -80,20 +81,25 @@ def _norm(path: str) -> str:
 
 
 def executable_candidates() -> tuple[str, ...]:
-    """HidHide の許可リストと照合する実行ファイル候補。
+    """HidHide の許可リストへ登録する実行ファイル候補。
 
     venv の python.exe は uv の base python と同一実体（ハードリンク）
     のことがあり、HidHide は実体で照合する。sys.executable だけでなく
     sys._base_executable も見る。
+
+    返す表記は元のまま（ドライブ文字の大小を変えない）。HidHideCLI の
+    ``--app-reg`` は「ボリューム名の大文字小文字」を厳密に見るため、
+    照合用に normcase したパスをそのまま渡すと登録に失敗する。
+    比較は parse_cli_output 側で _norm して行う。
     """
-    values: list[str] = []
+    values: dict[str, str] = {}
     for value in (
         getattr(sys, "executable", ""),
         getattr(sys, "_base_executable", ""),
     ):
         if value:
-            values.append(_norm(value))
-    return tuple(dict.fromkeys(values))
+            values.setdefault(_norm(value), _expand(value))
+    return tuple(values.values())
 
 
 def parse_cli_output(
@@ -107,6 +113,7 @@ def parse_cli_output(
     """CLI の読み取り出力（--cloak-state --dev-list --app-list）を解析する。"""
     cloak_on = False
     hidden_nintendo = False
+    hidden_devices: list[str] = []
     app_paths: set[str] = set()
     for raw in output.splitlines():
         line = raw.strip()
@@ -119,6 +126,8 @@ def parse_cli_output(
                 app_paths.add(_norm(value))
         elif low.startswith("--dev-hide "):
             value = line[len("--dev-hide ") :].strip().strip('"')
+            if value:
+                hidden_devices.append(value)
             # Switch Pro / 互換機の HID、または USB 親。
             if "vid_057e" in value.lower() or "vid_2009" in value.lower():
                 hidden_nintendo = True
@@ -130,6 +139,7 @@ def parse_cli_output(
         cloak_on=cloak_on,
         app_whitelisted=app_whitelisted,
         hidden_nintendo=hidden_nintendo,
+        hidden_devices=tuple(dict.fromkeys(hidden_devices)),
         error=error,
     )
 

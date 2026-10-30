@@ -2,7 +2,8 @@
 
 通常の読み取り経路は HID 直結だけで、SDL はデバッグ用の環境変数が
 あるときしか使わない。HidHide が未設定ならチェック自体を無効にし、
-「押せるのに動かない」状態を見せない。判定は起動時の1回だけ。
+「押せるのに動かない」状態を見せない。HidHide 設定の直後は判定を
+やり直し、使えるようになったらそのまま操作を始める。
 """
 
 from __future__ import annotations
@@ -10,6 +11,8 @@ from __future__ import annotations
 import tkinter as tk
 import tkinter.ttk as ttk
 from collections.abc import Iterator
+from types import SimpleNamespace
+from typing import Any
 
 import pytest
 from core.hidhide import HidHideStatus
@@ -21,9 +24,16 @@ class _Serial:
 
     def __init__(self) -> None:
         self.events: list[bool] = []
+        self.phase = "ready"
 
     def set_gamepad_enabled(self, enabled: bool) -> None:
         self.events.append(enabled)
+
+    def connection_snapshot(self) -> Any:
+        return SimpleNamespace(phase=self.phase)
+
+    def stop_gamepad(self) -> None:
+        pass
 
 
 class _Panel(SerialPanelMixin):
@@ -35,6 +45,13 @@ class _Panel(SerialPanelMixin):
             root, text="ゲームパッドで操作", variable=self.is_use_gamepad
         )
         self.serial = _Serial()
+        self.started = 0
+
+    def activateGamepad(self) -> None:
+        self.started += 1
+
+    def _on_setting_changed(self) -> None:
+        pass
 
 
 @pytest.fixture(autouse=True)
@@ -138,3 +155,32 @@ def test_not_ready_closes_the_gate_again_after_settings_restore(
     assert panel.is_use_gamepad.get() is False
     assert panel.cb_use_gamepad.instate(["disabled"])
     assert panel.serial.events == [False]
+
+
+def test_after_setup_enables_the_gamepad_once_hidhide_is_ready(
+    tk_root: tk.Tk, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ワンクリック設定の直後、再起動なしでパッド操作を始める。"""
+    _install_status(monkeypatch, ready=True)
+    panel = _Panel(tk_root, enabled=False)
+
+    assert panel._after_hidhide_setup() is True
+
+    assert panel._hidhide_gamepad_ok is True
+    assert panel.is_use_gamepad.get() is True
+    assert panel.started == 1
+    assert not panel.cb_use_gamepad.instate(["disabled"])
+
+
+def test_after_setup_does_not_enable_without_a_serial_connection(
+    tk_root: tk.Tk, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _install_status(monkeypatch, ready=True)
+    panel = _Panel(tk_root, enabled=False)
+    panel.serial.phase = "closed"
+
+    assert panel._after_hidhide_setup() is False
+
+    assert panel._hidhide_gamepad_ok is True
+    assert panel.is_use_gamepad.get() is False
+    assert panel.started == 0
