@@ -1,6 +1,9 @@
 # GDI Preview Renderer 窶・1280x720 蝗ｺ螳壼・蜉帛燕謠舌・譛蟆乗ｧ区・
 
-Status: design for review, not yet implemented.
+Status: implemented. Dispatch の記述は
+[`2026-10-30-frame-driven-preview-pump-design.md`](2026-10-30-frame-driven-preview-pump-design.md)
+が改訂した（描画は Tk スレッドではなく描画スレッドが行う）。面の構成・GDI の
+描き方・HALFTONE・32bpp はこの文書のまま。
 Supersedes the `StretchDIBits` + Tk-Canvas-overlay shape of the 60 Hz plan.
 
 ## 0. Why the previous shape was abandoned
