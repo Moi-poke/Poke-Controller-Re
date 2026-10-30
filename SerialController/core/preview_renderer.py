@@ -120,7 +120,14 @@ class OverlayState:
 
 @runtime_checkable
 class PreviewRenderer(Protocol):
-    """合成と提示を分けるのは、合成時間と blit 時間を別々に測るため。"""
+    """合成と提示を分けるのは、合成時間と blit 時間を別々に測るため。
+
+    ``cross_thread_render`` が True の面は、Tk 以外のスレッドから
+    compose/present を呼んでよい（Windows の GDI 子窓）。False の面は
+    Tk のウィジェットを触るので、描画は Tk スレッドだけで行う。
+    """
+
+    cross_thread_render: bool
 
     def attach(self, parent_hwnd: int, size: tuple[int, int]) -> None: ...
 

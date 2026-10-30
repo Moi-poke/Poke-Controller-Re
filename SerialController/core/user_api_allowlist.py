@@ -47,11 +47,9 @@ THIRD_PARTY = frozenset(
         "requests",
         "yaml",
         "loguru",
-        "icecream",
         "deprecated",
         "pynput",
         "serial",
-        "pygubu",
         "matplotlib",
         # 利用者スクリプトの実績（listen_shiny.py が使用）
         "pyaudio",

@@ -1283,6 +1283,10 @@ def test_preview_renderer_protocol_is_runtime_checkable_over_its_method_set() ->
     protocol = _renderer_module().PreviewRenderer
 
     class Conforming:
+        # 描画を Tk 以外のスレッドから呼んでよいか。既定（属性なし）は
+        # False として扱うが、プロトコルは実装に明示を求める。
+        cross_thread_render = True
+
         def attach(self, parent_hwnd: int, size: tuple[int, int]) -> None:
             return None
 
@@ -1327,6 +1331,10 @@ def test_preview_renderer_protocol_is_runtime_checkable_over_its_method_set() ->
     )
     assert isinstance(Conforming(), protocol) is True
     assert isinstance(Incomplete(), protocol) is False
+    # Then: the capability flag is part of the contract. CaptureArea starts the
+    # frame-driven render thread only for a renderer that allows it (GDI), and
+    # keeps drawing on the Tk thread for the others (photo).
+    assert "cross_thread_render" in protocol.__annotations__
 
 
 def test_preview_renderer_module_imports_no_tkinter_and_no_app_layer() -> None:

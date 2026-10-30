@@ -299,16 +299,60 @@ class LatestFrame:
     公開状態は FrameSnapshot 1個で持ち、差し替えのたびに作り直す。
     get / get_with_seq / get_with_timing が同じ 1 個を参照するので、
     読み取り口彼此が食い違うことがない。
+
+    公開のたびに購読者（``subscribe``）を呼ぶ。プレビューの描画スレッドは
+    これで「新しい1枚が来た瞬間」に起きる。時刻で刻むのではなく公開で
+    刻むことで、60fps の取込と 60fps の表示の位相がずれても空振り・
+    取りこぼしが出ない（core/preview_pump.py）。
     """
 
     def __init__(self) -> None:
-        self._lock = threading.Lock()
+        # Condition は put の差し替えと購読者の起床を同じ錠で扱う。
+        # ``wait_for_change`` はこの錠の上で待つ。
+        self._cond = threading.Condition()
         self._snapshot: FrameSnapshot = FrameSnapshot(None, 0, 0, 0)
+        self._listeners: list[Any] = []
 
     @property
     def seq(self) -> int:
         """現在の世代番号。put / clear で単調に増える。"""
-        with self._lock:
+        with self._cond:
+            return self._snapshot.seq
+
+    def subscribe(self, callback: Any) -> None:
+        """公開のたびに呼ぶ関数を登録する（描画スレッドの起床用）。
+
+        呼び出しは錠の外で行う。購読者が自分の錠を取るので、ここで
+        持ったまま呼ぶとロック順が絡む。二重登録はしない。
+        """
+        with self._cond:
+            if callback not in self._listeners:
+                self._listeners.append(callback)
+
+    def unsubscribe(self, callback: Any) -> None:
+        with self._cond:
+            try:
+                self._listeners.remove(callback)
+            except ValueError:
+                return
+
+    def _notify_listeners(self) -> None:
+        # 錠の外から呼ぶ前提。登録中の一覧を複製してから回す。
+        with self._cond:
+            listeners = tuple(self._listeners)
+        for callback in listeners:
+            try:
+                callback()
+            except Exception as exc:
+                logger.debug(f"LatestFrame の購読者で例外: {exc}")
+
+    def wait_for_change(self, after_seq: int, timeout: float) -> int:
+        """``after_seq`` と違う世代になるか timeout まで待ち、現在の seq を返す。"""
+        with self._cond:
+            self._cond.wait_for(
+                lambda: self._snapshot.seq != after_seq,
+                timeout if timeout > 0 else None,
+            )
             return self._snapshot.seq
 
     def put(self, frame: np.ndarray | None, t_capture_ns: int) -> None:
@@ -321,7 +365,7 @@ class LatestFrame:
         """
         if frame is None:
             return
-        with self._lock:
+        with self._cond:
             # 参照の差し替えだけ。既に公開済みの配列へ書き込まない。
             self._snapshot = FrameSnapshot(
                 frame,
@@ -329,15 +373,19 @@ class LatestFrame:
                 t_capture_ns,
                 time.perf_counter_ns(),
             )
+            # wait_for_change で待っている描画スレッドを起こす。購読者
+            # （LatestFrame.subscribe）とは別経路で、こちらはこの錠の上。
+            self._cond.notify_all()
+        self._notify_listeners()
 
     def get(self) -> np.ndarray | None:
         """最新フレームを返す。まだ1枚も来ていなければ None。"""
-        with self._lock:
+        with self._cond:
             return self._snapshot.frame
 
     def get_with_seq(self) -> tuple[np.ndarray | None, int]:
         """最新フレームと世代番号を原子的に返す。cache の鍵用。"""
-        with self._lock:
+        with self._cond:
             snapshot = self._snapshot
             return snapshot.frame, snapshot.seq
 
@@ -347,7 +395,7 @@ class LatestFrame:
         1 回の lock 取得で全部を読むので、フレームだけ新しい／スタンプ
         だけ古いという取り違えが起きない。
         """
-        with self._lock:
+        with self._cond:
             return self._snapshot
 
     def clear(self) -> None:
@@ -356,8 +404,10 @@ class LatestFrame:
         スタンプは 0 のままにする。0 は「時刻の記録が無い」の印で、
         ここで測ると clear 後の 0 を実測値と区別できなくなる。
         """
-        with self._lock:
+        with self._cond:
             self._snapshot = FrameSnapshot(None, self._snapshot.seq + 1, 0, 0)
+            self._cond.notify_all()
+        self._notify_listeners()
 
 
 # 旧名との互換（外部から CustomQueue を import している箇所があるため）
@@ -706,6 +756,22 @@ class Camera:
     def frame_seq(self) -> int:
         """現在の世代番号。LatestFrame.seq の読み替え。"""
         return int(self.frame_queue.seq)
+
+    def wait_for_frame(self, after_seq: int, timeout: float) -> int:
+        """``after_seq`` と違う世代が公開されるまで待つ（描画スレッド用）。
+
+        新しい1枚の公開で起きる。時刻で刻む描画だと取込と表示の位相が
+        ずれたぶんだけ空振り・飛ばしになるが、公開で起きればその差が
+        無い（core/preview_pump.py）。戻り値は待った後の世代番号。
+        """
+        return int(self.frame_queue.wait_for_change(after_seq, timeout))
+
+    def subscribe_frames(self, callback: Any) -> None:
+        """フレーム公開の購読。描画スレッドの起床に使う。"""
+        self.frame_queue.subscribe(callback)
+
+    def unsubscribe_frames(self, callback: Any) -> None:
+        self.frame_queue.unsubscribe(callback)
 
     def saveCapture(
         self,

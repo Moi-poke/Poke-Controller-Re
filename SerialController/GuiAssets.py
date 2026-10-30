@@ -14,6 +14,7 @@ from __future__ import annotations
 import datetime
 import math
 import os
+import sys
 import time
 import tkinter as tk
 import traceback
@@ -34,6 +35,7 @@ from core.Camera import CAPTURE_SIZE
 from core.coordinates import CoordinateMapper, fit_rect
 from core.gdi_surface import GdiSurface
 from core.preview_phase import PhaseLock
+from core.preview_pump import PreviewPump
 from core.preview_renderer import (
     TK_COLORREF,
     BadgeState,
@@ -63,6 +65,16 @@ DISABLED_IMAGE_PATH = os.path.normpath(
 STICK_LOG_INTERVAL = 0.05  # スティック値を記録・送信する最小間隔(秒)
 STICK_SEND_INTERVAL = 0.05  # スティック値をシリアルへ送る最小間隔(秒)
 STICK_SEND_MAG_STEP = 0.25  # これ以上倒し量が変われば間隔を無視して送る
+
+# 描画スレッド（core/preview_pump.py）が GIL を取り直すまでの上限。
+# 既定の 5ms だと、1 フレームで GIL を離すのは cv2.cvtColor と np.copyto の
+# 2 回だけで、そのたびに最大 5ms 待つ。別スレッドが Python を回している間は
+# 60fps を割る（実測 2026-10-30、1280x720・メインスレッドに 200ms ごと
+# 40ms の仕事: 5ms で 59.2fps、2ms で 60.0fps。CPU を常時使うスレッドが
+# 居る場合は 1ms で 60.1fps、2ms で 49.7fps）。描画中だけ 1ms へ下げ、
+# 止めたら元へ戻す。切り替え自体は数 µs で、スレッドが 1 本しか走って
+# いない間は切り替えが起きないので、他の処理への影響は小さい。
+_PUMP_SWITCH_INTERVAL_S: Final[float] = 0.001
 # Motion イベントの処理上限。ゲーミングマウス等で毎秒1000件超の Motion が
 # 来ると、1件ごとの送信・再描画で GUI スレッドが飽和し「応答なし」になる。
 # live 送出が 8ms 周期のため、それより細かく処理しても届く値は変わらない。
@@ -399,6 +411,13 @@ class CaptureArea(tk.Frame):
         self._configured_fps = _validated_preview_fps(fps)
         self.next_frames = 1000.0 / self._configured_fps
         self._preview_clock: preview_clock.PreviewClock | None = None
+        # GdiSurface のときだけ作る（__init__ の終わり。面の attach 後）。
+        # photo 面は Tk のウィジェットへ描くので、描画は Tk スレッドのまま。
+        self._pump: PreviewPump | None = None
+        # 描画中だけ下げた sys.setswitchinterval の元の値（None は未変更）。
+        self._saved_switch_interval: float | None = None
+        # 直前に描画スレッドへ知らせたオーバーレイ。同一なら起こさない。
+        self._last_published_overlay: OverlayState | None = None
         # 取込と表示の位相が重なって取りこぼすのを防ぐ（core/preview_phase.py）
         self._phase_lock = PhaseLock(round(1e9 / self._configured_fps))
         self._realign_after_id: str | None = None
@@ -473,6 +492,18 @@ class CaptureArea(tk.Frame):
         # 無いと最初の geo 指定以降がそのままになる。
         self._surface: PreviewRenderer = _create_preview_surface(self, renderer)
         self._surface.attach(int(self.winfo_id()), self.show_size)
+        # 描画を Tk のメインループから切り離す。GDI 面（Windows）は子窓へ
+        # 直接描くので描画スレッドを使ってよい。photo 面は Tk のウィジェット
+        # を触るので None のまま＝従来どおり clock がメインスレッドで描く。
+        if getattr(self._surface, "cross_thread_render", False):
+            self._pump = PreviewPump(
+                self.camera,
+                # 属性を毎回引く（束縛済みメソッドを渡すと、あとから
+                # _drawFrame を差し替える計測・検査が効かなくなる）。
+                lambda: self._readLatest(),
+                lambda frame, seq: self._drawFrame(frame, seq),
+                self._configured_fps,
+            )
         from ui.photo_surface import SelfTestResult
 
         # 「まだやっていない」。``None`` は既に「self_test を持たない面」の
@@ -648,6 +679,10 @@ class CaptureArea(tk.Frame):
         # ここを落とさないとリサイズ後だけ配置が古いまま止まる。
         self._last_frame_seq = None
         self._last_disabled_seq = None
+        pump = getattr(self, "_pump", None)
+        if pump is not None:
+            # 新しい配置で 1 枚描き直させる（カメラが止まっていても効く）。
+            pump.notify()
         self._refreshSelftestMirror()
 
     def startCapture(self) -> None:
@@ -659,6 +694,21 @@ class CaptureArea(tk.Frame):
         phase_lock = getattr(self, "_phase_lock", None)
         if phase_lock is not None:
             phase_lock.reset()
+        pump = getattr(self, "_pump", None)
+        if pump is not None:
+            self._lower_switch_interval()
+            pump.set_fps(self._configured_fps)
+            pump.set_active(True)
+            self._last_published_overlay = self.overlay
+            if not pump.start():
+                # 起動できなかったら従来の経路（clock がメインスレッドで描く）
+                # へ戻す。pump を残すと _dispatch_tick が「描かない」側へ
+                # 分かれたまま、絵が一度も出なくなる。
+                self._pump = None
+                logger.warning(
+                    "プレビュー描画スレッドを開始できませんでした"
+                    "（clock の描画経路で続けます）"
+                )
         self._preview_clock = preview_clock.PreviewClock(
             self.winfo_toplevel(),
             self._dispatch_tick,
@@ -668,7 +718,12 @@ class CaptureArea(tk.Frame):
         self._preview_clock.start()
 
     def stopCapture(self) -> preview_clock.StopResult:
-        """描画ループを止め、clock の停止結果を返す。"""
+        """描画ループを止め、clock の停止結果を返す。
+
+        描画スレッドが join できないときは PENDING を返す。呼び出し側
+        （Window の終了階段）は STOPPED のときだけ映像面を解放するので、
+        まだ動いているスレッドの下で GDI 資源を壊さない。
+        """
         self._capturing = False
         self._preview_stop_requested = True
         for name in ("_rect_after_id", "_select_after_id", "_realign_after_id"):
@@ -679,21 +734,58 @@ class CaptureArea(tk.Frame):
                     self.after_cancel(after_id)
                 except (tk.TclError, ValueError):
                     continue
+        pump = getattr(self, "_pump", None)
+        pump_stopped = True
+        if pump is not None:
+            pump_stopped = pump.stop()
+            self._restore_switch_interval()
+            if not pump_stopped:
+                logger.error("プレビュー描画スレッドが停止しません")
         if self._preview_clock is None:
-            return preview_clock.StopResult.STOPPED
+            return (
+                preview_clock.StopResult.STOPPED
+                if pump_stopped
+                else preview_clock.StopResult.PENDING
+            )
         result = self._preview_clock.stop()
         if result is preview_clock.StopResult.STOPPED:
             self._preview_clock = None
+        if not pump_stopped:
+            return preview_clock.StopResult.PENDING
         return result
+
+    def _lower_switch_interval(self) -> None:
+        """描画中だけ GIL の切り替え間隔を詰める（理由は定数の注記）。"""
+        if self._saved_switch_interval is not None:
+            return
+        self._saved_switch_interval = sys.getswitchinterval()
+        sys.setswitchinterval(_PUMP_SWITCH_INTERVAL_S)
+
+    def _restore_switch_interval(self) -> None:
+        saved = self._saved_switch_interval
+        if saved is None:
+            return
+        self._saved_switch_interval = None
+        sys.setswitchinterval(saved)
 
     def capture(self) -> None:
         """旧入口から1 tick だけ同期実行する。"""
         self._dispatch_tick()
 
     def _dispatch_tick(self) -> preview_clock.DispatchResult:
-        """1フレームを同期処理し、次回の予約は行わない。"""
+        """1 tick 分を処理し、次回の予約は行わない。
+
+        描画スレッドがある（GDI 面）ときは、ここでは描かない。表示の有無を
+        反映し、オーバーレイが変わったときだけ描画スレッドを起こす。実際の
+        compose + present はフレーム公開で別スレッドが行うので、Tk が
+        数十 ms 止まっても映像の fps は落ちない（core/preview_pump.py）。
+        photo 面（描画スレッドなし）では従来どおりここで描く。
+        """
         if not self._capturing or self._preview_stop_requested:
             return preview_clock.DispatchResult(schedule="idle")
+        pump = getattr(self, "_pump", None)
+        if pump is not None:
+            return self._publish_preview_state(pump)
         started = time.perf_counter()
         showing = True
         try:
@@ -727,6 +819,28 @@ class CaptureArea(tk.Frame):
             return preview_clock.DispatchResult(
                 schedule="active" if showing else "idle"
             )
+
+    def _publish_preview_state(self, pump: PreviewPump) -> preview_clock.DispatchResult:
+        """描画スレッドがあるときの 1 tick。描画そのものは行わない。
+
+        ここで読む Tk は ``is_show_var`` だけ。オーバーレイは不変値の
+        組み立てで、各成分は差し替えでしか変わらないので、同一なら
+        描画スレッドを起こさない（毎 tick 起こすと 60fps で無駄な起床が
+        増える）。値が変わった次の起床で、フレームが来ていなくても
+        recompose が走る。
+        """
+        showing = True
+        try:
+            showing = bool(self.is_show_var.get())
+            pump.set_active(showing)
+            if showing:
+                overlay = self.overlay
+                if overlay != self._last_published_overlay:
+                    self._last_published_overlay = overlay
+                    pump.notify()
+        except Exception as exc:
+            logger.error(f"capture failed: {exc}")
+        return preview_clock.DispatchResult(schedule="active" if showing else "idle")
 
     def _trackPhase(self, seq: int) -> None:
         """この tick の観測を位相合わせへ渡し、要れば据え直しを予約する。
@@ -866,9 +980,11 @@ class CaptureArea(tk.Frame):
         self,
     ) -> dict[str, int | str | bool | dict[str, int | str | bool]]:
         clock = self._preview_clock
+        pump = getattr(self, "_pump", None)
         return {
             **self._camera_observation,
             "clock_health": dict(clock.health_snapshot()) if clock is not None else {},
+            "pump_health": dict(pump.health_snapshot()) if pump is not None else {},
         }
 
     def _drawFrame(self, frame: Any, seq: int | None = None) -> bool:
@@ -1026,7 +1142,14 @@ class CaptureArea(tk.Frame):
 
         戻り値は {"fps": 実際に描いた枚数/秒}。Camera.getStats と
         並べると「機器が遅いか描画が遅いか」が分かる。
+
+        描画スレッドがあるときは、そのカウンタを読む。ここで Tk 側の
+        ``_stat_shown`` を読むと常に 0 になる（描画は Tk スレッドでは
+        起きない）。
         """
+        pump = getattr(self, "_pump", None)
+        if pump is not None:
+            return pump.take_stats()
         now = time.perf_counter()
         shown, began_at = self._stat_shown, self._stat_began_at
         draw_ms, draw_max_ms = self._stat_draw_ms, self._stat_draw_max_ms
@@ -1056,6 +1179,9 @@ class CaptureArea(tk.Frame):
             phase_lock.set_period(round(1e9 / fps_value))
         if self._preview_clock is not None:
             self._preview_clock.set_fps(fps_value)
+        pump = getattr(self, "_pump", None)
+        if pump is not None:
+            pump.set_fps(fps_value)
         logger.info(f"FPS set to {fps_value} (interval {self.next_frames:.1f} ms)")
 
     def setShowsize(self, show_height: int, show_width: int) -> None:
@@ -1073,6 +1199,9 @@ class CaptureArea(tk.Frame):
         self.config(width=self.show_width, height=self.show_height)
         self._viewport = (self.show_width, self.show_height)
         self._surface.resize(self._viewport)
+        pump = getattr(self, "_pump", None)
+        if pump is not None:
+            pump.notify()
         self._refreshSelftestMirror()
         logger.info(f"Show size set to {self.show_width} x {self.show_height}")
 
