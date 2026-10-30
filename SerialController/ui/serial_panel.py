@@ -1506,6 +1506,11 @@ class SerialPanelMixin:
         except Exception as e:
             logger.warning(f"ゲームパッド表示の描画で例外: {e}")
 
+    #: 状態行（名前・経路・生の軸値）を書き換える最小間隔。
+    #: 入力は 60Hz で来るが、人が読める速さは数 Hz。毎フレーム書き換えると
+    #: ラベルの再配置まで走り、描画スレッドの時間を削る。
+    GAMEPAD_STATUS_INTERVAL_S = 0.1
+
     def _setGamepadStatus(self, data: dict[str, Any]) -> None:
         """状態行に名前・経路・生軸値を出す（Tk スレッド専用）。"""
         try:
@@ -1513,14 +1518,25 @@ class SerialPanelMixin:
             if status is None:
                 return
             if not data.get("connected"):
-                status.set("ゲームパッド: 未接続")
+                if getattr(self, "_gamepad_status_text", None) != "none":
+                    self._gamepad_status_text = "none"
+                    status.set("ゲームパッド: 未接続")
                 return
+            now = time.monotonic()
+            last = getattr(self, "_gamepad_status_at", 0.0)
+            if now - last < self.GAMEPAD_STATUS_INTERVAL_S:
+                return
+            self._gamepad_status_at = now
             name = str(data.get("pad_name", "") or "?")
             route = str(data.get("route", "") or "?")
             raw = tuple(data.get("raw_axes", ()) or ())
             raw_text = " ".join(f"{float(v):+.2f}" for v in raw[:6])
             buttons = ",".join(data.get("buttons", ()))
-            status.set(f"{name} [{route}] 軸:{raw_text} {buttons}")
+            text = f"{name} [{route}] 軸:{raw_text} {buttons}"
+            if getattr(self, "_gamepad_status_text", None) == text:
+                return
+            self._gamepad_status_text = text
+            status.set(text)
         except Exception:
             pass
 
