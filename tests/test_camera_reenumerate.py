@@ -1,4 +1,4 @@
-"""カメラ一覧の再列挙と個体識別の契約（clr は差し替え、実機なし）。
+"""カメラ一覧の再列挙と個体識別の契約（デバイス列挙は差し替え、実機なし）。
 
 一覧は起動時に1回しか作られず、カメラタブの「再読み込み」は
 ``openCamera()`` だけを呼んでいた。後から挿したカメラが出ないため、
@@ -9,13 +9,12 @@
 
 from __future__ import annotations
 
-import sys
-import types
 from typing import Any
 
 import pytest
 import ui.camera_panel as camera_panel
 from WindowUtils import deviceKey
+from core.dshow_devices import VideoInputDevice
 from ui.camera_panel import CameraPanelMixin
 
 
@@ -25,16 +24,8 @@ class _Device:
         self.DevicePath = path
 
 
-class _DsDevice:
+class _DeviceList:
     devices: list[_Device] = []
-
-    @classmethod
-    def GetDevicesOfCat(cls, _category: Any) -> list[_Device]:
-        return list(cls.devices)
-
-
-class _FilterCategory:
-    VideoInputDevice = 0
 
 
 class _Var:
@@ -91,16 +82,16 @@ class _Panel(CameraPanelMixin):
 
 
 def _install_windows(monkeypatch: pytest.MonkeyPatch, devices: list[_Device]) -> None:
-    fake_clr = types.ModuleType("clr")
-    fake_clr.AddReference = lambda _path: None  # type: ignore[attr-defined]
-    fake_directshow = types.ModuleType("DirectShowLib")
-    fake_directshow.DsDevice = _DsDevice  # type: ignore[attr-defined]
-    fake_directshow.FilterCategory = _FilterCategory  # type: ignore[attr-defined]
-    monkeypatch.setitem(sys.modules, "clr", fake_clr)
-    monkeypatch.setitem(sys.modules, "DirectShowLib", fake_directshow)
-    # 実環境の PYTHONNET_RUNTIME を書き換えない（ヘルパー自体は別テスト）。
-    monkeypatch.setattr(camera_panel, "_use_coreclr_for_pythonnet", lambda: None)
-    _DsDevice.devices = list(devices)
+    """Windows の列挙をテスト用デバイスへ差し替える（COM は呼ばない）。"""
+    _DeviceList.devices = list(devices)
+    monkeypatch.setattr(
+        camera_panel,
+        "list_video_input_devices",
+        lambda: [
+            VideoInputDevice(name=d.Name, device_path=d.DevicePath)
+            for d in _DeviceList.devices
+        ],
+    )
 
 
 def test_reenumeration_follows_the_saved_device_when_order_changes(
@@ -113,7 +104,7 @@ def test_reenumeration_follows_the_saved_device_when_order_changes(
     assert panel.camera_id.get() == 0
 
     # 新しいボードが先頭に入り、保存した個体は 1 番へずれた。
-    _DsDevice.devices = [
+    _DeviceList.devices = [
         _Device("Capture", "usb\\path-b"),
         _Device("Capture", path_a),
     ]
@@ -264,7 +255,7 @@ def test_reload_button_reenumerates_the_device_list_then_opens(
     panel.locateCameraCmbbox()
 
     # 後から挿したボードが先頭へ入り、保存した個体は 1 番へずれる。
-    _DsDevice.devices = [
+    _DeviceList.devices = [
         _Device("New", "usb\\path-b"),
         _Device("Capture", path_a),
     ]

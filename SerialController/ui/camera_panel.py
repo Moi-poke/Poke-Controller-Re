@@ -11,7 +11,6 @@ from __future__ import annotations
 import base64
 import os
 import re
-import shutil
 import subprocess
 import threading
 import tkinter as tk
@@ -28,6 +27,7 @@ from core.display_mode import (
     SHOW_SIZES,
     layout_plan,
 )
+from core.dshow_devices import list_video_input_devices
 from loguru import logger
 from ui.combo_fit import fit_combo_width
 from ui.tooltip import Tooltip
@@ -66,23 +66,6 @@ def _load_icon(master: Any, path: str) -> tk.PhotoImage:
 def _camera_title(label: str) -> str:
     """状態表示に出すカメラ名。末尾の識別子（' [fbad85]'）は省く。"""
     return re.sub(r"\s*\[[^\]]*\]$", "", label).strip()
-
-
-def _use_coreclr_for_pythonnet() -> None:
-    """pythonnet を coreclr で初期化させる（Windows で dotnet がある場合のみ）。
-
-    DirectShowLib の読み込みは ``import clr`` で pythonnet を起動する。
-    既定の .NET Framework ローダーでは
-    「Failed to resolve Python.Runtime.Loader.Initialize」で失敗する環境が
-    あり、``PYTHONNET_RUNTIME=coreclr`` で通ることを実機で確認した。
-    明示設定は尊重する（setdefault）。dotnet が無い環境では Framework
-    しか使えないため触らない。
-    """
-    if os.name != "nt" or "PYTHONNET_RUNTIME" in os.environ:
-        return
-    if shutil.which("dotnet") is None:
-        return
-    os.environ.setdefault("PYTHONNET_RUNTIME", "coreclr")
 
 
 class CameraPanelMixin:
@@ -665,29 +648,11 @@ class CameraPanelMixin:
         devices: list[tuple[str, str]] = []  # (名前, 識別子)
 
         if self.os_name == "Windows":
-            # pythonnet のローダー選択は import clr より前に決める。
-            _use_coreclr_for_pythonnet()
-            import clr
-
-            # カレントディレクトリ基準の相対指定だと、起動場所が違うだけで
-            # 見つけられない。このファイルの場所から解決する。
-            dll_path = os.path.normpath(
-                os.path.join(
-                    WindowUtils.APP_DIR, "..", "DirectShowLib", "DirectShowLib-2005"
-                )
-            )
-            clr.AddReference(dll_path)
-            # clr で読み込む .NET アセンブリであり、スタブには見えない。
-            from DirectShowLib import (  # type: ignore[attr-defined]
-                DsDevice,
-                FilterCategory,
-            )
-
-            captureDevices = DsDevice.GetDevicesOfCat(FilterCategory.VideoInputDevice)
-            for device in captureDevices:
+            # COM を直接叩く（core.dshow_devices）。pythonnet と同梱 DLL は
+            # 置き場所や .NET のローダー次第で読み込みに失敗していた。
+            for cam in list_video_input_devices():
                 # DevicePath は USB のポートごとに異なる。差し直さない限り不変
-                path = getattr(device, "DevicePath", "") or ""
-                devices.append((device.Name, WindowUtils.deviceKey(path)))
+                devices.append((cam.name, WindowUtils.deviceKey(cam.device_path)))
 
         elif self.os_name == "Darwin":
             cmd = (
