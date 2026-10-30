@@ -431,7 +431,7 @@ def complete_missing(parser: configparser.ConfigParser) -> list[str]:
     # 描画方式。WindowUtils.RENDERER_VALUES と同じ中身の複製になる。
     # このファイルは tkinter を引き込めないため表を>importできず、
     # 候補を増やすときは両方を直す（ずれは既定へ戻す tolerant 補正）。
-    valid_renderers = ("auto", "gdi", "photo")
+    valid_renderers = ("auto", "sdl", "gdi", "photo")
     if general.get("renderer", "") not in valid_renderers:
         general["renderer"] = "auto"
         changed.append("General Setting.renderer")

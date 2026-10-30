@@ -183,9 +183,10 @@ class DisplaySettingsDialog(tk.Toplevel):
         self.renderer_cb.grid(
             column=1, padx="5", pady=(8, 0), row=renderer_row, sticky="w"
         )
-        ttk.Label(body, text="（再起動後に反映）").grid(
-            column=2, padx=(8, 0), pady=(8, 0), row=renderer_row, sticky="w"
-        )
+        ttk.Label(
+            body,
+            text="（auto=GPU優先, sdl=GPU, gdi=CPU, photo=汎用 / 再起動後に反映）",
+        ).grid(column=2, padx=(8, 0), pady=(8, 0), row=renderer_row, sticky="w")
 
         buttons = ttk.Frame(self, padding=(10, 0, 10, 10))
         buttons.grid(column=0, row=1, sticky="e")

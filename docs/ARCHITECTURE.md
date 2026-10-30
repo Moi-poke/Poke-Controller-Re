@@ -50,6 +50,28 @@ GUI 層（[`Window.py`](../SerialController/Window.py)・[`GuiAssets.py`](../Ser
 import しない。逆向きの依存は [`tools/check_core.py`](../tools/check_core.py)（`task bounds`）で
 禁止している。
 
+## プレビュー（映像）の描画
+
+取得と描画は別の契約で、間に「最新1枚」しか無い（キューを持たないので遅延が
+積み上がらない）。
+
+```
+CameraBackend (core/camera_backend.py)      … core.Camera / core.CameraQueue
+        │  readFrameWithSeq()（seq は上書きごとに進む）
+        ▼
+VideoRenderer (core/preview_renderer.py)    … アプリが知る唯一の描画面
+        ├─ core/sdl_surface.py    GPU（SDL_Renderer: Windows=D3D11 / Linux=OpenGL）
+        ├─ core/gdi_surface.py    Windows の CPU 描画（BitBlt）
+        └─ ui/photo_surface.py    Canvas + PhotoImage（最終手段）
+```
+
+`settings.ini` の `renderer`（`auto`/`sdl`/`gdi`/`photo`）で選ぶ。`auto` は
+SDL を第一候補にし、組み立てられない・接続できない場合は GDI → PhotoImage へ
+1 段ずつ落ちる（起動は止めない）。映像経路に PIL / `ImageTk` / DIB は入らない
+（PIL はバッジの文字を焼くときだけ、文字が変わった瞬間に 1 回）。GPU 面は
+映像の解像度にテクスチャを追従させるので 1080p のカメラでもそのまま通る。
+設計・実測・zero-copy の拡張点: [`superpowers/specs/2026-10-30-gpu-preview-renderer-design.md`](superpowers/specs/2026-10-30-gpu-preview-renderer-design.md)。
+
 ## core/ への移し方
 
 - 同名ファイルで [`core/`](../SerialController/core) へ移動し、旧位置には再公開シムだけ残す

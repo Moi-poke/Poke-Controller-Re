@@ -90,7 +90,8 @@ def test_renderer_default_and_sanitize() -> None:
     import WindowUtils
 
     assert config.default_sections()["General Setting"]["renderer"] == "auto"
-    assert WindowUtils.RENDERER_VALUES == ["auto", "gdi", "photo"]
+    # GPU 面（sdl）が既定の第一候補として表に入る。順序は選択の優先順でもある。
+    assert WindowUtils.RENDERER_VALUES == ["auto", "sdl", "gdi", "photo"]
     parser = make_parser()
     config.complete_missing(parser)
     general = parser["General Setting"]
@@ -101,6 +102,10 @@ def test_renderer_default_and_sanitize() -> None:
     assert general["renderer"] == "auto"
     assert "General Setting.renderer" in changed
     assert config.complete_missing(parser) == []
+    # 明示された sdl は補正で書き換えない（候補にあるので保存される）。
+    general["renderer"] = "sdl"
+    assert config.complete_missing(parser) == []
+    assert general["renderer"] == "sdl"
     del general["renderer"]
     changed = config.complete_missing(parser)
     assert general["renderer"] == "auto"
