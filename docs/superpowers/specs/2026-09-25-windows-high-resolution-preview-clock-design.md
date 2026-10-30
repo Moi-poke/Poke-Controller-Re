@@ -5,6 +5,12 @@
 対象: `Poke-Controller-Modified` ホストアプリ  
 範囲: プレビューの描画クロックと、その production 性能 contract
 
+> 改訂（2026-10-30）: 描画の実行主体は
+> [`2026-10-30-frame-driven-preview-pump-design.md`](2026-10-30-frame-driven-preview-pump-design.md)
+> で描画スレッドへ移った。この clock は状態（表示の有無・オーバーレイ）の配信と、
+> Tk のウィジェットへ描く photo 面の描画に使う。GDI 面の compose/present は
+> clock の tick では走らない。
+
 ## 1. 結論
 
 Windows では、高解像度 waitable timer を 1 個だけ持つ専用ワーカーを追加する。ワーカーは `QueryPerformanceCounter` と `QueryPerformanceFrequency` を基準に absolute deadline を計算し、`SetWaitableTimer` の単発待機を毎回やり直す。Tk main thread が所有する message only window が通知を受け、`CaptureArea` の描画を main thread 上で 1 回実行する。

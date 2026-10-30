@@ -78,7 +78,8 @@ TOOLTIPS: dict[str, str] = {
     "filt_setting_button": "色補正・色抽出の設定を開く",
     "captureButton": "今の画面を画像で保存する",
     "OpencaptureButton": "キャプチャの保存先を開く",
-    "reloadComPort": "ポート一覧を取り直して接続し直す",
+    "reloadComPort": "選択した COM ポートへ接続する／接続済みなら接続し直す",
+    "refreshComPort": "COM ポートの一覧だけを更新する",
     "disconnectComPort": "シリアルポートを閉じる",
     "cb_show_serial": "送信したデータをログに残す（確認用）",
     "simpleConButton": "仮想コントローラを別ウィンドウへ出す／タブに戻す",
@@ -173,6 +174,7 @@ class PokeControllerApp(
 
         self._start_camera()
         self._start_audio()
+        self._subscribe_connection_state()
         self._start_serial()
         self._build_preview()
         self._update_title()
@@ -559,14 +561,22 @@ class PokeControllerApp(
         if self.profile:
             parts.append(f"[{self.profile}]")
 
-        # UI 構築前に呼ばれても落ちないよう getattr で取る
+        snapshot = self.serial.connection_snapshot()
         port_var = getattr(self, "com_port_name", None)
-        device = port_var.get() if port_var is not None else ""
-        opened = self.serial.is_open()
-        if device:
-            parts.append(device if opened else f"{device}(未接続)")
-        else:
-            parts.append("未接続")
+        selected = port_var.get() if port_var is not None else ""
+        device = snapshot.port_name if snapshot.opened else selected
+        phases = {
+            "disconnected": "未接続",
+            "opening": "ポート接続中",
+            "hello": "HELLO 確認中",
+            "ready": "接続済み",
+            "failed": "HELLO 失敗" if snapshot.opened else "接続失敗",
+            "closing": "切断中",
+            "restarting": "再起動待ち",
+            "bootloader": "BOOTSEL モード",
+        }
+        state = phases[snapshot.phase]
+        parts.append(f"{device}({state})" if device else state)
 
         if self._running_command:
             name = self._running_command
@@ -624,6 +634,7 @@ class PokeControllerApp(
         # after の ID は登録したウィジェットに紐づくため、同じ所有者へ
         # after_cancel する。停止の見張りとランプ巡回もここで片付ける。
         self.runner.cancel_watch()
+        self._dispose_connection_subscription()
         try:
             self._cancel_player_lamp_patrol()
         except Exception as exc:
@@ -815,9 +826,13 @@ class PokeControllerApp(
         self.settings.pane_sashes.set(
             format_sash_ratios(self._pane_arranger.sash_ratios)
         )
-        self.settings.com_port.set(self.com_port.get())
-        self.settings.com_port_name.set(self.com_port_name.get())
-        self.settings.baud_rate.set(self._currentBaudRate())
+        # 列挙更新で選択が消えても、次回探す保存済みポートは消さない。
+        if self.com_port_name.get():
+            self.settings.com_port.set(self.com_port.get())
+            self.settings.com_port_name.set(self.com_port_name.get())
+        # BCON の index と既存のレガシー baud を混ぜない。
+        if not self.serial.uses_bcon(self.transport_name.get()):
+            self.settings.baud_rate.set(self._currentBaudRate())
         self.settings.camera_id.set(self._cameraIdOrNone() or 0)
         self.settings.camera_key.set(self.camera_key.get())
         # 音声は表示名（"番号: 名前"）ではなく番号で保存する。

@@ -195,10 +195,13 @@ class PokeController_Menubar(tk.Menu):
         )
 
         m = self.menu_connect
-        m.add_command(label="シリアルポートを再接続", command=call("reloadSerialPort"))
+        m.add_command(
+            label="シリアルポートへ接続 / 再接続", command=call("reloadSerialPort")
+        )
+        m.add_command(label="COM ポート一覧を更新", command=call("refreshComPorts"))
         m.add_command(label="シリアルポートを切断", command=call("inactivateSerial"))
         m.add_separator()
-        m.add_command(label="Bcon設定", command=self.OpenBconSetup)
+        m.add_command(label="BCON 設定", command=self.OpenBconSetup)
         m.add_command(label="シリアルモニタ...", command=self.OpenSerialMonitor)
         m.add_separator()
         m.add_command(label="カメラを再読み込み", command=call("openCamera"))
@@ -375,9 +378,11 @@ class PokeController_Menubar(tk.Menu):
         logger.debug("Select Bcon tab")
         if self.app.select_bcon_tab():
             return
-        print(
-            "Bcon設定は Transport を switch-bcon（または switch-bcon-proc）に"
-            "すると、シリアルの隣のタブに出ます。"
+        self.app.setting_nb.select(self.app.tab_serial)
+        self.app.transport_cb.focus_set()
+        messagebox.showinfo(
+            "BCON 設定",
+            "通信方式で switch-bcon または switch-bcon-proc を選択してください。",
         )
 
     def OpenSerialMonitor(self) -> None:

@@ -64,6 +64,8 @@ _ALLOWED_CALLS = frozenset(
         "request_bootsel",
         "request_reconnect",
         "hello_established",
+        "hold_input",
+        "current_baud",
         "send_imu",
     }
 )
@@ -336,10 +338,11 @@ def _worker_main(cmd_q: Any, evt_q: Any, cfg: dict) -> None:
                 _, call_id, port_num, port_name, baudrate = msg[:5]
                 try:
                     ok = bool(transport.open(port_num, port_name, baudrate))
-                except Exception:
+                    error = transport.last_open_error()
+                except Exception as exc:
                     traceback.print_exc()
-                    ok = False
-                _reply(call_id, True, ok)
+                    ok, error = False, str(exc)
+                _reply(call_id, True, {"opened": ok, "error": error})
             elif op == "stage":
                 _, row, measure = msg
                 try:
@@ -562,6 +565,7 @@ class BconProcTransport(Transport):
         self._hook_end: Any = None
         self._dispatch_thread: Any = None
         self._dispatch_stop = threading.Event()
+        self._open_error: str | None = None
         self._opened = False
         self._dead = False
         # 常時計測の素朴な数え（H1切り分け用・永置）。
@@ -679,6 +683,7 @@ class BconProcTransport(Transport):
                 _worker_main, {"use_len12": self._use_len12}
             )
         except Exception as e:
+            self._open_error = str(e)
             self._warn(f"proc送出子の起動に失敗しました: {e!r}")
             return False
         self._worker = handle
@@ -690,6 +695,7 @@ class BconProcTransport(Transport):
             if callable(start):
                 start()
         except Exception as e:
+            self._open_error = str(e)
             self._warn(f"proc送出子の開始に失敗しました: {e!r}")
             self._mark_dead()
             return False
@@ -872,19 +878,30 @@ class BconProcTransport(Transport):
         **extra: Any,
     ) -> bool:
         """子を起こして線を開く。成否を返す。"""
+        self._open_error = None
         try:
             num = int(portNum)
-        except (TypeError, ValueError):
-            num = 0
+        except (TypeError, ValueError, OverflowError):
+            self._open_error = f"ポート番号が不正です: {portNum!r}"
+            self._warn(self._open_error)
+            return False
         try:
             rate = int(baudrate)
-        except (TypeError, ValueError):
-            self._warn(f"bcon-procのbaud指定が不正です: {baudrate!r}")
+        except (TypeError, ValueError, OverflowError):
+            self._open_error = f"通信速度の指定が不正です: {baudrate!r}"
+            self._warn(self._open_error)
+            return False
+        if rate <= 0:
+            self._open_error = f"通信速度の指定が不正です: {rate}"
+            self._warn(self._open_error)
             return False
         name = portName.strip() if isinstance(portName, str) else ""
         _ = extra
         label = f"{name or num} {rate}bps"
         if not self._spawn_worker():
+            self._open_error = (
+                self._open_error or "BCON 子プロセスを起動できませんでした。"
+            )
             self._warn(f"bcon-procの子を起こせませんでした({label})")
             return False
         with self._pending_lock:
@@ -896,6 +913,7 @@ class BconProcTransport(Transport):
         try:
             self._cmd_q.put(("open", call_id, num, name, rate))
         except Exception as e:
+            self._open_error = str(e)
             with self._pending_lock:
                 self._pending.pop(call_id, None)
             self._mark_dead()
@@ -903,6 +921,7 @@ class BconProcTransport(Transport):
             return False
         limit = 10.0 + PROC_RPC_MARGIN_S
         if not event.wait(limit):
+            self._open_error = "BCON 子プロセスの open 応答がタイムアウトしました。"
             with self._pending_lock:
                 self._pending.pop(call_id, None)
             self._mark_dead()
@@ -911,7 +930,17 @@ class BconProcTransport(Transport):
                 "子の起動クラッシュの可能性（子stdoutはDEVNULL）"
             )
             return False
-        ok = bool(box.get("result", False))
+        result = box.get("result")
+        ok = (
+            bool(box.get("ok"))
+            and isinstance(result, dict)
+            and result.get("opened") is True
+        )
+        if isinstance(result, dict):
+            error = result.get("error")
+            self._open_error = str(error) if error is not None else None
+        else:
+            self._open_error = "BCON 子プロセスの open 応答が不正です。"
         self._opened = ok
         if ok:
             self._tx_last_note = None
@@ -919,6 +948,16 @@ class BconProcTransport(Transport):
             self._warn(f"bcon-procのopenが子で失敗しました({label}): {box!r}")
             self._terminate_worker()
         return ok
+
+    def last_open_error(self) -> str | None:
+        return self._open_error
+
+    def hold_input(self, hold: bool) -> bool:
+        return self._rpc_bool("hold_input", (bool(hold),), 3.0)
+
+    def current_baud(self) -> int | None:
+        ok, value = self._call("current_baud", (), timeout=3.0)
+        return int(value) if ok and isinstance(value, int) and value > 0 else None
 
     def close(self) -> None:
         """線を閉じて子を畳む。二重安全。例外は投げない。"""

@@ -4,7 +4,7 @@
 
 PokeControllerApp に混ぜて使う（多重継承）。Bcon設定の中身は BconSetup が
 持ち、ここでは「Transport が bcon 系のときだけ『シリアル』の隣へタブを出し、
-外れたら中身ごと片付ける」という Notebook 側の手順だけを受け持つ。
+外れたら隠して下書きを保持する」という Notebook 側の手順だけを受け持つ。
 
 出し入れの基準は選択中の通信方式（transport_name）であって、線が開いて
 いるかではない。bcon を選んだ時点で設定を見られるようにし、接続前に
@@ -20,7 +20,7 @@ from BconSetup import BconSetup
 from loguru import logger
 from services.serial_service import SerialService
 
-BCON_TAB_TEXT = "Bcon"
+BCON_TAB_TEXT = "BCON"
 
 
 class BconPanelMixin:
@@ -30,6 +30,7 @@ class BconPanelMixin:
     tab_serial: Any
     tab_bcon: Any
     serial: SerialService
+    runner: Any
     transport_name: Any
     _bcon_setup: BconSetup | None
 
@@ -39,7 +40,10 @@ class BconPanelMixin:
         self._bcon_setup = None
 
     def _bcon_tab_shown(self) -> bool:
-        return str(self.tab_bcon) in self.setting_nb.tabs()
+        return (
+            str(self.tab_bcon) in self.setting_nb.tabs()
+            and self.setting_nb.tab(self.tab_bcon, "state") != "hidden"
+        )
 
     def _refresh_bcon_tab(self) -> None:
         """選択中の通信方式に合わせてタブを出し入れする。何度呼んでもよい。
@@ -64,13 +68,15 @@ class BconPanelMixin:
         try:
             # 作る前に Notebook へ足す。未表示の枠へ組むと寸法が定まらない
             self.setting_nb.insert(position, self.tab_bcon, text=BCON_TAB_TEXT)
-            self._bcon_setup = BconSetup(
-                self.tab_bcon,
-                self.serial.sender,
-                embedded=True,
-                # 送り先はserialサービスが作り直しうる。握り込まず引き直す
-                sender_provider=lambda: self.serial.sender,
-            )
+            if self._bcon_setup is None:
+                self._bcon_setup = BconSetup(
+                    self.tab_bcon,
+                    self.serial,
+                    embedded=True,
+                    command_busy=lambda: self.runner.is_busy(),
+                )
+            else:
+                self._bcon_setup.set_visible(True)
         except Exception:
             logger.exception("Bconタブを作れませんでした")
             self._close_bcon_tab()
@@ -86,9 +92,15 @@ class BconPanelMixin:
                 pass
 
     def _hide_bcon_tab(self) -> None:
-        self._close_bcon_tab()
+        if self._bcon_setup is not None:
+            self._bcon_setup.set_visible(False)
         if self._bcon_tab_shown():
-            self.setting_nb.forget(self.tab_bcon)
+            self.setting_nb.hide(self.tab_bcon)
+
+    def _refresh_bcon_controls(self) -> None:
+        setup = getattr(self, "_bcon_setup", None)
+        if setup is not None:
+            setup._set_busy()
 
     def _close_bcon_tab(self) -> None:
         """中身を閉じる。購読・期限予約・poll を残さない。二重に呼んでよい。"""

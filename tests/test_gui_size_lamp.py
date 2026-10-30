@@ -94,7 +94,6 @@ def test_menubar_has_no_wake_setup() -> None:
     src = Path("SerialController/Menubar.py").read_text(encoding="utf-8")
     assert "Switch2 Wake設定" not in src
     assert "WakeSetup" not in src
-    assert "Bcon設定" in src
 
 
 def test_window_has_minimum_size() -> None:
@@ -170,51 +169,6 @@ def test_setting_tabs_separate_four_sections() -> None:
         ("SerialController/ui/command_panel.py", "tab_command"),
     ):
         assert frame in Path(path).read_text(encoding="utf-8")
-
-
-def test_serial_panel_has_lamp_and_bcon_rows() -> None:
-    """接続設定にLED省スペース表示とbcon切替行がある。"""
-    from ui.serial_panel import SerialPanelMixin
-
-    for name in (
-        "applyBconWired",
-        "applyBconEmulate",
-        "_bcon_transport",
-        "_bcon_only_widgets",
-        "_refresh_bcon_rows",
-        "_sync_bcon_display",
-        "_apply_bcon_wired_display",
-        "_poll_player_lamp",
-        "_on_bcon_rx_frame",
-        "_ensure_player_lamp_subscription",
-        "_cancel_player_lamp_patrol",
-    ):
-        assert hasattr(SerialPanelMixin, name), name
-    src = Path("SerialController/ui/serial_panel.py").read_text(encoding="utf-8")
-    assert "player_lamp_canvas" in src
-    # 巡回は購読写しだけ読む（TkからRPCしない）。巡回本体にgetter名は無い。
-    # 接続直後の裏仕事（_sync_bcon_display job）だけが保持の真値を写す。
-    assert "subscribe_rx" in src
-    assert "_player_info_cache" in src
-    poll = src[src.index("def _poll_player_lamp") : src.index("def _start_serial")]
-    assert "last_player_info" not in poll
-    assert "last_rumble" not in poll
-    assert "request_status" not in poll
-    job = src[
-        src.index("def _sync_bcon_display") : src.index("def _apply_bcon_wired_display")
-    ]
-    assert "last_player_info" in job
-    assert "set_emulate_mode" in src
-    assert "set_wired_mode" in src
-    assert "grid_remove" in src
-
-
-def test_bcon_only_widgets_hidden_without_bcon() -> None:
-    """bcon以外ではLED・切替を見せない。ログは幅で折り返す。"""
-    src = Path("SerialController/ui/serial_panel.py").read_text(encoding="utf-8")
-    assert "_bcon_only_widgets" in src
-    utils = Path("SerialController/WindowUtils.py").read_text(encoding="utf-8")
-    assert 'wrap="word"' in utils
 
 
 def test_audio_tab_has_no_diagnostic_record_or_latency_buttons() -> None:

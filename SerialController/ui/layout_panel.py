@@ -271,15 +271,13 @@ class LayoutPanelMixin:
         通るため）。UI 構築前に来ても落ちないよう、未作成の部品は getattr で
         避ける。
         """
-        # ポート名は _update_title と同じく、UI 構築前は無いことがある。
-        port_var = getattr(self, "com_port_name", None)
-        device = port_var.get() if port_var is not None else ""
+        connection = self.serial.connection_snapshot()
+        device = connection.port_name
         state = {
             "running_command": str(getattr(self, "_running_command", "")),
             "paused": bool(getattr(self, "_paused", False)),
             "stop_waited_ms": int(getattr(self.runner, "stop_waited", 0)),
-            "device": str(device),
-            "opened": bool(self.serial.is_open()),
+            "connection": connection,
         }
         profile = str(getattr(self, "profile", ""))
         # バッジは単独で見えるので [名前] を付ける。コンパクトバーは隣の
@@ -290,9 +288,8 @@ class LayoutPanelMixin:
         # 下端の 1 行。名前はウィンドウタイトルにあるので付けない。
         if getattr(self, "status_state", None) is not None:
             self.status_state.set(bar_view.text)
-            transport_var = getattr(self, "transport_name", None)
-            transport = str(transport_var.get()) if transport_var is not None else ""
-            if device and state["opened"]:
+            transport = connection.transport_name
+            if device and connection.opened:
                 suffix = f" ({transport})" if transport else ""
                 self.status_device.set(f"{device}{suffix}")
             else:

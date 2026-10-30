@@ -7,8 +7,11 @@ Tk を作らず、実行状態・接続状態・プロファイル名の合成�
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any
 
+import pytest
+from core.connection_state import ConnectionSnapshot
 from core.display_mode import PROFILE_COLORS, normalize_profile_color
 from core.status_view import BADGE_COLORS, hex_to_colorref, status_view
 
@@ -27,7 +30,68 @@ def _view(**overrides: Any) -> Any:
         "opened": True,
     }
     base.update(overrides)
+    device = base.pop("device")
+    opened = base.pop("opened")
+    base.setdefault(
+        "connection",
+        ConnectionSnapshot(
+            phase="ready" if opened else "disconnected",
+            port_name=device,
+            transport_name="switch-bcon",
+            opened=opened,
+        ),
+    )
     return status_view(**base)
+
+
+@pytest.mark.parametrize(
+    "phase",
+    [
+        "opening",
+        "hello",
+        "failed",
+        "closing",
+        "restarting",
+        "bootloader",
+    ],
+)
+def test_open_port_without_ready_never_shows_idle(phase: Any) -> None:
+    connection = ConnectionSnapshot(phase=phase, port_name="COM3", opened=True)
+    view = _view(connection=connection)
+    assert view.kind == phase
+    assert view.kind in BADGE_COLORS
+    assert _view(connection=connection, running_command=RUNNING_NAME).kind == "running"
+    assert (
+        _view(connection=connection, running_command=RUNNING_NAME, paused=True).kind
+        == "paused"
+    )
+    assert _view(connection=connection, stop_waited_ms=1000).kind == "stopping"
+
+
+def test_layout_projects_snapshot_without_querying_transport() -> None:
+    from ui.layout_panel import LayoutPanelMixin
+
+    class Value:
+        value = ""
+
+        def set(self, value: str) -> None:
+            self.value = value
+
+    connection = ConnectionSnapshot(
+        phase="hello",
+        port_name="confirmed-port",
+        transport_name="switch-bcon-proc",
+        opened=True,
+    )
+    host: Any = SimpleNamespace(
+        serial=SimpleNamespace(connection_snapshot=lambda: connection),
+        runner=SimpleNamespace(stop_waited=0),
+        status_state=Value(),
+        status_device=Value(),
+    )
+    LayoutPanelMixin._publish_status(host)
+    assert host.status_state.value == "HELLO 確認中"
+    assert host.status_device.value == "confirmed-port (switch-bcon-proc)"
 
 
 def test_a_stopped_and_connected_app_reads_as_idle() -> None:

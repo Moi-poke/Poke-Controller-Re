@@ -40,7 +40,6 @@ def main() -> int:
     ap.add_argument("--duration", type=float, default=4.0, help="STEP継続秒")
     ap.add_argument("--acc-z", type=int, default=4096, help="静止加速度Z")
     ap.add_argument("--secs", type=float, default=30.0, help="送信秒数")
-    ap.add_argument("--no-hello", action="store_true", help="HELLOを飛ばす")
     ap.add_argument("--record", default="", help="送出値を.pgyroへ記録する")
     ap.add_argument("--play", default="", help=".pgyroを再生する（波形指定より優先）")
     args = ap.parse_args()
@@ -109,11 +108,10 @@ def main() -> int:
         return 1
     made.start_rx_pump()
     try:
-        if not args.no_hello:
-            if not made.hello():
-                print("HELLO不通。送出だけ行う場合は --no-hello を付ける。")
-                return 1
-            print("HELLO通過。")
+        if not made.hello():
+            print("HELLOを確認できません。")
+            return 1
+        print("HELLO通過。")
         if not made.start_imu_loop(gen):
             print("IMU loopの起動に失敗。")
             return 1

@@ -8,8 +8,8 @@ BAUD_SET送出・adopt確認・自動復帰は transport層（BconTransport.set_
 use_len12 について（監査メモ 2026-09-23・UI N/A の理由）:
 - BconTransport.__init__(use_len12=False) は transport旗のみで、
   send_row系がLEN12/LEN8を切り替えるためのものである。
-- UI露出は無し（ui/serial_panel.pyは汎用baudのみ、BconSetup.pyにbaud行
-  なし、setterはtransport層set_baud_indexのみ、永続化なし）。
+- use_len12 の UI 露出は無し（baud はシリアルタブで選択・保存するが、
+  この旗の切替・永続化とは別である）。
 - 旗の再建を要するcheckboxは金メッキになるため置かない。ここに理由を
   残し、UI追加は行わない。
 """

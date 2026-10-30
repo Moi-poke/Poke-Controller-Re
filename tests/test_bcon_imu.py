@@ -59,6 +59,8 @@ def _open_transport():
 
     made = bcon_mod.BconTransport()
     made.ser = _FakeSerial()
+    # 送出形式の単体試験は HELLO 確立後を前提とする。
+    made._hello_established = True
     return made
 
 

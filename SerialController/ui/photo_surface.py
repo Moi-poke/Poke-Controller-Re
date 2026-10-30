@@ -117,6 +117,10 @@ class PhotoImageSurface:
     なので、毎フレーム PhotoImage を作り直す速度の我省略はしない。
     """
 
+    #: Tk のウィジェットを触るので描画は Tk スレッドだけで行う。Windows の
+    #: GdiSurface は子窓へ直接描くので True（描画スレッドを使える）。
+    cross_thread_render = False
+
     def __init__(self, host: Any) -> None:
         self._host = host
         self._canvas: Any = None

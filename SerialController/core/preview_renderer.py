@@ -132,6 +132,12 @@ class VideoRenderer(Protocol):
     ``recompose`` は新しい映像を読まずにオーバーレイだけ描き直す。
     """
 
+    #: True の面は Tk 以外のスレッドから compose/present を呼んでよい
+    #: （GDI 子窓）。False の面は Tk のウィジェットを触るか、窓を作った
+    #: スレッドに縛られる（photo / SDL）ので、描画は Tk スレッドだけで行う。
+    #: ``core/preview_pump.py`` はこの値を見て描画スレッドを立てるか決める。
+    cross_thread_render: bool
+
     def attach(self, parent_hwnd: int, size: tuple[int, int]) -> None: ...
 
     def resize(self, size: tuple[int, int]) -> None: ...

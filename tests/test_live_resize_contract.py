@@ -19,6 +19,7 @@ from collections.abc import Iterator
 from typing import Any
 
 import pytest
+from PIL import Image
 
 pytestmark = pytest.mark.skipif(os.name != "nt", reason="窓のメッセージは Windows だけ")
 
@@ -51,7 +52,16 @@ def _sizing(win: Any) -> None:
 
 
 @pytest.fixture
-def window(tk_root: tk.Tk) -> Iterator[tuple[tk.Toplevel, tk.Frame]]:
+def window(
+    tk_root: tk.Tk, monkeypatch: pytest.MonkeyPatch
+) -> Iterator[tuple[tk.Toplevel, tk.Frame]]:
+    from ui import screen_grab
+
+    monkeypatch.setattr(
+        screen_grab,
+        "grab",
+        lambda _x, _y, width, height: Image.new("RGB", (width, height), "#334"),
+    )
     win = tk.Toplevel(tk_root)
     try:
         win.geometry("600x400+100+100")
@@ -61,7 +71,17 @@ def window(tk_root: tk.Tk) -> Iterator[tuple[tk.Toplevel, tk.Frame]]:
         win.update()
         yield win, content
     finally:
-        win.destroy()
+        for target in (win, tk_root):
+            try:
+                if target.winfo_exists():
+                    _send(target, WM_EXITSIZEMOVE)
+            except tk.TclError:
+                pass
+        try:
+            if win.winfo_exists():
+                win.destroy()
+        except tk.TclError:
+            pass
 
 
 def _shown(freeze: Any, content: tk.Frame) -> tuple[int, int]:

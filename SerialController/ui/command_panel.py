@@ -692,6 +692,9 @@ class CommandPanelMixin:
         # 一覧の作り直しの合図が来ないため、ここで見直さないと停止が
         # 押せたまま残る。
         self.update_history_buttons()
+        refresh_connection = getattr(self, "_refresh_connection_controls", None)
+        if callable(refresh_connection):
+            refresh_connection()
         self._update_title()
 
     def _refresh_after_run(self) -> None:

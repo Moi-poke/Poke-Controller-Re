@@ -12,6 +12,8 @@ XInput の DLL やシリアルが無くても回せる。見るのは以下で�
 
 from __future__ import annotations
 
+import threading
+
 from Commands.Keys import Button
 from Gamepad import SOURCE, SwitchGamepadController, hat_value_for
 from core.xinput import PadState
@@ -53,6 +55,9 @@ class FakeSender:
 
     def isOpened(self) -> bool:
         return False
+
+    def closeSerial(self) -> None:
+        self.calls.append(("close",))
 
     def flushPending(self) -> None:
         self.calls.append(("flush",))
@@ -329,8 +334,19 @@ def test_service_gamepad_lifecycle() -> None:
     assert service.invalidate_gamepad() is False
     # 切断・終了でも止まる
     assert service.set_gamepad_enabled(True, 0) is None
-    service.disconnect()
-    assert service.gamepad is None
+    disconnected = threading.Event()
+    unsubscribe = service.subscribe_connection(
+        lambda snapshot: disconnected.set()
+        if snapshot.generation > 0 and snapshot.phase == "disconnected"
+        else None
+    )
+    try:
+        service.disconnect()
+        assert disconnected.wait(2.0)
+        assert service.gamepad is None
+    finally:
+        unsubscribe()
+        service.shutdown()
 
 
 def test_gamepad_is_human_source() -> None:

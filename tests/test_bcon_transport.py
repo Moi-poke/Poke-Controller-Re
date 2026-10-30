@@ -28,6 +28,8 @@ def test_bcon_send_row_builds_single_binary_frame():
             return len(data)
 
     made.ser = FakeSer()
+    # 送出形式の単体試験は HELLO 確立後を前提とする。
+    made._hello_established = True
     made.send_row("10 08")
     assert len(written) == 1
     assert written[0][0] == 0xAB
@@ -97,6 +99,8 @@ def test_bcon_get_raw_serial_is_none_and_wakelink_falls_back():
             return b""
 
     made.ser = FakeSer()
+    # 送出形式の単体試験は HELLO 確立後を前提とする。
+    made._hello_established = True
     # バイナリ口をテキスト直読みへ渡さない。WakeLinkは例外なく失敗扱い。
     assert made.get_raw_serial() is None
     assert WakeLink.send_line(made, "Q") is False
@@ -123,6 +127,8 @@ def test_bcon_set_hooks_fire_on_send_row():
             return len(data)
 
     made.ser = FakeSer()
+    # 送出形式の単体試験は HELLO 確立後を前提とする。
+    made._hello_established = True
     made.send_row("10 08")
     assert [kind for kind, _ in calls] == ["begin", "end"]
     assert all(row == "10 08" for _, row in calls)
@@ -171,6 +177,8 @@ def test_bcon_use_len12_sends_len12_frame_while_default_stays_len8():
                 return len(data)
 
         made.ser = FakeSer()
+        # 送出形式の単体試験は HELLO 確立後を前提とする。
+        made._hello_established = True
         made.send_row(row)
         assert len(written) == 1
         return written[0]
@@ -197,3 +205,50 @@ def test_bcon_use_len12_sends_len12_frame_while_default_stays_len8():
     assert frame12[3:15] == bytes(
         [0x00, 0x00, 0x00, 0x00, 0x00, 0x08, 0x00, 0x08, 0x00, 0x08, 0x00, 0x08]
     )
+
+
+def test_input_gate_requires_adopted_hello_and_discards_held_pose(monkeypatch):
+    from core.transport.bcon import BconTransport
+    from core.transport.bcon_protocol import PROTO_VER, T_HELLO_ACK, T_STATE
+
+    class Wire:
+        is_open = True
+        baudrate = 1000000
+
+        def __init__(self):
+            self.written = []
+
+        def write(self, data):
+            self.written.append(bytes(data))
+            return len(data)
+
+    made = BconTransport()
+    wire = Wire()
+    made.ser = wire
+    made.send_row("10 08")
+    assert not made.send_imu(0, 0, 4096, 0, 0, 0)
+    assert wire.written == []
+    assert not made.hold_input(False)
+    monkeypatch.setattr(made, "rx_pump_running", lambda: True)
+    ack = [PROTO_VER, 1, 0, 0]
+
+    def reply(type_, payload, note):
+        made._dispatch_rx((T_HELLO_ACK, bytes(ack), 0))
+        return True
+
+    monkeypatch.setattr(made, "_send_session_frame", reply)
+    assert made.hello(timeout=0.1)
+    made.send_row("10 08")
+    assert wire.written[-1][1] == T_STATE
+    assert made.hold_input(True)
+    made.send_row("20 08")
+    assert made._live_latest is None
+    assert made._live_pending is None
+    before = len(wire.written)
+    assert made.hold_input(False)
+    assert len(wire.written) == before
+    ack[3] = 1
+    assert not made.hello(timeout=0.1)
+    assert not made.hello_established()
+    made.send_row("10 08")
+    assert len(wire.written) == before

@@ -24,6 +24,7 @@ from typing import Any
 
 from core import blockly_validate
 from core.CommandOperate import StopThread
+from core.recovery import classify as classifyRecoverable
 from loguru import logger
 from services import blockly_templates
 
@@ -267,6 +268,11 @@ def build_trial_class(
         except StopThread:
             raise
         except Exception as e:
+            # 回復可能なエラーは本体の do_safe が「再試行 / 中止」を尋ねる。
+            # ここで試し実行を終了扱いにすると、Retry を選んでも画面は
+            # 終わったままになるため、判断を本体へ渡す。
+            if classifyRecoverable(e) is not None:
+                raise
             session.fail(f"{type(e).__name__}: {e}")
             session.end("エラー")
             raise
@@ -281,6 +287,13 @@ def build_trial_class(
         # 出すため、後から決めると「終わったのに結果が無い」瞬間ができる。
         # 停止は本体のボタン・Esc・編集画面のどれでもここを通る。
         if getattr(self, "_history_failed", False):
+            # 中止（回復ダイアログで「中止」）や、後始末まで来た失敗は
+            # ここで結果をエラーに閉じる。通常の失敗は do 側が
+            # session.fail で理由とブロックを残しているため、空のときだけ
+            # 編集画面が「（本体のログ欄を確認してください）」だけに
+            # ならないよう、短い理由を入れる。
+            if not session.error:
+                session.fail("実行を中止しました")
             session.end("エラー")
         session.end("完了" if session.finish_called else "停止")
         base._cleanup(self, ser)

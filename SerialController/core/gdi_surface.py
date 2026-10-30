@@ -11,10 +11,13 @@
 from __future__ import annotations
 
 import ctypes
+import functools
 import os
+import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Any, Concatenate, ParamSpec, Protocol, TypeVar
 
 import cv2
 import numpy as np
@@ -361,9 +364,18 @@ class CtypesGdiApi:
     def __init__(self) -> None:
         if os.name != "nt":
             raise OSError("GDI surface は Windows 専用")
-        user32 = ctypes.WinDLL("user32", use_last_error=True)
-        gdi32 = ctypes.WinDLL("gdi32", use_last_error=True)
-        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        # ``WinDLL`` は呼び出しごとに GIL を解放する。既定の描画経路
+        # （core/preview_pump.py の描画スレッド）では 1 フレームに 10 回前後の
+        # GIL 取得が続くので、別スレッドが GIL を持っていると取得待ちが
+        # sys.getswitchinterval() ぶん積み上がる。実測（2026-10-30、
+        # 1280x720、メインスレッドが 200ms ごとに 40ms の Python 仕事）では
+        # WinDLL で描画 1 回が平均 7.0ms・最大 40ms、PyDLL で平均 5.5ms・
+        # 最大 29ms になり、取りこぼすフレーム数が 6 → 2 に減った。
+        # ``PyDLL`` は GIL を保持したまま呼ぶ。GDI 呼び出しは 1 回 1ms 未満
+        # なので、保持していても他のスレッドを待たせない。
+        user32 = ctypes.PyDLL("user32", use_last_error=True)
+        gdi32 = ctypes.PyDLL("gdi32", use_last_error=True)
+        kernel32 = ctypes.PyDLL("kernel32", use_last_error=True)
 
         self._set_dpi_aware = user32.SetProcessDPIAware
         self._set_dpi_aware.argtypes = []
@@ -867,11 +879,43 @@ class CtypesGdiApi:
         return ctypes.get_last_error()
 
 
+_P = ParamSpec("_P")
+_R = TypeVar("_R")
+
+
+def _serialized(
+    method: Callable[Concatenate[Any, _P], _R],
+) -> Callable[Concatenate[Any, _P], _R]:
+    """``self._lock`` を取ってから本体を呼ぶ。
+
+    描画（core/preview_pump.py のスレッド）と Tk スレッドの resize/release
+    が同じ面へ入るので、公開メソッドをここで直列化する。錠は再入可能なので、
+    attach → _run_self_test のような入れ子呼び出しもそのまま通る。
+    """
+
+    @functools.wraps(method)
+    def wrapper(self: Any, *args: _P.args, **kwargs: _P.kwargs) -> _R:
+        with self._lock:
+            return method(self, *args, **kwargs)
+
+    return wrapper
+
+
 class GdiSurface:
     """子 HWND とバックバッファとオーバーレイ描画を持つ面。Tk には触らない。"""
 
     def __init__(self, api: GdiSurfaceApi | None = None) -> None:
         self._api: GdiSurfaceApi = api if api is not None else CtypesGdiApi()
+        # 描画スレッド（core/preview_pump.py）と Tk スレッド（resize/release）
+        # が同じ面を触るので、1 フレームの合成と提示を 1 つの錠で直列化する。
+        # GDI ハンドル自体はスレッド非依存だが、_back/_dest/_pending_frame を
+        # 片方が書き換えている最中に他方が読むと、古い配置の絵を混ぜる。
+        # 取得は描画 1 回につき 2 回（compose と present）なので競合していない
+        # ときの費用は無視できる。
+        self._lock = threading.RLock()
+        # 描画スレッドが使うので、他のスレッドからの呼び出しを許すことを
+        # 明示する（PreviewRenderer の契約。photo 側は False）。
+        self.cross_thread_render = True
         self._child = 0
         self._memory_dc = 0
         self._back: np.ndarray[tuple[int, ...], np.dtype[np.uint8]] | None = None
@@ -910,6 +954,7 @@ class GdiSurface:
     def self_test(self) -> SelfTestResult:
         return self._self_test
 
+    @_serialized
     def attach(self, parent_hwnd: int, size: tuple[int, int]) -> None:
         """子窓を `size`（表示面）で作り、バックバッファを CAPTURE_SIZE で作る。
 
@@ -1062,12 +1107,14 @@ class GdiSurface:
         self._pending_frame = False
         return True
 
+    @_serialized
     def client_size(self) -> tuple[int, int]:
         if self._child == 0:
             return (0, 0)
         left, top, right, bottom = self._api.get_client_rect(self._child)
         return (int(right - left), int(bottom - top))
 
+    @_serialized
     def resize(self, size: tuple[int, int]) -> None:
         """表示面（ビューポート）を新しい大きさにし、子窓をそこへ移す。
 
@@ -1098,6 +1145,7 @@ class GdiSurface:
         finally:
             self._rebuilding = False
 
+    @_serialized
     def compose(self, frame: np.ndarray, overlay: OverlayState) -> RenderResult:
         started = time.perf_counter_ns()
         if self._child == 0 or self._back is None:
@@ -1165,6 +1213,7 @@ class GdiSurface:
         self._pending_frame = True
         return RenderResult(True, time.perf_counter_ns() - started, "ok")
 
+    @_serialized
     def present(self) -> RenderResult:
         started = time.perf_counter_ns()
         if self._child == 0 or self._memory_dc == 0:
@@ -1252,6 +1301,7 @@ class GdiSurface:
                 continue
             self._api.pat_blt(hdc, left, top, box_w, box_h, _BLACKNESS)
 
+    @_serialized
     def recompose(self, overlay: OverlayState) -> RenderResult:
         """合成済みの映像にだけオーバーレイを描き直す。新しい frame は要らない。
 
@@ -1283,6 +1333,7 @@ class GdiSurface:
         self._logged_failures.add(detail)
         logger.warning(template, *args)
 
+    @_serialized
     def release(self) -> None:
         if self._child == 0:
             return

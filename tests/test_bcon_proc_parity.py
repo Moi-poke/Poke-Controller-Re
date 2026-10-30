@@ -18,6 +18,7 @@ LOCAL_ONLY = {
     "close",
     "get_raw_serial",
     "open",
+    "last_open_error",
     "send_row",
     "flush_pending",
     "add_listener",

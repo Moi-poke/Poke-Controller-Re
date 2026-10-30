@@ -2,11 +2,10 @@
 
 H1(RPC遅延)/H2(drain数+ms)/H3(rx率)切り分け用の素朴な数え。
 int/float/perf_counterだけで、per-frameのI/Oはしない。
-worker側（_on_rx_frame・dispatch）からwidget・after()には触らない。
+worker側（snapshotの受渡し・dispatch）からwidget・after()には触らない。
 BconSetupとpanelは窓を作らず __new__＋stub で見る。
 """
 
-import logging
 import queue
 import threading
 import time
@@ -14,152 +13,72 @@ from types import SimpleNamespace
 from typing import Any
 
 
-def _make_headless_bcon() -> Any:
-    """窓を作らないBconSetup素体。queueと窓stubだけ持つ。"""
-    from BconSetup import BconSetup
-
-    obj: Any = BconSetup.__new__(BconSetup)
-    obj._sender = object()
-    obj._queue = queue.Queue()
-    obj._busy = False
-    obj._stop = False
-    obj._closed = False
-    obj._rx_unsub = None
-    obj._rx_transport = None
-
-    class _StubWindow:
-        def after(self, _ms: int, _fn: Any) -> Any:
-            return None
-
-    obj.window = _StubWindow()
-    return obj
-
-
 def test_poll_counts_drained_and_wall_ms() -> None:
-    """_pollが吐き出し数と壁msを残す（H2切り分け用）。"""
-    obj = _make_headless_bcon()
+    from bcon_ui_support import setup
+
+    obj = setup()
+    obj.set_visible(True)
     for _ in range(3):
         obj._queue.put(("noop", ""))
     obj._poll()
-    snap = obj.counters_snapshot()
-    assert snap["poll_ticks"] == 1
-    assert snap["poll_last_drained"] == 3
-    assert snap["poll_drained_total"] == 3
-    assert snap["poll_last_ms"] >= 0.0
-    assert snap["poll_max_ms"] >= snap["poll_last_ms"]
-    obj._poll()
-    assert obj.counters_snapshot()["poll_ticks"] == 2
+    snapshot = obj.counters_snapshot()
+    assert snapshot["poll_last_drained"] == 3
+    assert snapshot["poll_drained_total"] == 3
+    assert snapshot["poll_last_ms"] >= 0
+    assert snapshot["queue_max_qsize"] >= 3
 
 
-def test_rx_counts_by_ftype_with_rate() -> None:
-    """_on_rx_frameがftype別に数える（H3切り分け用・選別前）。"""
-    from BconSetup import T_PLAYER_INFO, T_RUMBLE
+def test_latest_snapshot_is_coalesced_before_gui_drain() -> None:
+    from bcon_ui_support import Service, setup
 
-    obj = _make_headless_bcon()
-    obj._on_rx_frame((T_PLAYER_INFO, b"\x05\x03", 0))
-    obj._on_rx_frame((T_PLAYER_INFO, b"\x05\x03", 1))
-    obj._on_rx_frame((T_RUMBLE, b"\x10\x20", 2))
-    obj._on_rx_frame((0x20, b"\x00" * 7, 3))  # STATUSは積まないが数える。
-    snap = obj.counters_snapshot()
-    assert snap["rx_total"] == 4
-    assert snap["rx_by_ftype"] == {T_PLAYER_INFO: 2, T_RUMBLE: 1, 0x20: 1}
-    assert set(snap["rx_per_sec_by_ftype"]) == {T_PLAYER_INFO, T_RUMBLE, 0x20}
-    for rate in snap["rx_per_sec_by_ftype"].values():
-        assert rate >= 0.0
-    # widgetには触れない（queueに積むだけ）。
-    assert obj._queue.qsize() == 3
+    service = Service()
+    obj = setup(service)
+    obj.set_visible(True)
+    for generation in range(1, 100):
+        service.publish(generation=generation)
+    assert obj.inbox.pending() == 1
+    obj.inbox.drain()
+    assert obj._snapshot.generation == 99
 
 
-def test_counters_work_on_bare_new_object() -> None:
-    """__init__を通さない素体でも数えが動く（欠品は自前で足す）。"""
-    from BconSetup import T_PLAYER_INFO
-
-    obj = _make_headless_bcon()
-    assert not hasattr(obj, "_rx_counts")
-    obj._on_rx_frame((T_PLAYER_INFO, b"\x05\x03", 0))
-    obj._poll()
-    snap = obj.counters_snapshot()
-    assert snap["rx_total"] == 1
-    assert snap["poll_ticks"] == 1
-
-
-def test_qsize_sampling_records_peak() -> None:
-    """_pollが入り口の溜まりを書き留める（d切り分け用）。"""
-    obj = _make_headless_bcon()
-    obj._queue.put(("noop", "a"))
-    obj._queue.put(("noop", "b"))
-    obj._poll()
-    assert obj.counters_snapshot()["queue_max_qsize"] >= 2
-
-
-def test_throttled_debug_logs_at_most_once_per_burst() -> None:
-    """間引きdebugは連打で1件まで（per-frameのI/Oにしない）。"""
-    obj = _make_headless_bcon()
-    records: list[Any] = []
-
-    class _H(logging.Handler):
-        def emit(self, record: Any) -> Any:
-            records.append(record)
-            return None
-
-    target = logging.getLogger("BconSetup")
-    level = target.level
-    handler = _H()
-    target.setLevel(logging.DEBUG)
-    target.addHandler(handler)
-    try:
-        for _ in range(10):
-            obj._poll()
-    finally:
-        target.removeHandler(handler)
-        target.setLevel(level)
-    assert len(records) == 1
-
-
-def test_serial_panel_records_rpc_latency() -> None:
-    """panel巡回はTkでgetterを呼ばないためRPC遅延を残さない（Q1=A）。
-    遅いgetterがあっても待たない。遅延の写し口自体は残す。"""
+def test_serial_summary_renders_memory_without_transport_access() -> None:
+    from bcon_ui_support import Widget
+    from core.connection_state import ConnectionSnapshot
     from ui.serial_panel import SerialPanelMixin
 
-    class _FakeTransport:
-        name = "bcon"
-        capability = "BCON_STATE"
+    class Serial:
+        @property
+        def sender(self) -> Any:
+            raise AssertionError("GUIからtransportへ触れてはいけません")
 
-        def __init__(self) -> None:
-            self.getter_calls = 0
+        @staticmethod
+        def uses_bcon(_name: str) -> bool:
+            return True
 
-        def last_player_info(self) -> bytes:
-            self.getter_calls += 1
-            time.sleep(0.02)
-            return b"\x05\x03"
-
-        def last_rumble(self) -> bytes:
-            self.getter_calls += 1
-            return b""
-
-    class _StubCanvas:
-        def itemconfigure(self, _item: Any, **kwargs: Any) -> None:
-            _ = kwargs
-
-    class _StubLabel:
-        def config(self, **kwargs: Any) -> None:
-            _ = kwargs
-
-    class _StubRoot:
-        def after(self, _ms: int, _fn: Any) -> Any:
-            return None
-
-    fake = _FakeTransport()
     obj: Any = SerialPanelMixin.__new__(SerialPanelMixin)
-    obj.serial = SimpleNamespace(sender=SimpleNamespace(transport=fake))
-    obj._player_lamp_items = [1, 2, 3, 4]
-    obj.player_lamp_canvas = _StubCanvas()
-    obj.rumble_label = _StubLabel()
-    obj.root = _StubRoot()
-    obj._player_lamp_after = None
-    obj._poll_player_lamp()
-    assert fake.getter_calls == 0
-    assert obj.bcon_rpc_latency_ms() == {}
+    obj.serial = Serial()
+    obj._connection_view = ConnectionSnapshot(
+        opened=True,
+        phase="ready",
+        transport_name="switch-bcon",
+        player_info=b"\x05\x03",
+        rumble=b"\x0a\x05",
+    )
+    obj.com_port_name = SimpleNamespace(get=lambda: "COM3")
+    obj.transport_name = SimpleNamespace(get=lambda: "switch-bcon")
+    obj.bcon_wired = SimpleNamespace(set=lambda _value: None)
+    obj._player_lamp_items = [0, 1, 2, 3]
+    for name in (
+        "connection_status",
+        "connection_details",
+        "player_lamp_canvas",
+        "rumble_label",
+    ):
+        setattr(obj, name, Widget())
+    obj._render_connection_summary()
+    assert obj.player_lamp_canvas.values["0"]["fill"] == "green yellow"
+    assert obj.player_lamp_canvas.values["1"]["fill"] == "gray"
+    assert "L=10 R=5" in obj.rumble_label.values["text"]
 
 
 def test_proc_call_latency_and_fanout(monkeypatch) -> None:
@@ -271,6 +190,7 @@ def test_bcon_sent_counts_only_successful_writes() -> None:
     made = create_transport("bcon")
     ser = _CountingSer(result=0)
     made.ser = ser
+    made._hello_established = True
     before = made.live_stats()["sent"]
     made.send_row("10 08")
     assert ser.attempts == 1
@@ -287,6 +207,7 @@ def test_bcon_live_loop_sent_counts_only_successful_writes() -> None:
     made = create_transport("bcon")
     ser = _CountingSer(result=0)
     made.ser = ser
+    made._hello_established = True
     assert made.start_live_loop() is True
     try:
         made.send_row("10 08")

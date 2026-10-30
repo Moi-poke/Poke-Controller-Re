@@ -9,8 +9,7 @@ Tk スレッド（200ms ポンプ・タイトル更新・ボタン）から同�
 
 (a) display_text が約200msで戻り、ポンプ間隔が崩れないこと。
 (b) _update_title が約200msで戻ること。
-(c) applyBconWired/Emulate が即座に戻り、setter が裏スレッドで
-    呼ばれ、結果の反映が root.after(0) 経由であること。
+(c) 接続ボタンは通常値で request API に依頼し、受信 callback は inbox に積むこと。
 """
 
 from __future__ import annotations
@@ -173,94 +172,215 @@ def test_update_title_returns_fast_with_stalled_transport(tmp_path: Any) -> None
     assert host.root.titles  # type: ignore[attr-defined]
 
 
-class _StalledBconTransport:
-    """setter だけが8秒停滞する偽 bcon 運搬器。
+def test_connect_button_only_submits_plain_values() -> None:
+    """接続ハンドラが transport や同期 connect を呼ばず即座に戻る。"""
+    from core.connection_state import ConnectionSnapshot
+    from ui.serial_panel import SerialPanelMixin
 
-    停滞は Event 待ちで表す（最大 STALL_S 秒）。呼び出しの記録だけ
-    先に行うため、裏スレッド化の有無を速く判定できる。
-    """
+    class Service:
+        def __init__(self) -> None:
+            self.calls: list[dict[str, Any]] = []
 
-    def __init__(self) -> None:
-        self.wired_calls: list[Any] = []
-        self.emulate_calls: list[Any] = []
-        self.release = threading.Event()
+        def connection_snapshot(self) -> ConnectionSnapshot:
+            return ConnectionSnapshot()
 
-    def set_wired_mode(self, enable: Any, timeout: float = 1.0) -> None:
-        self.wired_calls.append((enable, timeout))
-        self.release.wait(STALL_S)
-
-    def set_emulate_mode(self, role: Any, timeout: float = 1.0) -> None:
-        self.emulate_calls.append((role, timeout))
-        self.release.wait(STALL_S)
-
-
-def _wait_for(pred: Any, timeout: float = 10.0) -> bool:
-    deadline = time.perf_counter() + timeout
-    while time.perf_counter() < deadline:
-        if pred():
+        def uses_bcon(self, name: str) -> bool:
             return True
-        time.sleep(0.05)
-    return bool(pred())
+
+        def request_connect(self, **kwargs: Any) -> bool:
+            self.calls.append(kwargs)
+            return True
+
+        def connect(self, **kwargs: Any) -> None:
+            raise AssertionError("GUI が同期接続を呼びました")
+
+    service = Service()
+    host = SerialPanelMixin.__new__(SerialPanelMixin)
+    host.serial = service
+    host._connection_change_allowed = lambda: True
+    host._refresh_connection_controls = lambda: None
+    host._com_port_map = {"device": "COM9"}
+    host.com_port_name = _FakeVar("COM9")
+    host.com_port = _FakeVar(9)
+    host.transport_name = _FakeVar("switch-bcon-proc")
+    host.baud_rate = _FakeVar("4800")
+    host.is_use_keyboard = _FakeVar(True)
+    host.settings = type("S", (), {"setting_path": "settings.profile.ini"})()
+    host._currentBaudRate = lambda: 2000000
+    began = time.perf_counter()
+    host.activateSerial()
+    assert time.perf_counter() - began < FAST_S
+    assert service.calls == [
+        {
+            "port_num": 9,
+            "port_name": "COM9",
+            "baud": 2000000,
+            "keyboard_enabled": True,
+            "setting_path": "settings.profile.ini",
+        }
+    ]
 
 
-def test_apply_bcon_wired_runs_setter_off_tk_thread(
+def test_worker_snapshot_callback_only_enqueues() -> None:
+    from core.connection_state import ConnectionSnapshot
+    from ui.serial_panel import SerialPanelMixin
+
+    host = SerialPanelMixin.__new__(SerialPanelMixin)
+    host.inbox = _make_inbox()
+    host.root = _FakeRoot()
+    snapshot = ConnectionSnapshot(generation=3, phase="hello", opened=True)
+    snapshot_reads: list[int] = []
+
+    class Service:
+        def connection_snapshot(self) -> ConnectionSnapshot:
+            snapshot_reads.append(threading.get_ident())
+            return snapshot
+
+    host.serial = Service()
+    seen: list[tuple[int, Any]] = []
+    host._apply_connection_snapshot = lambda snapshot: seen.append(
+        (threading.get_ident(), snapshot)
+    )
+    worker = threading.Thread(target=host._queue_connection_snapshot, args=(snapshot,))
+    worker.start()
+    worker.join(FAST_S)
+    assert not worker.is_alive()
+    assert host.root.afters == []
+    assert not seen
+    assert not snapshot_reads
+    host.inbox.drain()
+    assert snapshot_reads == [threading.get_ident()]
+    assert seen == [(threading.get_ident(), snapshot)]
+
+
+def test_late_status_notification_renders_failed_service_truth(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """有線/無線切替が Tk を止めず、反映は after(0) 経由であること。"""
-    import tkinter.messagebox as tkmsg
+    """同世代の古い受信通知が失敗後に届いても両画面は最新を表示する。"""
+    from core.connection_state import ConnectionSnapshot
+    from core.transport.bcon_protocol import T_STATUS
+    from test_bcon_connection_lifecycle import (
+        connect_in_thread,
+        make_service,
+        wait_snapshot,
+    )
+    from test_bcon_connection_views import SnapshotService, detail_view, serial_view
 
-    from ui import serial_panel
+    service, _, wires = make_service(monkeypatch)
+    host = serial_view(service)
+    detail = detail_view(SnapshotService(service.connection_snapshot()))
+    detail._service = service
+    held = threading.Event()
+    release = threading.Event()
+    late_delivered = threading.Event()
+    final_delivered = threading.Event()
+    old: list[ConnectionSnapshot] = []
 
-    fake = _StalledBconTransport()
-    host = serial_panel.SerialPanelMixin.__new__(serial_panel.SerialPanelMixin)
-    host._bcon_transport = lambda: fake  # type: ignore[method-assign]
-    host.bcon_wired = _FakeVar("有線")  # type: ignore[attr-defined]
-    host.root = _FakeRoot()  # type: ignore[attr-defined]
-    host.inbox = _make_inbox()  # type: ignore[attr-defined]
-    refreshed: list[bool] = []
-    host._refresh_bcon_rows = lambda: refreshed.append(True)  # type: ignore[method-assign]
-    monkeypatch.setattr(tkmsg, "askquestion", lambda *a: "yes")
+    def hold(snapshot: ConnectionSnapshot) -> None:
+        if snapshot.phase == "hello" and snapshot.status is not None:
+            old.append(snapshot)
+            held.set()
+            release.wait(15)
 
-    began = time.perf_counter()
-    serial_panel.SerialPanelMixin.applyBconWired(host)  # type: ignore[arg-type]
-    elapsed = time.perf_counter() - began
-    assert elapsed < FAST_S, f"applyBconWired が停滞しました: {elapsed:.1f}秒"
-    # 裏で setter が呼ばれたこと（Tk は待たない）。
-    assert _wait_for(lambda: len(fake.wired_calls) == 1), "裏で setter が呼ばれません"
-    # setter の完了前は反映の予約もないこと（Tk へ触らない）。
-    assert host.root.afters == [], "setter 完了前に Tk へ触っています"  # type: ignore[attr-defined]
-    fake.release.set()
-    # 反映は受け渡し箱（GUI スレッドの周期が取り出す）経由であること。
-    assert _wait_for(lambda: host.inbox.drain() > 0), "反映が積まれていません"  # type: ignore[attr-defined]
-    assert refreshed, "受け渡し箱経由で _refresh_bcon_rows が呼ばれません"
+    def observe(snapshot: ConnectionSnapshot) -> None:
+        if snapshot.phase == "hello" and snapshot.status is not None:
+            late_delivered.set()
+        if snapshot.phase == "failed" and snapshot.operation is None:
+            final_delivered.set()
+
+    unsubscribers = [
+        service.subscribe_connection(hold),
+        service.subscribe_connection(host._queue_connection_snapshot),
+        service.subscribe_connection(detail._receive_snapshot),
+        service.subscribe_connection(observe),
+    ]
+    thread = connect_in_thread(service)
+    try:
+        wait_snapshot(service, lambda snapshot: snapshot.phase == "hello")
+        wire = wires[0]
+        assert wire.hello_seen.wait(5)
+        wire.inject(T_STATUS, bytes([32, 1, 0, 0, 0, 0, 0]))
+        assert held.wait(5)
+        assert final_delivered.wait(10)
+        thread.join(5)
+        assert not thread.is_alive()
+        current = service.connection_snapshot()
+        assert current.phase == "failed" and current.operation is None
+        assert current.status is None and current.generation == old[0].generation
+        release.set()
+        assert late_delivered.wait(5)
+        host.inbox.drain()
+        detail.inbox.drain()
+        assert host._connection_view == current == detail._snapshot
+        assert host.bcon_wired.get() == "不明"
+        assert set(host.player_lamp_canvas.colors.values()) == {"gray"}
+        assert detail._btn_connect["state"] == "normal"
+        assert detail._btn_hunt["state"] == "normal"
+        assert "接続失敗" in detail._summary["text"]
+
+        # 旧世代の通知が現在の表示を上書きしても、現在の写しを描く。
+        service.disconnect()
+        wait_snapshot(
+            service,
+            lambda snapshot: snapshot.phase == "disconnected"
+            and snapshot.operation is None,
+        )
+        current = service.connection_snapshot()
+        assert current.generation != old[0].generation
+        host._queue_connection_snapshot(old[0])
+        detail._receive_snapshot(old[0])
+        host.inbox.drain()
+        detail.inbox.drain()
+        assert host._connection_view == current == detail._snapshot
+    finally:
+        release.set()
+        thread.join(10)
+        for unsubscribe in unsubscribers:
+            unsubscribe()
+        host.inbox.close()
+        detail.inbox.close()
+        service.shutdown()
 
 
-def test_apply_bcon_emulate_runs_setter_off_tk_thread(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """種別切替が Tk を止めず、反映は after(0) 経由であること。"""
-    import tkinter.messagebox as tkmsg
+def test_connection_logs_discard_stale_delivery_and_preserve_history(monkeypatch):
+    from services.serial_service import SerialService
+    from ui.serial_panel import SerialPanelMixin
 
-    from ui import serial_panel
+    raw = []
+    rendered = []
+    detail = []
+    service = SerialService(notify_user=raw.append, base_dir=".", input_log_emit=None)
+    host = SerialPanelMixin.__new__(SerialPanelMixin)
+    host.serial = service
+    host._closing = False
+    host.inbox = _make_inbox()
+    host._apply_connection_snapshot = lambda snapshot: None
+    host._subscribe_connection_state()
+    service.subscribe_connection_log(lambda generation, message: detail.append(message))
+    monkeypatch.setattr("builtins.print", lambda message: rendered.append(message))
 
-    fake = _StalledBconTransport()
-    host = serial_panel.SerialPanelMixin.__new__(serial_panel.SerialPanelMixin)
-    host._bcon_transport = lambda: fake  # type: ignore[method-assign]
-    host.bcon_emulate = _FakeVar("Joy-Con (L)")  # type: ignore[attr-defined]
-    host.root = _FakeRoot()  # type: ignore[attr-defined]
-    host.inbox = _make_inbox()  # type: ignore[attr-defined]
-    refreshed: list[bool] = []
-    host._refresh_bcon_rows = lambda: refreshed.append(True)  # type: ignore[method-assign]
-    monkeypatch.setattr(tkmsg, "askquestion", lambda *a: "yes")
+    def logging_boundary(message):
+        if message == "in-flight":
+            service.disconnect()
 
-    began = time.perf_counter()
-    serial_panel.SerialPanelMixin.applyBconEmulate(host)  # type: ignore[arg-type]
-    elapsed = time.perf_counter() - began
-    assert elapsed < FAST_S, f"applyBconEmulate が停滞しました: {elapsed:.1f}秒"
-    assert _wait_for(lambda: len(fake.emulate_calls) == 1), "裏で setter が呼ばれません"
-    assert fake.emulate_calls[0][0] == 1
-    assert host.root.afters == [], "setter 完了前に Tk へ触っています"  # type: ignore[attr-defined]
-    fake.release.set()
-    # 反映は受け渡し箱（GUI スレッドの周期が取り出す）経由であること。
-    assert _wait_for(lambda: host.inbox.drain() > 0), "反映が積まれていません"  # type: ignore[attr-defined]
-    assert refreshed, "受け渡し箱経由で _refresh_bcon_rows が呼ばれません"
+    monkeypatch.setattr("services.serial_service.logger.info", logging_boundary)
+    try:
+        service._connection_log(0, "history")
+        host.inbox.drain()
+        service._connection_log(0, "queued-old")
+        service._connection_log(0, "in-flight")
+        generation = service.connection_snapshot().generation
+        service._connection_log(generation, "current-one")
+        service._connection_log(generation, "current-two")
+        host.inbox.drain()
+        assert rendered == ["history", "current-one", "current-two"]
+        assert detail == ["history", "queued-old", "current-one", "current-two"]
+        assert raw == []
+        host._closing = True
+        host._dispose_connection_subscription()
+        service._connection_log(generation, "after-disposal")
+        host.inbox.drain()
+        assert rendered == ["history", "current-one", "current-two"]
+    finally:
+        host._dispose_connection_subscription()
+        service.shutdown()

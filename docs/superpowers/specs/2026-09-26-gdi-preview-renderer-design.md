@@ -1,6 +1,9 @@
 # GDI Preview Renderer 窶・1280x720 蝗ｺ螳壼・蜉帛燕謠舌・譛蟆乗ｧ区・
 
-Status: 実装済み（`core/gdi_surface.py`）。既定の描画面は
+Status: implemented. Dispatch の記述は
+[`2026-10-30-frame-driven-preview-pump-design.md`](2026-10-30-frame-driven-preview-pump-design.md)
+が改訂した（GDI 面の描画は Tk スレッドではなく描画スレッドが行う）。面の構成・
+GDI の描き方・HALFTONE・32bpp はこの文書のまま。既定の描画面は
 [`2026-10-30-gpu-preview-renderer-design.md`](2026-10-30-gpu-preview-renderer-design.md)
 の GPU 面へ移り、この文書の GDI 面は 2 段目のフォールバック（`renderer = gdi`）と
 して残っている。ここに書かれた CPU 側の計測・制約はそのまま有効。

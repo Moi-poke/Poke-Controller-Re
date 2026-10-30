@@ -9,6 +9,7 @@ import time
 import traceback
 from abc import abstractmethod
 from collections.abc import Callable
+from dataclasses import replace
 from typing import Any
 
 # Commands配下と同じ絶対importに統一する。相対importでは、パッケージとして
@@ -50,6 +51,16 @@ from Commands.CommandOperate import OperateMixin, StopThread
 from Commands.CommandVision import VisionMixin
 from Commands.Keys import KeyPress
 from DiscordNotify import Discord_Notify
+
+# 回復可能なエラーの分類と、利用者への再試行の案内。利用者スクリプトが
+#   from Commands.PythonCommandBase import RecoverableError
+# と書けるよう、ここから再公開する（実体は core.recovery）。
+from core.recovery import (
+    RecoverableError as RecoverableError,
+    RecoveryAborted as RecoveryAborted,
+    RecoveryAdvice as RecoveryAdvice,
+    classify as classifyRecoverable,
+)
 from loguru import logger
 
 
@@ -142,9 +153,36 @@ class PythonCommand(CommandBase.Command, OperateMixin, DialogMixin):
                     ser, source=getattr(self, "input_source", "script")
                 )
 
-            if self.alive:
-                self.do()
-                self.finish()
+            while self.alive:
+                try:
+                    self.do()
+                    self.finish()
+                except RecoveryAborted as exc:
+                    # 利用者が「中止」を選んだ。traceback ではなく、
+                    # 何をしたかを1行で残す。履歴はエラーとして閉じる。
+                    self._abort_recovery(exc.cause)
+                    break
+                except StopThread:
+                    # 正常終了・停止要求。後始末は finally に任せる。
+                    raise
+                except Exception as exc:
+                    # 操作単位で拾えなかった回復可能エラー（テンプレート・
+                    # カメラ・シリアル断など）。人が直してから、コマンドを
+                    # 最初からやり直すか尋ねる。分類できない例外は
+                    # プログラマ誤りとして、そのまま外へ出す。
+                    decision = self._retry_after_recovery(exc)
+                    if decision is None:
+                        # 利用者が「中止」を選んだ。例外の traceback は出さない。
+                        self._abort_recovery(exc)
+                        break
+                    if not decision:
+                        raise
+                    logger.warning(
+                        "回復可能なエラーのため、コマンドを最初から再実行します"
+                    )
+                    self.alive = True
+                    continue
+                break
         except StopThread:
             print("-- finished successfully. --")
             logger.info("Command finished successfully")
@@ -179,6 +217,51 @@ class PythonCommand(CommandBase.Command, OperateMixin, DialogMixin):
             # Switch 側で押しっぱなしになる（Stop 時の長押し）。
             self._cleanup(ser)
             self._running = False
+
+    def _abort_recovery(self, cause: object) -> None:
+        """利用者が回復を中止したときの後始末。"""
+        self._history_failed = True
+        print("-- 再試行を中止しました。 --")
+        logger.warning(f"利用者が再試行を中止しました: {cause}")
+        self.alive = False
+        self._stop_event.set()
+
+    def _retry_after_recovery(self, exc: BaseException) -> bool | None:
+        """回復可能エラーで利用者に再試行を尋ねる。
+
+        戻り値:
+          True  … 再試行する
+          False … 尋ねられない／回復不能。呼び出し側は元の例外を出す
+          None  … 利用者が「中止」を選んだ
+
+        尋ねる前に押している分を離す。人がファイルを置いたりカメラを
+        繋ぎ直したりする間、Switch 側でボタンが押しっぱなしにならない
+        ようにするため。再試行は最初からなので、姿勢は戻さない。
+        """
+        advice = classifyRecoverable(exc)
+        if advice is None:
+            return False
+        # コマンド単位の再試行は最初からやり直す。すでに送った操作が
+        # 繰り返されるため、そのことをダイアログ本文に必ず書く。
+        note = (
+            "再試行するとコマンドは最初からやり直しになります"
+            "（すでに行った操作は繰り返されます）。"
+        )
+        if "最初から" not in advice.hint:
+            hint = f"{advice.hint}\n{note}" if advice.hint else note
+            advice = replace(advice, hint=hint)
+        logger.warning(f"{advice.title}: {exc}")
+        self._suspendPosture()
+        self._setHandedOver(True)
+        try:
+            decision = self.ask_recovery(advice)
+        finally:
+            self._setHandedOver(False)
+        if decision is None:
+            return False
+        if not decision:
+            return None
+        return True
 
     def _cleanup(self, ser: Any = None) -> None:
         """コマンド終了時の後始末。二重に呼ばれても安全にする。"""
@@ -582,6 +665,18 @@ class PythonCommand(CommandBase.Command, OperateMixin, DialogMixin):
                     continue
 
             if self.keys.ser.openSerial(port, name, baud):
+                from core.procon_color import is_bcon_transport
+
+                target = getattr(self.keys.ser, "transport", None)
+                if target is not None and is_bcon_transport(target):
+                    if not target.hello(timeout=3.0):
+                        self.keys.ser.closeSerial()
+                        self.wait(0.5)
+                        continue
+                    if not self.keys.ser.startLiveWorker():
+                        self.keys.ser.closeSerial()
+                        self.wait(0.5)
+                        continue
                 msg = f"COM Port {name or port} connected successfully"
                 print(msg)
                 logger.debug(msg)

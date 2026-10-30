@@ -217,6 +217,8 @@ class BconTransport(Transport):
         # hunt中のSTATE抑え。Trueのあいだsend_rowは捨てる（HELLO等の
         # 会話は通す）。huntの出入口で立ててlock・失敗のどちらでも倒す。
         self._tx_hold = False
+        self._input_hold = False
+        self._open_error: str | None = None
         # 受信SEQ（Pico→PC方向）の欠番計数。初回は数えない。
         self._rx_last_seq: int | None = None
         self._rx_seq_gap = 0
@@ -251,6 +253,19 @@ class BconTransport(Transport):
         # 購読者・待機への分配とは別に残す。握手の成否判定には使わない。
         self._last_frame_by_type: dict[int, tuple[BconFrame, float]] = {}
 
+    def _clear_receive_locked(self) -> None:
+        """接続境界で前の機器の受信値を残さない。_lock 保持で呼ぶ。"""
+        self._last_status = dict.fromkeys(self._last_status, 0)
+        self._last_status_time = 0.0
+        self._last_hello_ack = dict.fromkeys(self._last_hello_ack, 0)
+        self._last_hello_time = 0.0
+        self._hello_version = None
+        self._last_player_info = b""
+        self._last_player_time = 0.0
+        self._last_rumble = b""
+        self._last_rumble_time = 0.0
+        self._last_frame_by_type.clear()
+
     def open(
         self,
         portNum: int,
@@ -260,21 +275,34 @@ class BconTransport(Transport):
     ) -> bool:
         """線を開く。既定1Mbps。不正・不良はFalse＋logで落とさない。"""
         _ = extra
+        with self._write_lock:
+            with self._lock:
+                self._clear_receive_locked()
+                self._hello_established = False
+                self._live_pending = None
+                self._live_latest = None
+        self._open_error = None
         try:
             rate = int(baudrate)  # type: ignore[arg-type]
-        except (TypeError, ValueError):
-            self._logger.warning(f"bconのbaud指定が不正です: {baudrate!r}")
+        except (TypeError, ValueError, OverflowError):
+            self._open_error = f"通信速度の指定が不正です: {baudrate!r}"
+            self._logger.warning(self._open_error)
             return False
         if rate <= 0:
-            self._logger.warning(f"bconのbaud指定が不正です: {baudrate!r}")
+            self._open_error = f"通信速度の指定が不正です: {baudrate!r}"
+            self._logger.warning(self._open_error)
             return False
         name = portName.strip() if isinstance(portName, str) else ""
         if not name:
             try:
                 num = int(portNum)
-            except (TypeError, ValueError):
+            except (TypeError, ValueError, OverflowError):
+                self._open_error = f"ポート番号が不正です: {portNum!r}"
+                self._logger.warning(self._open_error)
                 return False
             if num < 0:
+                self._open_error = f"ポート番号が不正です: {num}"
+                self._logger.warning(self._open_error)
                 return False
             # 既定パスの組み立てはTextSerial側へ一本化する（Darwin分岐の
             # 二重持ちを避ける）。未知OSのNoneはportName指定へ誘導する。
@@ -284,10 +312,14 @@ class BconTransport(Transport):
                 )
 
                 default_path = _TextSerial._default_port_path(num)
-            except Exception:
+            except Exception as exc:
+                self._open_error = str(exc)
                 self._logger.debug("既定パス解決に失敗", exc_info=True)
                 default_path = None
             if default_path is None:
+                self._open_error = (
+                    self._open_error or "この OS ではポート名を直接指定してください。"
+                )
                 self._logger.warning(
                     "Not supported OS: portName を直接指定してください"
                 )
@@ -304,30 +336,34 @@ class BconTransport(Transport):
                 write_timeout=BCON_WRITE_TIMEOUT,
             )
         except Exception as e:
+            self._open_error = str(e)
             self._logger.warning(f"bconを開けませんでした({name} {rate}bps): {e!r}")
             return False
-        with self._lock:
-            old = self.ser
-            self.ser = ser
-            # 開き直しで古い欠片が残ると次回の先頭整列を乱すため捨てる。
-            self._parser = BconParser()
-            # 開き直しで古い姿勢を送り直さないよう最新保持も捨てる。
-            # 配った行の基準も戻す（繋ぎ直後の最初の行は必ず配る）。
-            # 数え直しのため統計も0へ戻す（live_statsの区切りはopen）。
-            self._live_pending = None
-            self._live_latest = None
-            self._tx_last_note = None
-            self._live_last_tx = 0.0
-            self._live_sent = 0
-            self._live_merged = 0
-            self._live_dropped = 0
-            self._live_rtt_ms = None
-            # 開き直しは新しい握手。HELLO_ACKを受けるまで抑止を続ける。
-            self._hello_established = False
-            # Pico再起動でSEQは0から振り直される。口座を戻さないと
-            # 再開後の最初のフレームを欠番として数えてしまう。
-            self._rx_last_seq = None
-            self._rx_seq_gap = 0
+        with self._write_lock:
+            with self._lock:
+                old = self.ser
+                self.ser = ser
+                # 開き直しで古い欠片が残ると次回の先頭整列を乱すため捨てる。
+                self._parser = BconParser()
+                # 開き直しで古い姿勢を送り直さないよう最新保持も捨てる。
+                # 配った行の基準も戻す（繋ぎ直後の最初の行は必ず配る）。
+                # 数え直しのため統計も0へ戻す（live_statsの区切りはopen）。
+                self._live_pending = None
+                self._live_latest = None
+                self._tx_last_note = None
+                self._live_last_tx = 0.0
+                self._live_sent = 0
+                self._live_merged = 0
+                self._live_dropped = 0
+                self._live_rtt_ms = None
+                # 開き直しは新しい握手。HELLO_ACKを受けるまで抑止を続ける。
+                self._hello_established = False
+                self._input_hold = False
+                self._tx_hold = False
+                # Pico再起動でSEQは0から振り直される。口座を戻さないと
+                # 再開後の最初のフレームを欠番として数えてしまう。
+                self._rx_last_seq = None
+                self._rx_seq_gap = 0
         if old is not None:
             try:
                 old.close()
@@ -360,17 +396,38 @@ class BconTransport(Transport):
         except Exception:
             self._logger.debug("終了時NEUTRALに失敗", exc_info=True)
         self.stop_rx_pump()
-        with self._lock:
-            ser, self.ser = self.ser, None
-            # 欠片を持ち越すと次回接続の先頭整列を乱すため捨てる。
-            self._parser = BconParser()
-            self._hello_established = False
+        with self._write_lock:
+            with self._lock:
+                ser, self.ser = self.ser, None
+                self._parser = BconParser()
+                self._hello_established = False
+                self._clear_receive_locked()
+                self._live_pending = None
+                self._live_latest = None
         if ser is None:
             return
         try:
             ser.close()
         except Exception as e:
             self._logger.debug(f"bconの close に失敗: {e!r}")
+
+    def last_open_error(self) -> str | None:
+        return self._open_error
+
+    def current_baud(self) -> int | None:
+        return self._current_baud()
+
+    def hold_input(self, hold: bool) -> bool:
+        """書込と同じ錠で入力を抑止し、保留姿勢を持ち越さない。"""
+        with self._write_lock:
+            with self._lock:
+                if not hold and not self._hello_established:
+                    return False
+                self._input_hold = bool(hold)
+                if hold:
+                    self._live_pending = None
+                    self._live_latest = None
+                return True
 
     def is_open(self) -> bool:
         """開いているか。pySerialのis_open属性を優先する。"""
@@ -419,7 +476,7 @@ class BconTransport(Transport):
         """
 
         with self._lock:
-            held = self._tx_hold
+            held = self._tx_hold or self._input_hold or not self._hello_established
         if held:
             with self._lock:
                 self._live_dropped += 1
@@ -458,6 +515,10 @@ class BconTransport(Transport):
             thread = self._live_loop_thread
             loop_on = thread is not None and thread.is_alive()
             if loop_on:
+                # 保留へ積む経路だけをここで守る。同期経路は write 直前で判定する。
+                if self._tx_hold or self._input_hold or not self._hello_established:
+                    self._live_dropped += 1
+                    return
                 if self._live_pending is not None:
                     self._live_merged += 1
                 self._live_pending = (payload, note, bool(measure_perf))
@@ -471,6 +532,9 @@ class BconTransport(Transport):
         # 同期送出も採番→組立→書込を1単位で包む（会話・loopとの逆転防止）。
         with self._write_lock:
             with self._lock:
+                if self._tx_hold or self._input_hold or not self._hello_established:
+                    self._live_dropped += 1
+                    return
                 seq = self._tx_seq
                 self._tx_seq = (self._tx_seq + 1) & 0xFF
                 ser = self.ser
@@ -484,8 +548,9 @@ class BconTransport(Transport):
             with self._lock:
                 if sent_ok:
                     self._live_sent += 1
-                self._live_latest = (payload, note)
-                self._live_last_tx = time.perf_counter()
+                if not self._input_hold and self._hello_established:
+                    self._live_latest = (payload, note)
+                    self._live_last_tx = time.perf_counter()
             if sent_ok:
                 # 送れた行だけを配る。開いていない線・書込失敗の行は
                 # Switch に届いていないので記録に残さない（TextSerialの
@@ -517,13 +582,16 @@ class BconTransport(Transport):
             max(-32768, min(32767, v)).to_bytes(2, "little", signed=True) for v in vals
         )
         with self._lock:
-            held = self._tx_hold
+            held = self._tx_hold or self._input_hold or not self._hello_established
         if held:
             with self._lock:
                 self._imu_dropped += 1
             return False
         with self._write_lock:
             with self._lock:
+                if self._tx_hold or self._input_hold or not self._hello_established:
+                    self._imu_dropped += 1
+                    return False
                 seq = self._tx_seq
                 self._tx_seq = (self._tx_seq + 1) & 0xFF
                 ser = self.ser
@@ -645,7 +713,7 @@ class BconTransport(Transport):
             with self._lock:
                 if self._imu_gen != generation:
                     break
-                held = self._tx_hold
+                held = self._tx_hold or self._input_hold or not self._hello_established
                 source = self._imu_source
             if held:
                 with self._lock:
@@ -891,7 +959,7 @@ class BconTransport(Transport):
                 break
             now = time.perf_counter()
             with self._lock:
-                held = self._tx_hold
+                held = self._tx_hold or self._input_hold or not self._hello_established
                 pending = self._live_pending
                 self._live_pending = None
                 latest = self._live_latest
@@ -918,6 +986,9 @@ class BconTransport(Transport):
             # 採番→組立→書込を1単位で包む（会話フレームとの逆転防止）。
             with self._write_lock:
                 with self._lock:
+                    if self._tx_hold or self._input_hold or not self._hello_established:
+                        self._live_dropped += 1
+                        continue
                     seq = self._tx_seq
                     self._tx_seq = (self._tx_seq + 1) & 0xFF
                     ser = self.ser
@@ -938,8 +1009,9 @@ class BconTransport(Transport):
             with self._lock:
                 if sent_ok:
                     self._live_sent += 1
-                self._live_latest = (payload, note)
-                self._live_last_tx = now
+                if not self._input_hold and self._hello_established:
+                    self._live_latest = (payload, note)
+                    self._live_last_tx = now
             if sent_ok and not held:
                 # 実際に送った分だけを配る。開いていない線の分は配らない。
                 # 同一行の再送は _notify_tx 側で削る。呼び出しは錠の外。
@@ -1271,9 +1343,7 @@ class BconTransport(Transport):
                                 "result": result,
                             }
                             self._last_hello_time = now
-                            if adopted == PROTO_VER and result == RESULT_OK:
-                                # 握手成立。ここから先のSTATUSは実データとして扱う。
-                                self._hello_established = True
+                            # 入力許可は hello が待機中の ACK を採用した時だけ行う。
                             if adopted == PROTO_VER:
                                 try:
                                     self._hello_version = (
@@ -1422,13 +1492,15 @@ class BconTransport(Transport):
     def _set_baud(self, rate: int) -> bool:
         """host側baudを切り替える。失敗はFalse（落とさない）。"""
         try:
-            ser = self.ser
-            if ser is None:
-                return False
-            ser.baudrate = int(rate)
-            # rateが変われば握手も切れる。HELLOでadoptを確かめるまで戻す。
-            with self._lock:
-                self._hello_established = False
+            with self._write_lock:
+                ser = self.ser
+                if ser is None:
+                    return False
+                with self._lock:
+                    self._hello_established = False
+                    self._live_pending = None
+                    self._live_latest = None
+                ser.baudrate = int(rate)
             return True
         except (TypeError, ValueError, AttributeError) as e:
             self._logger.debug(f"baud切替に失敗: {e!r}")
@@ -1458,12 +1530,17 @@ class BconTransport(Transport):
         送る前に待ちを登録してから送る（送ってから登録するとポンプが
         先に読んで届かない）。HELLO_ACKの`[adopted, major, minor, RESULT]`
         を見て`adopted==0x04 and RESULT==0x00`ならTrue。DOWNGRADEDを含む
-        非OKはNEUTRALを1発保ち、版を表示してFalseで止める（PCはver=4
+        非OKはNEUTRAL送出を試み、版を表示してFalseで止める（PCはver=4
         専用のため送り続けハングにしない）。ACK不在は期限まで再HELLOし、
         尽きたら再huntへの案内を出してFalse。例外は投げない。
         直近保持は購読者・待機への分配記録に使い、成功の代用にはしない。
         握手は必ず往復で行う。
         """
+        with self._write_lock:
+            with self._lock:
+                self._hello_established = False
+                self._live_pending = None
+                self._live_latest = None
         try:
             try:
                 limit = float(timeout)
@@ -1533,6 +1610,7 @@ class BconTransport(Transport):
                     result = int(payload[3]) & 0xFF
                     if adopted == PROTO_VER and result == RESULT_OK:
                         with self._lock:
+                            self._hello_established = True
                             rate = self._current_baud()
                             if rate is not None:
                                 self._last_good_baud = rate
@@ -1544,7 +1622,7 @@ class BconTransport(Transport):
                         msg = (
                             "bconがDOWNGRADEDで返しました"
                             f"(v{major}.{minor})。PCはver=4専用のため"
-                            "NEUTRALを保ち止めます（送り続けません）。"
+                            "入力送信を止めます。"
                         )
                         self._gui(msg, quiet)
                         self._send_neutral_once()
@@ -1555,14 +1633,14 @@ class BconTransport(Transport):
                             "bconの版が合いません"
                             f"(adopted=0x{adopted:02X} v{major}.{minor} "
                             f"RESULT=0x{result:02X})。PCはver=4で送っています。"
-                            "NEUTRALを保ち止めます（送り続けません）。"
+                            "入力送信を止めます。"
                         )
                     else:
                         msg = (
                             "bconのHELLO応答が想定外です"
                             f"(adopted=0x{adopted:02X} v{major}.{minor} "
                             f"RESULT=0x{result:02X})。"
-                            "NEUTRALを保ち止めます（送り続けません）。"
+                            "入力送信を止めます。"
                         )
                     self._gui(msg, quiet)
                     self._send_neutral_once()
@@ -1903,8 +1981,11 @@ class BconTransport(Transport):
             self._logger.info(
                 f"bconのbaud huntを始めます(候補={order})。STATE送出を抑えます。"
             )
-            with self._lock:
-                self._tx_hold = True
+            with self._write_lock:
+                with self._lock:
+                    self._tx_hold = True
+                    self._live_pending = None
+                    self._live_latest = None
             try:
                 for rate in order:
                     try:
@@ -1936,8 +2017,9 @@ class BconTransport(Transport):
                 self._logger.warning(msg)
                 return None
             finally:
-                with self._lock:
-                    self._tx_hold = False
+                with self._write_lock:
+                    with self._lock:
+                        self._tx_hold = False
         except Exception as e:
             self._logger.debug(f"baud_huntで例外: {e!r}", exc_info=True)
             return None
@@ -2006,8 +2088,11 @@ class BconTransport(Transport):
             # 数える（会話フレームは別口で通す）。抑えはlock・失敗の
             # いずれでも解く。窓が200msを超えるとPicoが一旦中立へ落とすが、
             # 復帰後の120Hz更新ですぐ姿勢が戻る（huntと同一扱い）。
-            with self._lock:
-                self._tx_hold = True
+            with self._write_lock:
+                with self._lock:
+                    self._tx_hold = True
+                    self._live_pending = None
+                    self._live_latest = None
             try:
                 # 旧レートでSTATUS-ACK確認。
                 found: dict[str, Any] = {}
@@ -2068,14 +2153,15 @@ class BconTransport(Transport):
                         pass
                 msg = (
                     f"bconの新baud({new_rate}bps)でadopt確認できないため"
-                    f"{old_rate}bpsへ戻しました。"
+                    f"{old_rate}bpsへ戻す設定を行いました。HELLO による確認が必要です。"
                 )
                 print(msg)
                 self._logger.warning(msg)
                 return False
             finally:
-                with self._lock:
-                    self._tx_hold = False
+                with self._write_lock:
+                    with self._lock:
+                        self._tx_hold = False
         except Exception as e:
             self._logger.debug(f"set_baud_indexで例外: {e!r}", exc_info=True)
             return False

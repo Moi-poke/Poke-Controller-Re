@@ -718,6 +718,10 @@ def _font(px: int) -> Any:
 class SdlSurface:
     """SDL の描画器を持つ GPU 面。オーバーレイも同じ面へ描く。"""
 
+    #: SDL の窓は作ったスレッド（Tk のメインスレッド）からしか描けない。
+    #: ``core/preview_pump.py`` に描画を任せない（Tk の clock が描く）。
+    cross_thread_render = False
+
     def __init__(self, api: SdlSurfaceApi | None = None) -> None:
         self._api: SdlSurfaceApi = api if api is not None else CtypesSdlApi()
         self._window = 0

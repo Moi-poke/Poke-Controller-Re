@@ -384,6 +384,3 @@ SDL 経由で読めます。
 
 本プロジェクトはMITライセンスです  
 詳細は [LICENSE](LICENSE) を参照ください
-
-また, 本プロジェクトではLGPLライセンスのDirectShowLib-2005.dllを同梱し使用しています  
-[About DirectShowLib](http://directshownet.sourceforge.net/)  
