@@ -319,7 +319,11 @@ class LogView(ttk.Frame):
             text.configure(state="disabled")
 
         added = len(rows)
-        if follow:
+        # 見えていないタブの Text で see() を呼ぶと、末尾までの組み上げが
+        # 走って 1 回 3ms かかる（実測）。入力ログは毎秒複数回追記するので、
+        # 表示していない間は追従を予約だけしておき、タブを開いたときの
+        # <Configure>（_on_resize）で末尾へ合わせる。
+        if follow and text.winfo_ismapped():
             text.see("end")
         elif added or bump_existing:
             self.new_count += added

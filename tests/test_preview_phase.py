@@ -181,3 +181,28 @@ def test_phase_lock_targets_half_a_period_after_the_next_arrival() -> None:
     # Then: 次の到着（4P）から半周期後を狙う
     assert delay is not None
     assert abs(delay - (4 * period + period // 2 - now)) <= 1  # 半周期の丸め
+
+
+def test_a_miss_far_from_the_publish_boundary_does_not_realign() -> None:
+    """周期が近いだけで起きる単発の空振りは位相の問題ではない。
+
+    実機では、この空振り（1 秒に 1 回ほど）のたびに据え直していたため、
+    追加描画と期限の引き直しで 1 tick 落ち、表示が 55fps まで下がっていた。
+    """
+    period = round(_NS / 60)
+    lock = PhaseLock(period)
+    for seq in (1, 2, 3):
+        assert lock.observe(seq * period + 200_000, seq, seq * period) is None
+    # 空振り。ただし次の公開まではまだ 1/4 周期ある（窓にフレームが無かった）
+    now = 3 * period + 3 * period // 4
+    assert lock.observe(now, 3, 3 * period) is None
+
+
+def test_an_observation_right_after_a_tick_is_ignored() -> None:
+    """据え直しの追加描画を、空振りとして数え直さない（連発の原因）。"""
+    period = round(_NS / 60)
+    lock = PhaseLock(period)
+    assert lock.observe(period, 1, period) is None
+    assert lock.observe(2 * period, 2, 2 * period) is None
+    # 据え直し直後（半周期後）の追加描画は同じ seq を見るが、判断材料にしない
+    assert lock.observe(2 * period + period // 2, 2, 2 * period) is None

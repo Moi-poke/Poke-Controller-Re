@@ -669,10 +669,25 @@ class LogPanelMixin:
             run_state = self.runner.state
         except Exception:
             run_state = "?"
+        # 表示クロックの内訳。tick を落としているのか（sup）、遅れて届いている
+        # のか（draw max）を切り分ける。カウンタは累積なので前の行との差で見る。
+        clock_text = ""
+        try:
+            clock = getattr(preview, "_preview_clock", None)
+            if clock is not None:
+                snap = clock.health_snapshot()
+                clock_text = (
+                    f" / clock {clock.mode()}"
+                    f" tick={snap.get('main_dispatch_count', 0)}"
+                    f"/{snap.get('worker_tick_published_count', 0)}"
+                    f" sup+{snap.get('pending_tick_superseded_count', 0)}"
+                )
+        except Exception:
+            clock_text = ""
         logger.debug(
             f"映像: 取込 {cap_text} / 表示 {shown_text} / "
             f"ログ {log_ms}ms(max {log_max_ms}ms) / ポンプ間隔max {gap_max_ms}ms"
-            f" / {gc_text} [{run_state}]"
+            f" / {gc_text}{clock_text} [{run_state}]"
         )
 
     # -- 仕切り位置 ---------------------------------------------------------

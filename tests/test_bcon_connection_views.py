@@ -456,3 +456,56 @@ def test_transport_switch_reopens_using_destination_saved_baud(
         unsubscribe()
         host.inbox.close()
         service.shutdown()
+
+
+class CountingWidget(Widget):
+    """configure された回数を数える画面代役。cget は最後に入れた値を返す。"""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.writes = 0
+
+    def configure(self, **kwargs: Any) -> None:
+        self.writes += 1
+        super().configure(**kwargs)
+
+    def cget(self, key: str) -> Any:
+        return self.get(key, "")
+
+
+def counting_detail_view(service: SnapshotService) -> Any:
+    detail = detail_view(service)
+    widgets = {
+        name: CountingWidget()
+        for name in (*DETAIL_BUTTONS, "_busy_label", "_seconds_input")
+    }
+    for name, widget in widgets.items():
+        setattr(detail, name, widget)
+    detail._color_entries = [CountingWidget() for _ in range(4)]
+    return detail, widgets
+
+
+def test_repeated_busy_refresh_does_not_rewrite_unchanged_widgets() -> None:
+    # Given: 接続済みの写しを映した画面。
+    service = SnapshotService(ready_snapshot())
+    detail, widgets = counting_detail_view(service)
+    detail._set_busy()
+    after_first = {name: widget.writes for name, widget in widgets.items()}
+    # 見出しの操作文は空のままなので、初回から書き換えない。
+    assert widgets["_busy_label"].writes == 0
+
+    # When: 同じ写しのまま可否を見直す（PLAYER_INFO のたびに起きる）。
+    detail._set_busy()
+
+    # Then: 変わっていない部品へ configure を積まない（再描画で tick が落ちる）。
+    assert {name: widget.writes for name, widget in widgets.items()} == after_first
+    assert all(widgets[name].writes > 0 for name in DETAIL_BUTTONS)
+
+    # When: 操作が始まって可否が変わった。
+    service.snapshot = replace(service.snapshot, operation="状態確認中")
+    detail._set_busy()
+
+    # Then: 変わる部品だけ書き換える。
+    assert widgets["_btn_ping"].writes == after_first["_btn_ping"] + 1
+    assert widgets["_busy_label"].writes == 1
+    assert detail._btn_ping["state"] == "disabled"

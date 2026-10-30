@@ -843,6 +843,32 @@ class BconSetup:
         except Exception:
             pass
 
+    @staticmethod
+    def _apply_text(widget: Any, text: str) -> None:
+        """文が変わるときだけ configure する（理由は _apply_state と同じ）。"""
+        try:
+            if str(widget.cget("text")) == text:
+                return
+        except Exception:
+            pass
+        widget.configure(text=text)
+
+    @staticmethod
+    def _apply_state(widget: Any, state: str) -> None:
+        """状態が変わるときだけ configure する。
+
+        ttk/tk の configure は同じ値でも再描画を積む。この画面は接続の写しが
+        届くたび（PLAYER_INFO は 60Hz）に可否を見直すので、同じ値の入れ直し
+        だけで描画が積み上がり、表示中のプレビューの tick が落ちる（実測
+        60→39fps）。cget を持たない差し替え画面では従来どおり入れる。
+        """
+        try:
+            if str(widget.cget("state")) == state:
+                return
+        except Exception:
+            pass
+        widget.configure(state=state)
+
     def _set_busy(self) -> None:
         snapshot = self._service.connection_snapshot()
         busy = bool(snapshot.operation) or self._command_busy()
@@ -853,7 +879,6 @@ class BconSetup:
         )
         for name in (
             "_btn_cap",
-            "_btn_beacon",
             "_btn_reconnect",
             "_btn_status",
             "_btn_ping",
@@ -868,15 +893,17 @@ class BconSetup:
             "_btn_keys",
             "_btn_color",
         ):
-            getattr(self, name).configure(state=tk.NORMAL if ready else tk.DISABLED)
+            self._apply_state(getattr(self, name), tk.NORMAL if ready else tk.DISABLED)
         saved = len(snapshot.player_info) >= 2 and decode_player_save(
             snapshot.player_info[1]
         )
-        self._btn_beacon.configure(state=tk.NORMAL if ready and saved else tk.DISABLED)
+        self._apply_state(
+            self._btn_beacon, tk.NORMAL if ready and saved else tk.DISABLED
+        )
         for widget in [self._seconds_input, *self._color_entries]:
-            widget.configure(state=tk.NORMAL if ready else tk.DISABLED)
+            self._apply_state(widget, tk.NORMAL if ready else tk.DISABLED)
         for widget in (self._btn_connect, self._btn_hunt):
-            widget.configure(state=tk.NORMAL if recovery else tk.DISABLED)
+            self._apply_state(widget, tk.NORMAL if recovery else tk.DISABLED)
         optional = {
             "状態確認中": (self._btn_status, self._btn_winfo),
             "疎通確認中": (self._btn_ping,),
@@ -888,9 +915,10 @@ class BconSetup:
         }
         for action in self._unsupported:
             for widget in optional.get(action, ()):
-                widget.configure(state=tk.DISABLED)
-        self._busy_label.configure(
-            text=f"{snapshot.operation}…" if snapshot.operation else ""
+                self._apply_state(widget, tk.DISABLED)
+        self._apply_text(
+            self._busy_label,
+            f"{snapshot.operation}…" if snapshot.operation else "",
         )
 
     def _admit(self, *, recovery: bool = False) -> bool:
@@ -961,14 +989,17 @@ class BconSetup:
             imu = vibration = False
         items = getattr(self, "_lamp_items", None)
         canvas = getattr(self, "_lamp_canvas", None)
+        # 同じ色を入れ直すと Canvas の再描画が積まれる。点灯が変わったときだけ。
         if items is not None and canvas is not None:
-            try:
-                for item, is_on in zip(items, lamps):
-                    color = PLAYER_LAMP_ON_COLOR if is_on else PLAYER_LAMP_OFF_COLOR
-                    canvas.itemconfigure(item, fill=color)
-            except Exception:
-                # 閉じた後・stubなど、描けない時は色だけ諦める。
-                pass
+            if getattr(self, "_lamps_shown", None) != lamps:
+                try:
+                    for item, is_on in zip(items, lamps):
+                        color = PLAYER_LAMP_ON_COLOR if is_on else PLAYER_LAMP_OFF_COLOR
+                        canvas.itemconfigure(item, fill=color)
+                    self._lamps_shown = lamps
+                except Exception:
+                    # 閉じた後・stubなど、描けない時は色だけ諦める。
+                    pass
         for name, label, detected in (
             ("_imu_label", "ジャイロ", imu),
             ("_vib_label", "振動", vibration),
@@ -977,7 +1008,7 @@ class BconSetup:
             if widget is None:
                 continue
             try:
-                widget.configure(text=f"{label}: {'あり' if detected else 'なし'}")
+                self._apply_text(widget, f"{label}: {'あり' if detected else 'なし'}")
             except Exception:
                 continue
         # 保存証拠は表示と別に覚える。BEACONでは立てない。
@@ -1096,11 +1127,11 @@ class BconSetup:
         if snapshot.rumble:
             try:
                 left, right = decode_rumble(snapshot.rumble)
-                self._vib_label.configure(text=f"振動: L={left} R={right}")
+                self._apply_text(self._vib_label, f"振動: L={left} R={right}")
             except (TypeError, ValueError):
-                self._vib_label.configure(text="振動: 不明")
+                self._apply_text(self._vib_label, "振動: 不明")
         else:
-            self._vib_label.configure(text="振動: 未受信")
+            self._apply_text(self._vib_label, "振動: 未受信")
         self._render_summary()
         self._set_busy()
         if (
@@ -1145,7 +1176,9 @@ class BconSetup:
         status = "未受信（不明）"
         if snapshot.status_received_at is not None:
             age = max(0.0, time.monotonic() - snapshot.status_received_at)
-            status = f"{age:.1f}秒前" + ("（古い情報）" if age > 3 else "")
+            # 小数まで出すと表示が 0.1 秒ごとに変わり、そのたびにラベルの
+            # 折り返しが計算し直される。1 秒刻みで十分（3 秒で古い情報扱い）。
+            status = f"{age:.0f}秒前" + ("（古い情報）" if age > 3 else "")
         mode = "不明"
         if snapshot.status is not None:
             mode = "有線" if snapshot.status[0] & STATUS_FLAG_WIRED else "無線"
@@ -1155,12 +1188,15 @@ class BconSetup:
             ):
                 mode += "（古い情報）"
         baud = f"{snapshot.baud}bps" if snapshot.baud is not None else "不明"
-        self._summary.configure(
-            text=f"{phases[snapshot.phase]}: {snapshot.message}\n"
+        # 同じ文を入れ直すと ttk ラベル（wraplength 付き）が折り返しを
+        # 計算し直し、そのたびに画面全体の描画が積まれる。変わったときだけ。
+        self._apply_text(
+            self._summary,
+            f"{phases[snapshot.phase]}: {snapshot.message}\n"
             f"ポート: {snapshot.port_name or '未選択'} / {baud}\n"
-            f"HELLO: {hello}\nSwitch 接続方式: {mode} / STATUS: {status}"
+            f"HELLO: {hello}\nSwitch 接続方式: {mode} / STATUS: {status}",
         )
-        self._actual_baud.configure(text=f"実際の速度: {baud}")
+        self._apply_text(self._actual_baud, f"実際の速度: {baud}")
 
     def _arm_capture_deadline(self, seconds: int) -> None:
         """取込期限を張る。要求秒数＋余白の壁時計で1発だけ鳴らす。"""

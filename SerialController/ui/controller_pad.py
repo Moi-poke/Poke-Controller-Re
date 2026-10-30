@@ -248,6 +248,9 @@ class ControllerGUI:
         self._ox = max(0.0, (width - PAD_W * s) / 2)
         self._oy = oy
         self.canvas.delete("all")
+        # 総描き直しでは項目を作り直すので、差分描画のキャッシュも捨てる。
+        self._painted: dict[str, bool] = {}
+        self._knob_shown: dict[str, tuple[float, float, bool, float]] = {}
         self._round_rect(0, 0, PAD_W, PAD_H, 30, fill=self.BODY, outline=self.BODY_EDGE)
         for shape in SHAPES:
             self._draw_shape(shape)
@@ -348,7 +351,6 @@ class ControllerGUI:
     def _draw_knob(self, shape: PadShape) -> None:
         """スティックの頭。表示中の座標の向きへ、溝の中でずらして描く。"""
         name = shape.name
-        self.canvas.delete(f"knob:{name}")
         side = STICK_SIDES[name]
         ext_xy = self._ext_stick_xy[side]
         x, y = ext_xy if ext_xy is not None else self._stick_xy[side]
@@ -362,6 +364,19 @@ class ControllerGUI:
         ext = getattr(self, "_ext_click", None)
         if ext is not None and name in ext:
             held = True
+        # 削除して作り直すのは、位置か光り方が変わったときだけ。止まっている
+        # スティックで毎フレーム作り直すと、ミラー描画が 0.9ms/回かかる。
+        cache: dict[str, tuple[float, float, bool, float]] | None = getattr(
+            self, "_knob_shown", None
+        )
+        if cache is None:
+            cache = {}
+            self._knob_shown = cache
+        shown = (round(cx, 1), round(cy, 1), held, round(shape.w, 1))
+        if cache.get(name) == shown:
+            return
+        cache[name] = shown
+        self.canvas.delete(f"knob:{name}")
         self._oval(
             cx, cy, radius, fill=self.BUTTON_ACTIVE_BG if held else self.KEY,
             outline=self.KEY_EDGE, tags=(*tags, f"face:{name}"),
@@ -393,12 +408,21 @@ class ControllerGUI:
             self._text(cx + dx * mid, cy + dy * mid, arrow, 8, key)
 
     def _paint(self, name: str, on: bool) -> None:
+        # 同じ色を入れ直すと Canvas の再描画が積まれる。60fps で呼ばれるのは
+        # ミラー描画だけなので、変わったときだけ触る（実測 0.9→0.6ms/回）。
+        cache: dict[str, bool] | None = getattr(self, "_painted", None)
+        if cache is None:
+            cache = {}
+            self._painted = cache
+        if cache.get(name) == on:
+            return
         try:
             self.canvas.itemconfigure(
                 f"face:{name}", fill=self.BUTTON_ACTIVE_BG if on else self.KEY
             )
         except tk.TclError:
-            pass
+            return
+        cache[name] = on
 
     def _paintHat(self) -> None:
         """十字キーの腕を、押している向きの集合どおりに塗る。"""

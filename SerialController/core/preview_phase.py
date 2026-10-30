@@ -5,9 +5,15 @@
 「まだ前のフレーム（空振り）」と「その間に 2 枚進んだ（1 枚飛ばし）」が
 交互に起き、表示 fps が 45 前後まで落ちていた（実測 2026-10-04 16:53）。
 
-刻む周期は変えず（表示クロックの契約は設定 fps のまま）、空振りを見たら
-「次の公開から半周期後」に 1 回描いて、そこを起点に据え直す。半周期の
-余裕があれば揺らぎでは境界を越えないので、次にずれ切るまで空振りは出ない。
+刻む周期は変えず（表示クロックの契約は設定 fps のまま）、空振りした tick が
+公開境界に重なっていたら「次の公開から半周期後」に 1 回描いて、そこを起点に
+据え直す。半周期の余裕があれば揺らぎでは境界を越えないので、次にずれ切る
+まで空振りは出ない。
+
+据え直しは 1 tick の追加描画と期限の引き直しを伴う。取込と表示の周期が
+近ければ空振りは 1〜2% の割合で必ず出るが、それは「その窓にフレームが
+無かった」だけで位相の問題ではないので据え直さない（実測: 実アプリで
+1 秒ごとに連発し、表示 fps が 55 まで落ちていた）。
 """
 
 from __future__ import annotations
@@ -23,6 +29,17 @@ _PERIOD_EMA_ALPHA: Final[float] = 0.1
 # 据え直しの最短間隔。うなりの 1 周は数十秒なので、これより頻繁な要求は
 # 揺らぎへの過剰反応として捨てる。
 _COOLDOWN_NS: Final[int] = 1_000_000_000
+# 据え直すのは、空振りした tick が「次の公開の直前」に居るときだけ。
+# 周期のこの割合より手前で空振りしたなら、フレームがまだ来ていないだけで
+# 位相の問題ではない（取込と表示の周期が近ければ必ず起きる）。そこへ
+# 据え直すと追加描画と期限の引き直しで 1 tick 落とし、かえって引っかかる
+# （実測: 実アプリで 1 秒ごとに連発し、表示 55fps）。
+_NEAR_BOUNDARY_RATIO: Final[float] = 0.2
+# 格子の外の観測は判断材料にしない。下限は据え直し直後の追加描画（同じ seq を
+# 見るので空振りと誤認する）、上限は GUI が詰まって遅れて来た tick や、飛ばされた
+# tick の次（位相のずれではなく実行の遅れで、据え直すと悪化する）。
+_OFF_GRID_RATIO: Final[float] = 0.75
+_MAX_GRID_RATIO: Final[float] = 1.75
 
 
 class PhaseLock:
@@ -38,11 +55,13 @@ class PhaseLock:
         self._last_ready_ns = 0
         self._source_period_ns: float | None = None
         self._last_realign_ns: int | None = None
+        self._last_observe_ns: int | None = None
 
     def set_period(self, period_ns: int) -> None:
         """表示周期を変える。公開周期の推定は表示周期に依らないので残す。"""
         self._period_ns = period_ns
         self._last_realign_ns = None
+        self._last_observe_ns = None
 
     def reset(self) -> None:
         """カメラの差し替え・停止の後に呼ぶ。過去の観測を捨てる。"""
@@ -50,6 +69,7 @@ class PhaseLock:
         self._last_ready_ns = 0
         self._source_period_ns = None
         self._last_realign_ns = None
+        self._last_observe_ns = None
 
     def observe(self, now_ns: int, seq: int, t_ready_ns: int) -> int | None:
         """1 tick の観測を受け取り、据え直すまでの遅延 ns を返す。
@@ -59,6 +79,16 @@ class PhaseLock:
         """
         if t_ready_ns <= 0 or seq <= 0:
             return None
+        last_observe = self._last_observe_ns
+        if last_observe is not None:
+            gap = now_ns - last_observe
+            if not (
+                self._period_ns * _OFF_GRID_RATIO
+                <= gap
+                <= self._period_ns * _MAX_GRID_RATIO
+            ):
+                return None
+        self._last_observe_ns = now_ns
         last_seq = self._last_seq
         if last_seq is None or seq < last_seq:
             # 初回、または clear で seq が巻き戻ったときは基準を取り直す
@@ -87,6 +117,11 @@ class PhaseLock:
         source = self._source_period_ns
         period = self._period_ns
         if source is None or abs(source - period) > period * _RATE_TOLERANCE:
+            return None
+        # 次の公開までまだ間があるなら、その窓にフレームが無かっただけで
+        # 位相の問題ではない。据え直しても 1 tick 落とすだけ。
+        until_next = source - (now_ns - t_ready_ns)
+        if until_next > period * _NEAR_BOUNDARY_RATIO:
             return None
         last = self._last_realign_ns
         if last is not None and now_ns - last < _COOLDOWN_NS:
