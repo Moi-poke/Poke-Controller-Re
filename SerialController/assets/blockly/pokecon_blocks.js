@@ -550,6 +550,25 @@
       tooltip: "左右のスティックを同時に、指定した時間で動かす。記録した動きの再生用。最後に離すか続けるかを選べる。",
     },
     {
+      // Blockly の「記録」でジャイロ送出を録ったときの再生。ファイルは
+      // 保存先（Commands/PythonCommands/…pgyro）からの相対パス。
+      type: "pokecon_gyro",
+      message0: "ジャイロを再生 %1",
+      args0: [
+        {
+          type: "field_input",
+          name: "FILE",
+          text: "Commands/PythonCommands/blockly_00000000-000000_000.pgyro",
+          tooltip: "Blocklyの記録で作られた .pgyro のパス",
+        },
+      ],
+      previousStatement: null,
+      nextStatement: null,
+      colour: 200,
+      tooltip:
+        "記録したジャイロ（IMU）を命令と並行して送出する。最後に文字列ブロックをつなげて選べる。",
+    },
+    {
       type: "pokecon_wait",
       message0: "%1 秒待つ",
       args0: [
@@ -2184,6 +2203,11 @@
       out += "self.stick_release_both()\n";
     }
     return out;
+  };
+
+  pythonGenerator.forBlock["pokecon_gyro"] = function (block) {
+    var file = String(block.getFieldValue("FILE") || "");
+    return "self.gyro_play(" + pyStr(file) + ")\n";
   };
 
   pythonGenerator.forBlock["pokecon_wait"] = function (block) {

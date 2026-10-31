@@ -265,6 +265,14 @@ class PythonCommand(CommandBase.Command, OperateMixin, DialogMixin):
 
     def _cleanup(self, ser: Any = None) -> None:
         """コマンド終了時の後始末。二重に呼ばれても安全にする。"""
+        # マクロのジャイロ再生は keys とは別の送出ループで走るため、
+        # ボタン解放より先に止める（止め損ねるとコマンド終了後も回り続ける）。
+        stop_gyro = getattr(self, "_stop_gyro_playback", None)
+        if callable(stop_gyro):
+            try:
+                stop_gyro()
+            except Exception:
+                logger.error(f"Failed to stop gyro playback: {traceback.format_exc()}")
         keys = self.keys
         if keys is None and ser is not None:
             # 途中で keys を捨てられていてもボタンは必ず離す。ただし

@@ -503,3 +503,191 @@ def test_server_refuses_trial_while_recording_and_recording_while_trial() -> Non
     finally:
         blockly_editor._TRIAL = None
         _teardown_server(httpd, stop, gui)
+
+
+class _ImuFakeTransport(FakeTransport):
+    """IMU サンプルを手で流せる偽の線（記録のジャイロ取り込み用）。"""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._imu_listeners: list[Any] = []
+
+    def add_imu_listener(self, func: Any) -> bool:
+        self._imu_listeners.append(func)
+        return True
+
+    def remove_imu_listener(self, func: Any) -> None:
+        if func in self._imu_listeners:
+            self._imu_listeners.remove(func)
+
+    def feed_imu(self, sample: tuple[int, int, int, int, int, int]) -> None:
+        for func in list(self._imu_listeners):
+            func(sample)
+
+
+def test_recorder_collects_imu_while_recording() -> None:
+    """Given: 記録中にIMUを送る / When: 停止 / Then: サンプルと起点を取り出せること。"""
+    transport = _ImuFakeTransport()
+    sender = Sender.Sender(is_show_serial=False, transport=transport)
+    keys = KeyPress(sender)
+    rec = blockly_record.Recorder()
+    # Given: 記録を始め、ボタンを押してからIMUを2件流す
+    assert rec.start(transport) is True
+    keys.input(Button.A)
+    time.sleep(0.02)
+    transport.feed_imu((0, 0, 4096, 100, 0, 0))
+    transport.feed_imu((0, 0, 4096, 200, 0, 0))
+    time.sleep(0.02)
+    keys.inputEnd(Button.A)
+    # When: 停止
+    rec.stop()
+    take = rec.take_gyro()
+    origin = rec.timeline_origin()
+    # Then: 2件が残り、起点は操作の時刻以前
+    assert take is not None
+    t0, events = take
+    assert [sample for _at, sample in events] == [
+        (0, 0, 4096, 100, 0, 0),
+        (0, 0, 4096, 200, 0, 0),
+    ]
+    assert origin is not None and origin <= events[0][0]
+    assert t0 > 0
+    # Then: 取り出したら空になる
+    assert rec.take_gyro() is None
+
+
+def test_record_stop_writes_gyro_file_and_returns_metadata(
+    tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Given: IMU付きの記録 / When: /record/stop / Then: .pgyro を書き、応答に載せること。"""
+    from core.motion_track import MotionPlayer
+
+    monkeypatch.setattr(blockly_editor.WindowUtils, "APP_DIR", str(tmp_path))
+    transport = _ImuFakeTransport()
+    sender = Sender.Sender(is_show_serial=False, transport=transport)
+    keys = KeyPress(sender)
+    host = _FakeHost(transport)
+    addr, httpd, stop, gui = _serve_with_host(host)
+    try:
+        assert _post(addr, "/record/start", {})["ok"] is True
+        keys.input(Button.A)
+        time.sleep(0.02)
+        transport.feed_imu((0, 0, 4096, 100, 0, 0))
+        time.sleep(0.012)
+        transport.feed_imu((0, 0, 4096, 200, 0, 0))
+        time.sleep(0.02)
+        keys.inputEnd(Button.A)
+        reply = _post(addr, "/record/stop", {})
+        assert reply["ok"] is True
+        gyro = reply["gyro"]
+        assert gyro["file"].startswith("Commands/PythonCommands/")
+        assert gyro["file"].endswith(".pgyro")
+        assert gyro["count"] >= 2
+        assert gyro["duration_ms"] >= 10
+        assert "ジャイロ" in reply["message"]
+        assert "gyroNote" not in reply
+
+        player = MotionPlayer(str(tmp_path / gyro["file"]))
+        assert player.load() is True
+        assert len(player) == gyro["count"]
+        assert player.start_offset_us == gyro["offset_us"]
+    finally:
+        _teardown_server(httpd, stop, gui)
+
+
+def test_record_stop_without_imu_notes_it(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Given: IMUを送っていない記録 / When: 停止 / Then: ジャイロが無い理由を返すこと。"""
+    transport = FakeTransport()
+    sender = Sender.Sender(is_show_serial=False, transport=transport)
+    keys = KeyPress(sender)
+    host = _FakeHost(transport)
+    addr, httpd, stop, gui = _serve_with_host(host)
+    try:
+        assert _post(addr, "/record/start", {})["ok"] is True
+        keys.input(Button.A)
+        time.sleep(0.05)
+        keys.inputEnd(Button.A)
+        reply = _post(addr, "/record/stop", {})
+        assert reply["ok"] is True
+        assert "gyro" not in reply
+        assert "ジャイロは記録されていません" in reply["gyroNote"]
+    finally:
+        _teardown_server(httpd, stop, gui)
+
+
+def test_insert_steps_puts_gyro_block_first_with_codegen() -> None:
+    """Given: ジャイロ情報 / When: insertSteps / Then: 先頭に再生ブロックが入りコードも出ること。"""
+    out = run_blockly(
+        """
+const ws = new Blockly.Workspace();
+Blockly.serialization.workspaces.load({ blocks: { languageVersion: 0, blocks: [
+  { type: 'pokecon_program', fields: { NAME: 'x' },
+    inputs: { DO: { block: { type: 'pokecon_press',
+      fields: { BUTTON: 'A', DURATION: 0.1, WAIT: 0.1 } } } } }
+] } }, ws);
+const made = Blockly.PokeconEditor.insertSteps(ws, [], null,
+  { file: 'Commands/PythonCommands/g.pgyro' });
+const code = Blockly.Python.workspaceToCode(ws);
+done({ n: made.length, types: made.map((b) => b.type),
+       file: made[0] ? made[0].getFieldValue('FILE') : null,
+       has: code.indexOf('self.gyro_play("Commands/PythonCommands/g.pgyro")') >= 0 });
+"""
+    )
+    assert out["n"] == 1
+    assert out["types"] == ["pokecon_gyro"]
+    assert out["file"] == "Commands/PythonCommands/g.pgyro"
+    assert out["has"] is True
+
+
+def test_record_stop_inserts_gyro_block_before_steps() -> None:
+    """Given: ジャイロ付きの停止応答 / When: 記録を止める / Then: 手順の先頭に再生ブロックが入ること。"""
+    res = run_editor(
+        _SETUP
+        + """
+        routes['record/stop'] = { ok: true,
+          message: '1 個の操作を記録しました、ジャイロ 0.1 秒',
+          steps: [ { target: 'Button.B', duration: 0.1, wait: 0.1 } ],
+          gyro: { file: 'Commands/PythonCommands/g.pgyro', count: 20,
+                  offset_us: 0, duration_ms: 100 } };
+        boot();
+        await flush(400);
+        // 環境に focus manager が無いため、選択なしとして固定する。
+        Blockly.getSelected = () => null;
+        els.recbtn.handlers.click();
+        await flush(300);
+        els.recbtn.handlers.click();
+        await flush(300);
+        const first = ws.getBlockById('p1').getNextBlock();
+        const second = first ? first.getNextBlock() : null;
+        const code = Blockly.Python.workspaceToCode(ws);
+        try { if (typeof stopAllTimers === 'function') { stopAllTimers(); } } catch (e) {}
+        done({ firstType: first && first.type,
+               file: first && first.getFieldValue('FILE'),
+               secondType: second && second.type,
+               has: code.indexOf('self.gyro_play("Commands/PythonCommands/g.pgyro")') >= 0,
+               status: els.status.textContent });
+        """
+    )
+    assert res["firstType"] == "pokecon_gyro"
+    assert res["file"] == "Commands/PythonCommands/g.pgyro"
+    assert res["secondType"] == "pokecon_press"
+    assert res["has"] is True
+    assert "ジャイロ" in res["status"]
+
+
+def test_recording_moves_gyro_listener_with_transport() -> None:
+    """Given: 記録中に線が変わる / When: 旧線と新線へIMUを流す / Then: 新線の分だけ記録すること。"""
+    old = _ImuFakeTransport()
+    new = _ImuFakeTransport()
+    rec = blockly_record.Recorder()
+    assert rec.start(old) is True
+    old.feed_imu((0, 0, 4096, 1, 0, 0))
+    assert rec.follow(new) is True
+    old.feed_imu((0, 0, 4096, 999, 0, 0))
+    new.feed_imu((0, 0, 4096, 2, 0, 0))
+    rec.stop()
+    take = rec.take_gyro()
+    assert take is not None
+    _t0, events = take
+    values = [sample[3] for _at, sample in events]
+    assert values == [1, 2]

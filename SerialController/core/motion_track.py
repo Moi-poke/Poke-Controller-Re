@@ -31,16 +31,100 @@ from __future__ import annotations
 import os
 import struct
 import threading
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from typing import BinaryIO
 
 PGYRO_MAGIC = b"PGYR"
 PGYRO_VERSION = 1
 PGYRO_HEADER_SIZE = 32
 PGYRO_PERIOD_US = 5000
+#: 記録の空白を前値で埋める上限（秒）。これを超える停止区間は静止値へ戻す
+#: （IMU 送出が止まったあとコンソール/FW が中立へ戻る挙動に合わせる）。
+GAP_HOLD_S = 0.25
+#: 空白を埋めるときの静止値（Switch 生値。acc_z=4096 は 1g）。
+REST_SAMPLE = (0, 0, 4096, 0, 0, 0)
+#: 格子へ並べる上限（1 時間 = 200Hz）。超える記録は例外にする
+#: （黙って切り捨てると、途中から動きが消えた理由が分からない）。
+MAX_GRID_SAMPLES = 720_000
 
 _HEADER_STRUCT = struct.Struct("<4sHHIIIQI")
 _SAMPLE_STRUCT = struct.Struct("<6h")
+
+
+def resample_to_grid(
+    events: Iterable[tuple[float, tuple[int, int, int, int, int, int]]],
+    origin_s: float | None = None,
+    period_us: int = PGYRO_PERIOD_US,
+    end_s: float | None = None,
+) -> tuple[int, list[tuple[int, int, int, int, int, int]]]:
+    """実時刻つきサンプル列を固定周期の格子へ前値ホールドで並べる。
+
+    events は (perf_counter, 6値) の列。順不同でよい。origin_s からの先頭の
+    遅れをマイクロ秒で返し、以降は period_us 等間隔のサンプル列にする。
+    GAP_HOLD_S を超える空白は REST_SAMPLE で埋める（送出が止まっていた区間
+    を、最後の姿勢のまま回し続けないため）。end_s を渡すと、最後のサンプル
+    より後ろもその時刻まで静止で延ばす（マクロの終わりまでジャイロを
+    回し続けず、最後の値を積分し続けないため）。空なら (0, [])。
+
+    上限 MAX_GRID_SAMPLES を超える長さは ValueError（黙って切らない）。
+    """
+    ordered: list[tuple[float, tuple[int, int, int, int, int, int]]] = []
+    for at, sample in events:
+        try:
+            t = float(at)
+            vals = tuple(int(v) for v in sample)
+        except (TypeError, ValueError):
+            continue
+        if len(vals) != 6 or t != t:  # NaN を捨てる
+            continue
+        ordered.append((t, vals))  # type: ignore[arg-type]
+    if not ordered:
+        return (0, [])
+    ordered.sort(key=lambda pair: pair[0])
+    period_s = float(period_us) / 1_000_000.0
+    if period_s <= 0:
+        raise ValueError(f"period_usは正: {period_us!r}")
+    origin = ordered[0][0] if origin_s is None else float(origin_s)
+    offset_us = max(0, int(round((ordered[0][0] - origin) * 1_000_000.0)))
+    # 起点より前のサンプルは捨てる（マクロの時間軸に合わせる）。捨てた区間の
+    # 値は、起点の時刻で「直前の値」として残る。
+    start = ordered[0][0] if origin_s is None else max(ordered[0][0], origin)
+    end = ordered[-1][0]
+    if end_s is not None:
+        try:
+            end = max(end, float(end_s))
+        except (TypeError, ValueError):
+            pass
+    if end < start:
+        return (offset_us, [])
+    slots = int((end - start) / period_s + 1e-9) + 1
+    if slots > MAX_GRID_SAMPLES:
+        raise ValueError(
+            f"記録が長すぎます（{slots}件 > {MAX_GRID_SAMPLES}件）。"
+            "短く区切って記録してください"
+        )
+    out: list[tuple[int, int, int, int, int, int]] = []
+    idx = 0
+    current = ordered[0][1]
+    last_t = ordered[0][0]
+    for k in range(slots):
+        slot = start + k * period_s
+        while idx + 1 < len(ordered) and ordered[idx + 1][0] <= slot + 1e-9:
+            idx += 1
+            current = ordered[idx][1]
+            last_t = ordered[idx][0]
+        sample = REST_SAMPLE if slot - last_t > GAP_HOLD_S else current
+        out.append(
+            (
+                max(-32768, min(32767, sample[0])),
+                max(-32768, min(32767, sample[1])),
+                max(-32768, min(32767, sample[2])),
+                max(-32768, min(32767, sample[3])),
+                max(-32768, min(32767, sample[4])),
+                max(-32768, min(32767, sample[5])),
+            )
+        )
+    return (offset_us, out)
 
 
 class MotionRecorder:
@@ -135,6 +219,7 @@ class MotionPlayer:
     def __init__(self, path: str) -> None:
         self._path = str(path)
         self._samples: list[tuple[int, int, int, int, int, int]] = []
+        self._period_us = PGYRO_PERIOD_US
         self._start_offset_us = 0
         self._loaded = False
         self._error = ""
@@ -148,6 +233,11 @@ class MotionPlayer:
     def start_offset_us(self) -> int:
         """ボタン記録との同期用オフセット。"""
         return self._start_offset_us
+
+    @property
+    def period_us(self) -> int:
+        """サンプル周期（マイクロ秒）。送出ループの刻みに使う。"""
+        return self._period_us
 
     def load(self) -> bool:
         """全件読む。成功で True。失敗はFalse＋error。"""
@@ -191,6 +281,7 @@ class MotionPlayer:
                     chunk = body[i * 12 : (i + 1) * 12]
                     samples.append(_SAMPLE_STRUCT.unpack(chunk))
                 self._samples = samples
+                self._period_us = int(period_us)
                 self._start_offset_us = int(start_offset)
                 self._loaded = True
                 return True

@@ -186,12 +186,18 @@ def detect_hidhide(
             error=error[:300],
         )
     except Exception as e:
-        status = HidHideStatus(
+        # 一時的な失敗（CLIの取り合い・タイムアウト）を覚えない。覚えると
+        # 5秒間 HID が無いものとして扱われ、入力源の一覧から HID が消えた
+        # ままになる（実際に踏んだ）。
+        return HidHideStatus(
             installed=True,
             cli_path=path,
             error=f"{type(e).__name__}: {e}"[:300],
         )
-    _cached = (now, status)
+    if status.error:
+        _cached = None
+    else:
+        _cached = (now, status)
     return status
 
 

@@ -23,12 +23,16 @@ LOCAL_ONLY = {
     "flush_pending",
     "add_listener",
     "remove_listener",
+    # IMUの聞き手は親の一覧へ積むだけ（子へ渡すコールバックは無い）。
+    "add_imu_listener",
+    "remove_imu_listener",
     "set_hooks",
     "start_rx_pump",
     # IMU loopは親側で回す（sourceがコールバックで子へ渡せない）。
     "start_imu_loop",
     "stop_imu_loop",
     "imu_loop_running",
+    "imu_loop_owner",
     "imu_stats",
     "stop_rx_pump",
     "rx_pump_running",

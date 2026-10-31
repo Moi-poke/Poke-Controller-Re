@@ -81,6 +81,7 @@ _KNOWN_SELF_METHODS = frozenset(
         "stick_move2",
         "stick_release",
         "stick_release_both",
+        "gyro_play",
         "wait",
         "finish",
         "print2",

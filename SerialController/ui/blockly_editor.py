@@ -45,6 +45,48 @@ from services import (
 
 _BLOCKLY_DIR = Path(WindowUtils.APP_DIR) / "assets" / "blockly"
 
+#: Blockly の記録で作るジャイロ（.pgyro）の置き場。保存される `.py` と同じ
+#: フォルダに置き、コマンド一式を複写すればジャイロも付いてくるようにする。
+_BLOCKLY_GYRO_REL = Path("Commands") / "PythonCommands"
+_BLOCKLY_GYRO_PERIOD_US = 5000
+
+
+def _save_blockly_gyro(
+    take: tuple[float, list[tuple[float, tuple[int, int, int, int, int, int]]]],
+    origin: float | None,
+    end: float | None = None,
+) -> dict[str, Any] | None:
+    """記録中のIMUサンプルを .pgyro に書く。失敗は例外（呼び出し側が拾う）。
+
+    end はマクロの終わり（最後の操作＋余韻）。最後のサンプルより後ろも
+    そこで静止させ、マクロの残り時間ぶん最後の角速度を積分し続けない。
+    """
+    from core.motion_track import MotionRecorder, resample_to_grid
+
+    t0, events = take
+    offset_us, samples = resample_to_grid(
+        events,
+        origin if origin is not None else t0,
+        end_s=(end + 0.2) if end is not None else None,
+    )
+    if not samples:
+        return None
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    millis = int(time.time() * 1000) % 1000
+    name = f"blockly_{stamp}_{millis:03d}.pgyro"
+    rel = _BLOCKLY_GYRO_REL / name
+    path = Path(WindowUtils.APP_DIR) / rel
+    with MotionRecorder(str(path), start_offset_us=offset_us) as recorder:
+        for sample in samples:
+            recorder.write(sample)
+    return {
+        "file": rel.as_posix(),
+        "count": len(samples),
+        "offset_us": offset_us,
+        "duration_ms": len(samples) * (_BLOCKLY_GYRO_PERIOD_US // 1000),
+    }
+
+
 #: POST本文の上限（/save・/delete・/template用）。localhost用の安全弁。
 MAX_BODY_BYTES = 5 * 1024 * 1024
 #: アップロード付き照合（/match source=upload）用の上限。
@@ -1110,14 +1152,15 @@ class _Handler(http.server.SimpleHTTPRequestHandler):
             )
             return
 
-        def _attach() -> tuple[bool, str]:
+        def _attach() -> tuple[bool, str, bool]:
             if _RECORDER.recording:
-                return (False, "既に記録中です（止めてから始めてください）")
+                return (False, "既に記録中です（止めてから始めてください）", False)
             if _our_command(_TRIAL) is not None:
                 # 試し実行の操作まで記録に混ざるため断る。
                 return (
                     False,
                     "試し実行中は記録できません（試し実行を止めてから始めてください）",
+                    False,
                 )
             blocked = _RECORD_BLOCKED
             if blocked is not None:
@@ -1127,7 +1170,7 @@ class _Handler(http.server.SimpleHTTPRequestHandler):
                     reason = None
                 if reason:
                     # 通常コマンドの操作まで記録に混ざるため断る。
-                    return (False, str(reason))
+                    return (False, str(reason), False)
             serial = getattr(host, "serial", None)
             sender = getattr(serial, "sender", None)
             transport = getattr(sender, "transport", None)
@@ -1135,17 +1178,29 @@ class _Handler(http.server.SimpleHTTPRequestHandler):
                 return (
                     False,
                     "送信線が無いため記録できません（シリアルに接続してから試してください）",
+                    False,
                 )
             if not _RECORDER.start(transport):
-                return (False, "この通信方式では記録できません（送信行を作らないため）")
-            return (True, "記録を始めました（本体で操作してください）")
+                return (
+                    False,
+                    "この通信方式では記録できません（送信行を作らないため）",
+                    False,
+                )
+            # ジャイロ送出中かを返す（止まっていれば画面が先に知らせる）。
+            imu_on = False
+            try:
+                running = getattr(transport, "imu_loop_running", None)
+                imu_on = bool(running()) if callable(running) else False
+            except Exception:
+                imu_on = False
+            return (True, "記録を始めました（本体で操作してください）", imu_on)
 
         try:
-            ok, message = _call_on_gui(_attach)
+            ok, message, imu_on = _call_on_gui(_attach)
         except Exception as e:
             self._reply(False, f"本体が応答しません: {e}")
             return
-        self._reply(ok, message)
+        self._reply(ok, message, {"imu": imu_on} if ok else None)
 
     def _stop_record(self) -> None:
         """記録を外し、手順を返す（マクロ記録の停止）。"""
@@ -1157,30 +1212,69 @@ class _Handler(http.server.SimpleHTTPRequestHandler):
             )
             return
 
-        def _detach() -> tuple[bool, list[dict[str, Any]], list[Any], bool]:
+        def _detach() -> tuple[
+            bool,
+            list[dict[str, Any]],
+            list[Any],
+            bool,
+            tuple[float, list[tuple[float, tuple[int, int, int, int, int, int]]]]
+            | None,
+            float | None,
+            float | None,
+        ]:
             was = _RECORDER.recording
             warnings: list[Any] = []
             steps = _RECORDER.stop(warnings)
             contaminated = bool(_RECORDER.contaminated)
+            gyro = _RECORDER.take_gyro()
+            origin = _RECORDER.timeline_origin()
+            end = _RECORDER.timeline_end()
             return (
                 was,
                 steps if isinstance(steps, list) else [],
                 warnings,
                 contaminated,
+                gyro,
+                origin,
+                end,
             )
 
         try:
-            was_recording, steps, warnings, contaminated = _call_on_gui(_detach)
+            was_recording, steps, warnings, contaminated, gyro, origin, end = (
+                _call_on_gui(_detach)
+            )
         except Exception as e:
             self._reply(False, f"本体が応答しません: {e}")
             return
         if not was_recording:
             self._reply(False, "記録していません（記録ボタンで始めてください）")
             return
+        gyro_payload: dict[str, Any] | None = None
+        gyro_note = ""
+        if gyro is not None:
+            try:
+                gyro_payload = _save_blockly_gyro(gyro, origin, end)
+            except Exception as e:
+                gyro_note = f"ジャイロの保存に失敗しました: {e}"
+        if gyro_payload is None and not gyro_note:
+            if gyro is not None:
+                gyro_note = "ジャイロは操作の前だけだったため記録していません"
+            else:
+                gyro_note = (
+                    "ジャイロは記録されていません"
+                    "（ジャイロ送出を開始してから記録してください）"
+                )
         message = f"{len(steps)} 個の操作を記録しました"
+        if gyro_payload is not None:
+            seconds = gyro_payload["duration_ms"] / 1000.0
+            message += f"、ジャイロ {seconds:.1f} 秒"
         if contaminated:
             message += "（本体側の操作が混ざった可能性があります）"
         extra: dict[str, Any] = {"steps": steps}
+        if gyro_payload is not None:
+            extra["gyro"] = gyro_payload
+        if gyro_note:
+            extra["gyroNote"] = gyro_note
         if warnings:
             extra["warnings"] = warnings
         if contaminated:

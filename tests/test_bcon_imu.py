@@ -200,3 +200,99 @@ def test_imu_wave_sine_static():
     assert got[0] == 0 and got[1] == 0 and got[2] == 4096
     assert got[4] == 0 and got[5] == 0
     assert -100 <= got[3] <= 100
+
+
+def test_imu_listener_gets_only_sent_samples():
+    """聞き手には実際に送れたサンプルだけが、int16に丸めて届く。"""
+    made = _open_transport()
+    seen: list[tuple[int, int, int, int, int, int]] = []
+    callback = seen.append
+    try:
+        assert made.add_imu_listener(callback) is True
+        assert made.send_imu(99999, -99999, 4096, 1, 2, 3) is True
+        assert seen == [(32767, -32768, 4096, 1, 2, 3)]
+
+        made.hold_input(True)
+        assert made.send_imu(0, 0, 4096, 0, 0, 0) is False
+        assert len(seen) == 1
+
+        made.remove_imu_listener(callback)
+        made.hold_input(False)
+        assert made.send_imu(0, 0, 4096, 0, 0, 0) is True
+        assert len(seen) == 1
+    finally:
+        made.close()
+
+
+def test_imu_loop_replace_switches_source():
+    """replace=True は動いているloopのsourceを差し替える。"""
+    import struct
+
+    from core.transport.bcon_protocol import T_IMU_SAMPLE
+
+    made = _open_transport()
+    try:
+        assert made.start_imu_loop(lambda: (1, 0, 4096, 0, 0, 0), interval_s=0.01)
+        deadline = time.time() + 2.0
+        while made.imu_stats()["sent"] < 2 and time.time() < deadline:
+            time.sleep(0.01)
+        # 差し替え前は True を返すだけで、source は変わらない。
+        assert made.start_imu_loop(lambda: (3, 0, 4096, 0, 0, 0), interval_s=0.01)
+        assert made.start_imu_loop(
+            lambda: (2, 0, 4096, 0, 0, 0), interval_s=0.01, replace=True
+        )
+        deadline = time.time() + 2.0
+        axes: list[int] = []
+        while time.time() < deadline:
+            axes = [
+                struct.unpack("<6h", f[3:15])[0]
+                for f in made.ser.written
+                if len(f) >= 15 and f[1] == T_IMU_SAMPLE
+            ]
+            if 2 in axes:
+                break
+            time.sleep(0.01)
+        assert 2 in axes, "差し替えたsourceの値が送られていない"
+        assert 3 not in axes, "replace=False の呼び出しがsourceを変えてしまった"
+        assert made.stop_imu_loop() is True
+    finally:
+        made.close()
+
+
+def test_imu_loop_owner_guards_stop():
+    """持ち主が違う停止は効かず、自分の停止だけがループを止める。"""
+    made = _open_transport()
+    try:
+        assert made.start_imu_loop(
+            lambda: (0, 0, 4096, 0, 0, 0), interval_s=0.01, owner="panel"
+        )
+        assert made.imu_loop_owner() == "panel"
+        assert made.stop_imu_loop(owner="macro:1") is False
+        assert made.imu_loop_running() is True
+        assert made.stop_imu_loop(owner="panel") is True
+        deadline = time.time() + 2.0
+        while made.imu_loop_running() and time.time() < deadline:
+            time.sleep(0.01)
+        assert made.imu_loop_owner() == ""
+    finally:
+        made.close()
+
+
+def test_imu_loop_replace_changes_owner():
+    """replace=True で引き継いだら持ち主も変わる。"""
+    made = _open_transport()
+    try:
+        assert made.start_imu_loop(
+            lambda: (1, 0, 4096, 0, 0, 0), interval_s=0.01, owner="panel"
+        )
+        assert made.start_imu_loop(
+            lambda: (2, 0, 4096, 0, 0, 0),
+            interval_s=0.01,
+            replace=True,
+            owner="macro:1",
+        )
+        assert made.imu_loop_owner() == "macro:1"
+        assert made.stop_imu_loop(owner="panel") is False
+        assert made.stop_imu_loop(owner="macro:1") is True
+    finally:
+        made.close()

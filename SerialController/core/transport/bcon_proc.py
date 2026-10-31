@@ -28,6 +28,7 @@ import sys
 import threading
 import time
 import traceback
+from collections.abc import Callable
 from typing import Any
 
 from core.transport.base import BCON_STATE, Transport
@@ -581,10 +582,16 @@ class BconProcTransport(Transport):
         self._imu_loop_thread: threading.Thread | None = None
         self._imu_loop_stop = threading.Event()
         self._imu_gen = 0
+        # いまループを回している持ち主（"panel" / "macro:<id>" / ""）。
+        self._imu_owner = ""
         self._imu_lock = threading.Lock()
         self._imu_stats_lock = threading.Lock()
         self._imu_sent = 0
         self._imu_dropped = 0
+        # 親が投入したIMUサンプルを配る相手（Blocklyの記録など）。
+        self._imu_listeners: list[
+            Callable[[tuple[int, int, int, int, int, int]], None]
+        ] = []
         try:
             atexit.register(self._terminate_worker)
         except Exception:
@@ -1171,7 +1178,20 @@ class BconProcTransport(Transport):
                 self._imu_dropped += 1
             return False
         try:
-            self._cmd_q.put(("imu", ax, ay, az, gx, gy, gz))
+            vals = (
+                max(-32768, min(32767, int(ax))),
+                max(-32768, min(32767, int(ay))),
+                max(-32768, min(32767, int(az))),
+                max(-32768, min(32767, int(gx))),
+                max(-32768, min(32767, int(gy))),
+                max(-32768, min(32767, int(gz))),
+            )
+        except (TypeError, ValueError):
+            with self._imu_stats_lock:
+                self._imu_dropped += 1
+            return False
+        try:
+            self._cmd_q.put(("imu", *vals))
         except Exception:
             with self._imu_stats_lock:
                 self._imu_dropped += 1
@@ -1180,17 +1200,70 @@ class BconProcTransport(Transport):
             return False
         with self._imu_stats_lock:
             self._imu_sent += 1
+        self._notify_imu(vals)
         return True
+
+    def _notify_imu(self, sample: tuple[int, int, int, int, int, int]) -> None:
+        """投入済みのIMUサンプルを聞き手へ配る。例外は外へ出さない。"""
+        try:
+            with self._imu_stats_lock:
+                funcs = list(self._imu_listeners)
+            for func in funcs:
+                try:
+                    func(sample)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    def add_imu_listener(self, func: Any) -> bool:
+        """投入したIMUサンプルを受け取る相手を足す（Blocklyの記録用）。"""
+        if not callable(func):
+            return False
+        try:
+            with self._imu_stats_lock:
+                if func not in self._imu_listeners:
+                    self._imu_listeners.append(func)
+            return True
+        except Exception:
+            return False
+
+    def remove_imu_listener(self, func: Any) -> None:
+        """IMU の聞き手を外す。例外は投げない。"""
+        try:
+            with self._imu_stats_lock:
+                if func in self._imu_listeners:
+                    self._imu_listeners.remove(func)
+        except Exception:
+            pass
 
     def imu_loop_running(self) -> bool:
         thread = self._imu_loop_thread
         return bool(thread is not None and thread.is_alive())
 
-    def start_imu_loop(self, source: Any, interval_s: float = IMU_INTERVAL_S) -> bool:
+    def imu_loop_owner(self) -> str:
+        """いまIMUループを回している持ち主。空なら誰も回していない。"""
+        try:
+            with self._imu_lock:
+                return str(self._imu_owner)
+        except Exception:
+            return ""
+
+    def start_imu_loop(
+        self,
+        source: Any,
+        interval_s: float = IMU_INTERVAL_S,
+        *,
+        replace: bool = False,
+        owner: str = "",
+    ) -> bool:
         """親側でサンプルを読み、子のIMUキューへ載せる。
 
         source は関数のため子プロセスへ渡せない。送出は子が行うので、
         親は読むだけの薄いループを持つ。
+
+        replace=True は、既に動いていても source を差し替える（マクロの
+        ジャイロ再生が、パネルの送出を引き継ぐ用途）。
 
         停止要求中に旧スレッドが生き残っていても（stopのjoinが0.5秒で
         諦めた場合）、世代を進めて新しいsourceで起こす。旧スレッドは
@@ -1203,10 +1276,12 @@ class BconProcTransport(Transport):
                 thread is not None
                 and thread.is_alive()
                 and not self._imu_loop_stop.is_set()
+                and not replace
             ):
                 return True
             self._imu_gen += 1
             generation = self._imu_gen
+            self._imu_owner = str(owner)
             stop = threading.Event()
             self._imu_loop_stop = stop
             worker = threading.Thread(
@@ -1250,16 +1325,22 @@ class BconProcTransport(Transport):
             else:
                 deadline = time.perf_counter()
 
-    def stop_imu_loop(self) -> bool:
+    def stop_imu_loop(self, owner: str | None = None) -> bool:
         """止まるまで待つ（上限0.5秒）。死んでいなければ handle を残す。
+
+        owner を渡したときは、いまの持ち主が一致する場合だけ止める
+        （パネルの停止でマクロの再生を巻き込まない・その逆も避ける）。
 
         joinを打ち切ってもhandleを消さないのは、startが「まだ生きている
         旧スレッド」を把握して世代を進めるため。停止イベントは世代ごとに
         別物なので、旧スレッドが次世代の開始で生き返ることはない。
         """
         with self._imu_lock:
+            if owner is not None and self._imu_owner != str(owner):
+                return False
             stop = self._imu_loop_stop
             thread = self._imu_loop_thread
+            self._imu_owner = ""
         stop.set()
         if thread is None:
             return True

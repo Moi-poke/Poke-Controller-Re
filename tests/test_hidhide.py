@@ -77,3 +77,27 @@ def test_detect_hidhide_missing_cli() -> None:
     assert status.installed is False
     assert status.ready is False
     assert "インストール" in status.summary()
+
+
+def test_detect_hidhide_does_not_cache_transient_failure() -> None:
+    """CLIが一度失敗しても、次の呼び出しで読み直す（HID欄が消えたままにしない）。"""
+    import core.hidhide as hh
+
+    hh.clear_cache()
+    out = "\n".join(
+        [
+            "--cloak-on",
+            '--dev-hide "HID\\VID_057E&PID_2009&MI_00\\A&43A2154&0&0000"',
+            f'--app-reg "{sys.executable}"',
+        ]
+    )
+    results = [(1, "", "driver busy"), (0, out, "")]
+
+    def runner(_path: str):
+        return results.pop(0)
+
+    first = hh.detect_hidhide(__file__, runner=runner)
+    assert first.ready is False
+    second = hh.detect_hidhide(__file__, runner=runner)
+    assert second.ready is True
+    hh.clear_cache()

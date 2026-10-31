@@ -14,6 +14,7 @@ BconSetupのcol_infoへLabelFrameとして組み込む。入力源の選択・�
 
 from __future__ import annotations
 
+import os
 import queue
 import threading
 import time
@@ -30,6 +31,7 @@ DEBUG_SOURCES = frozenset({"sine", "step", "rest", "manual"})
 SOURCE_LABELS = (
     ("sensor", "パッドAPI"),
     ("hid", "HID直結"),
+    ("file", "記録の再生"),
     ("sine", "SINE波形"),
     ("step", "STEP波形"),
     ("rest", "静止値"),
@@ -111,6 +113,17 @@ class ImuPanel:
         self._live_trim: _LiveTrim | None = None
         self._sensor_reader: Any = None
         self._step_gen: Any = None
+        # 記録と再生。記録器は送出ループのスレッドが書き、停止時に閉じる。
+        # 再生は「記録の再生」源として同じ送出ループに渡す。
+        self._recorder: Any = None
+        self._player: Any = None
+        self._playing = False
+        self._source_error = ""
+        # 開始時にGUIスレッドで読み取った値。作業スレッドからTk変数を
+        # 読むと「main thread is not in main loop」で落ちる。
+        self._start_play_path = ""
+        self._start_record_path = ""
+        self._start_record_on = False
         # 直近1秒の最大振幅。表示は瞬時値のため、単発の跳び(spike)を
         # 見落とす。Switch側の誤動作切り分け用に統計行へ出す。
         self._peak_g = 0.0
@@ -174,6 +187,24 @@ class ImuPanel:
         self._btn_step = ttk.Button(body, text="STEP発火", command=self._on_step_fire)
         self._btn_step.grid(row=1, column=2, sticky=tk.EW, padx=2, pady=2)
 
+        # 再生ファイルの行。「記録の再生」を選んだときだけ出す。
+        self._play_frame = ttk.Frame(body)
+        self._play_frame.columnconfigure(1, weight=1)
+        ttk.Label(self._play_frame, text="再生ファイル").grid(
+            row=0, column=0, sticky=tk.W, padx=2, pady=2
+        )
+        self._play_path_var = tk.StringVar(value="")
+        self._play_entry = ttk.Entry(
+            self._play_frame, width=18, textvariable=self._play_path_var
+        )
+        self._play_entry.grid(row=0, column=1, sticky=tk.EW, padx=2, pady=2)
+        self._play_browse = ttk.Button(
+            self._play_frame, text="参照…", command=self._on_pick_play
+        )
+        self._play_browse.grid(row=0, column=2, sticky=tk.E, padx=2, pady=2)
+        self._play_frame.grid(row=1, column=0, columnspan=2, sticky=tk.EW)
+        self._play_frame.grid_remove()
+
         self._invert_label = ttk.Label(body, text="反転")
         self._invert_label.grid(row=3, column=0, sticky=tk.W, padx=2, pady=2)
         self._invert_var = tk.StringVar(value=CURRENT_INVERT_LABEL)
@@ -213,7 +244,35 @@ class ImuPanel:
             variable=self._detail_var,
             command=self._on_detail_toggled,
         )
-        self._detail_cb.grid(row=6, column=0, sticky=tk.W, padx=2, pady=2)
+        self._detail_cb.grid(row=7, column=0, sticky=tk.W, padx=2, pady=2)
+        # 記録: 送出する値をそのまま .pgyro へ保存する。記録の有無は開始時に
+        # 読み、送出中の切替は次回の開始から効く（途中で開閉しない）。
+        self._record_frame = ttk.LabelFrame(body, text="記録（.pgyro）", padding=4)
+        self._record_frame.columnconfigure(1, weight=1)
+        ttk.Label(self._record_frame, text="ファイル").grid(
+            row=0, column=0, sticky=tk.W, padx=2, pady=2
+        )
+        self._record_path_var = tk.StringVar(value="records/motion.pgyro")
+        self._record_entry = ttk.Entry(
+            self._record_frame, width=18, textvariable=self._record_path_var
+        )
+        self._record_entry.grid(row=0, column=1, sticky=tk.EW, padx=2, pady=2)
+        self._record_browse = ttk.Button(
+            self._record_frame, text="参照…", command=self._on_pick_record
+        )
+        self._record_browse.grid(row=0, column=2, sticky=tk.E, padx=2, pady=2)
+        self._record_var = tk.BooleanVar(value=False)
+        self._record_cb = ttk.Checkbutton(
+            self._record_frame,
+            text="送出値を記録する",
+            variable=self._record_var,
+            command=self._on_record_toggled,
+        )
+        self._record_cb.grid(row=1, column=0, columnspan=3, sticky=tk.W, padx=2)
+        # 反転・感度の行（4）と重ねない。手動入力（6）・詳細（7）の手前へ置く。
+        self._record_frame.grid(
+            row=5, column=0, columnspan=3, sticky=tk.EW, pady=(4, 0)
+        )
         # 手動入力: 6軸の生値を直接指定して送る。入力源が「手動入力」の
         # ときだけ表示する。値はtraceでメインスレッドから取り込み、
         # 送出スレッドはスナップショット(int6)だけを読む。
@@ -242,9 +301,9 @@ class ImuPanel:
             spin.bind("<Return>", normalize, add="+")
             var.trace_add("write", self._make_manual_trace(i, var))
             self._manual_vars.append(var)
-        # 反転・感度の行（4）と重ねない。詳細表示（6）の手前へ置く。
+        # 反転・感度の行（4）と重ねない。詳細表示（7）の手前へ置く。
         self._manual_frame.grid(
-            row=5, column=0, columnspan=3, sticky=tk.EW, pady=(4, 0)
+            row=6, column=0, columnspan=3, sticky=tk.EW, pady=(4, 0)
         )
         self._manual_frame.grid_remove()
         self._source_cb.bind("<<ComboboxSelected>>", self._on_source_changed, add="")
@@ -278,7 +337,7 @@ class ImuPanel:
                 try:
                     from core.hidhide import hidhide_ready
 
-                    if not hidhide_ready():
+                    if not hidhide_ready(force=True):
                         # HidHide未設定でHIDを開くとSteam/SDLと競合する。
                         # 起動時は安全なパッドAPIへ寄せる。
                         source = "sensor"
@@ -291,6 +350,10 @@ class ImuPanel:
             pad = int(settings.get("pad_index", "0"))
             if 0 <= pad <= 3:
                 self._pad_var.set(str(pad))
+            record_path = str(settings.get("record_path", "") or "")
+            if record_path:
+                self._record_path_var.set(record_path)
+            self._play_path_var.set(str(settings.get("play_path", "") or ""))
             self._load_invert_from_settings(settings)
             scale = float(settings.get("gyro_scale", "1.0") or 1.0)
             self._scale_var.set(f"{scale:g}")
@@ -450,6 +513,10 @@ class ImuPanel:
             self._pad_frame.grid()
         else:
             self._pad_frame.grid_remove()
+        if source == "file":
+            self._play_frame.grid()
+        else:
+            self._play_frame.grid_remove()
         if source == "step":
             self._btn_step.grid()
         else:
@@ -496,7 +563,7 @@ class ImuPanel:
         try:
             from core.hidhide import hidhide_ready
 
-            hid_ok = bool(hidhide_ready())
+            hid_ok = bool(hidhide_ready(force=True))
         except Exception:
             hid_ok = False
         values = [
@@ -634,7 +701,16 @@ class ImuPanel:
             "source": source,
             "pad_index": str(pad),
             "gyro_scale": scale_text,
+            "record_path": self._record_path_var.get().strip(),
+            "play_path": self._play_path_var.get().strip(),
         }
+        # 作業スレッドはTk変数を読めない。ここで文字列へ写しておく。
+        self._start_play_path = values["play_path"]
+        self._start_record_path = values["record_path"]
+        try:
+            self._start_record_on = bool(self._record_var.get())
+        except Exception:
+            self._start_record_on = False
         mode = self._invert_mode()
         if mode is not None:
             # プリセットを明示的に選んだときだけ書く。未変更のまま開始して
@@ -673,6 +749,52 @@ class ImuPanel:
         finally:
             self._stopping = False
 
+    def _on_record_toggled(self) -> None:
+        """記録の有無は次回の開始から効く（送出中の開閉はしない）。"""
+        if self._streaming:
+            try:
+                self._record_var.set(self._recorder is not None)
+            except Exception:
+                pass
+            self._queue.put(("log", "記録の有無は次回の送出開始から効きます。"))
+
+    def _ask_file(self, save: bool) -> str:
+        """記録ファイルの選択。取り消し・失敗は空文字。"""
+        try:
+            from tkinter import filedialog
+
+            types = [("ジャイロ記録", "*.pgyro"), ("すべてのファイル", "*.*")]
+            if save:
+                return str(
+                    filedialog.asksaveasfilename(
+                        parent=self.frame,
+                        defaultextension=".pgyro",
+                        initialfile="motion.pgyro",
+                        filetypes=types,
+                    )
+                    or ""
+                )
+            return str(
+                filedialog.askopenfilename(parent=self.frame, filetypes=types) or ""
+            )
+        except Exception:
+            return ""
+
+    def _on_pick_play(self) -> None:
+        """再生ファイルを選ぶ。"""
+        path = self._ask_file(save=False)
+        if path:
+            self._play_path_var.set(path)
+
+    def _on_pick_record(self) -> None:
+        """記録先を選ぶ。拡張子が無ければ .pgyro を補う。"""
+        path = self._ask_file(save=True)
+        if not path:
+            return
+        if not os.path.splitext(path)[1]:
+            path += ".pgyro"
+        self._record_path_var.set(path)
+
     def _on_step_fire(self) -> None:
         """STEP波形の再発火。送出中でSTEP源のときだけ効く。"""
         gen = self._step_gen
@@ -698,9 +820,9 @@ class ImuPanel:
                 from GyroView import GyroView
 
                 view = GyroView(getattr(self, "_body", self.frame), rate_range=500)
-                # 反転（3）・感度（4）・手動入力（5）・詳細チェック（6）と
-                # 重ねない。それらの下へ置く。
-                view.grid(row=7, column=0, columnspan=3, sticky=tk.EW)
+                # 反転（3）・感度（4）・記録（5）・手動入力（6）・詳細
+                # チェック（7）と重ねない。それらの下へ置く。
+                view.grid(row=8, column=0, columnspan=3, sticky=tk.EW)
                 reset = ttk.Button(view, text="ヨーリセット", command=view.reset_yaw)
                 reset.pack(pady=(0, 4))
                 self._gyro_view = view
@@ -728,6 +850,8 @@ class ImuPanel:
 
     def _build_source(self, source: str, pad: int) -> Any:
         """入力源の生成器を作る。失敗はNone。"""
+        if source == "file":
+            return self._open_playback()
         if source == "manual":
             return self._manual_reader()
         try:
@@ -765,7 +889,7 @@ class ImuPanel:
             try:
                 from core.hidhide import hidhide_ready
 
-                if not hidhide_ready():
+                if not hidhide_ready(force=True):
                     return None
             except Exception:
                 return None
@@ -860,6 +984,92 @@ class ImuPanel:
         except Exception:
             return None
 
+    def _open_playback(self) -> Any:
+        """記録ファイルを読む生成器を作る。失敗はNone＋理由を_source_errorへ。"""
+        self._source_error = ""
+        path = self._start_play_path
+        if not path:
+            self._source_error = "再生ファイルを選んでください。"
+            return None
+        try:
+            from core.motion_track import MotionPlayer
+
+            player = MotionPlayer(path)
+            if not player.load():
+                self._source_error = f"記録を読めません: {path}（{player.error}）"
+                return None
+            if len(player) == 0:
+                self._source_error = f"記録が空です: {path}"
+                return None
+        except Exception as e:
+            self._source_error = f"記録を読めません: {e!r}"
+            return None
+        self._player = player
+        self._playing = True
+        inner = player.as_source()
+        panel = self
+        done = {"end": False}
+        total = len(player)
+
+        def played() -> Any:
+            # 終端は1回だけ届け、送出ループを止める（最後の値を送り続けない）。
+            sample = inner()
+            if sample is None and not done["end"]:
+                done["end"] = True
+                panel._queue.put(("playback_end", total))
+            return sample
+
+        return played
+
+    def _open_recorder(self, source: str) -> bool:
+        """記録先を開く。記録しない設定なら何もせずTrue。"""
+        if not self._start_record_on:
+            return True
+        path = self._start_record_path
+        if not path:
+            self._queue.put(("log", "記録先が未設定です。参照…で選んでください。"))
+            return False
+        # 再生元と同じファイルを開くと、書き込み（上書き）で元の記録が消える。
+        if source == "file":
+            play = self._start_play_path
+            if os.path.normcase(os.path.abspath(path)) == os.path.normcase(
+                os.path.abspath(play)
+            ):
+                self._queue.put(
+                    ("log", "記録先が再生ファイルと同じため、記録せず再生します。")
+                )
+                return True
+        try:
+            from core.motion_track import MotionRecorder
+
+            recorder = MotionRecorder(path)
+            recorder.open()
+        except Exception as e:
+            self._queue.put(("log", f"記録を開始できません: {e!r}"))
+            return False
+        self._recorder = recorder
+        return True
+
+    def _record_sample(self, sample: tuple[int, int, int, int, int, int]) -> None:
+        """送出する1件を記録する。記録中でなければ何もしない。"""
+        recorder = self._recorder
+        if recorder is None:
+            return
+        try:
+            recorder.write(sample)
+        except Exception:
+            pass
+
+    def _push_view(self, sample: tuple[int, int, int, int, int, int]) -> None:
+        """詳細表示へ1件渡す。窓が無ければ何もしない。"""
+        view = getattr(self, "_gyro_view", None)
+        if view is None:
+            return
+        try:
+            view.push_raw(*sample)
+        except Exception:
+            pass
+
     @staticmethod
     def _sample_transform(
         settings: dict[str, str],
@@ -948,7 +1158,7 @@ class ImuPanel:
             is_armed = getattr(reader, "is_armed", None)
             from core.hidhide import hidhide_ready
 
-            if not hidhide_ready():
+            if not hidhide_ready(force=True):
                 return (
                     "HidHideが未導入・未設定のためHID直結を使えません。"
                     "READMEのHidHide手順を確認してください。"
@@ -990,10 +1200,20 @@ class ImuPanel:
                 )
             elif source == "hid":
                 self._queue.put(("log", self._hid_failure_message()))
+            elif source == "file":
+                self._queue.put(
+                    ("log", self._source_error or "記録を再生できませんでした。")
+                )
             else:
                 self._queue.put(
                     ("log", f"波形の生成に失敗: {source}。設定を確認してください。")
                 )
+            return
+        # 再生は記録済みの送出値をそのまま返す（符号・倍率を二重に掛けない）。
+        if source != "file":
+            self._playing = False
+        if not self._open_recorder(source):
+            self._close_source()
             return
         # 可視化へ送出値を流す。窓の開閉に追従するため都度引き直す。
         inner = gen
@@ -1004,7 +1224,11 @@ class ImuPanel:
             settings_now = {}
         # 加工値は開始時の設定で固定せず、不変タプルを毎サンプル読む。
         # GUIスレッドの反転・感度変更は次のサンプルから効く。
-        self._live_trim = self._live_trim_from_settings(settings_now, source)
+        if source == "file":
+            # 再生は記録済みの送出値をそのまま返す（下のwatchedを参照）。
+            self._live_trim = None
+        else:
+            self._live_trim = self._live_trim_from_settings(settings_now, source)
 
         def watched() -> Any:
             sample = inner()
@@ -1014,6 +1238,13 @@ class ImuPanel:
                 ax, ay, az, gx, gy, gz = (int(v) for v in sample)
             except (TypeError, ValueError):
                 return None
+            if panel._playing:
+                # 記録は送出値をそのまま持つ。符号・倍率・不感帯を再適用
+                # すると二重に加工され、記録した動きからずれる。
+                out = (ax, ay, az, gx, gy, gz)
+                panel._record_sample(out)
+                panel._push_view(out)
+                return out
             trim = panel._live_trim
             hid_bias_raw: tuple[int, int, int] | None = None
             hid_scale: tuple[float, float, float] | None = None
@@ -1078,25 +1309,47 @@ class ImuPanel:
                 hi = panel._acc_max[i]
                 panel._acc_min[i] = v if lo is None or v < lo else lo
                 panel._acc_max[i] = v if hi is None or v > hi else hi
-            view = getattr(panel, "_gyro_view", None)
-            if view is not None:
-                try:
-                    view.push_raw(ax, ay, az, gx, gy, gz)
-                except Exception:
-                    pass
+            view_sample = (ax, ay, az, gx, gy, gz)
+            panel._push_view(view_sample)
+            # 実際に送出する値を記録する（再生で同じ値が戻る）。
+            panel._record_sample(view_sample)
             # 加工後の値を送出する（不感帯を実際に効かせる）。
-            return (ax, ay, az, gx, gy, gz)
+            return view_sample
 
         if self._stop:
             # close() が先に走った場合は線を掴まない。
             self._close_source()
             return
         gen = watched
+        interval_s: float | None = None
+        if source == "file" and self._player is not None:
+            # 記録の周期で送る（v1は200Hz固定。ヘッダー値を尊重する）。
+            try:
+                interval_s = float(self._player.period_us) / 1_000_000.0
+            except Exception:
+                interval_s = None
+        # 手動の開始は、マクロのジャイロ再生より利用者の意思を優先する。
+        # replace=True で引き継ぎ、停止は owner="panel" のときだけ行う
+        # （マクロの後始末がパネルの送出を巻き込まない）。
+        previous_owner = ""
+        get_owner = getattr(transport, "imu_loop_owner", None)
+        if callable(get_owner):
+            try:
+                previous_owner = str(get_owner())
+            except Exception:
+                previous_owner = ""
         try:
             start = getattr(transport, "start_imu_loop", None)
-            ok = bool(start(gen)) if callable(start) else False
+            if not callable(start):
+                ok = False
+            elif interval_s is not None:
+                ok = bool(start(gen, interval_s, replace=True, owner="panel"))
+            else:
+                ok = bool(start(gen, replace=True, owner="panel"))
         except Exception:
             ok = False
+        if ok and previous_owner and previous_owner != "panel":
+            self._queue.put(("log", "他のジャイロ送出を引き継ぎました。"))
         if not ok:
             self._queue.put(("log", "ジャイロ送信を開始できませんでした。"))
             self._close_source()
@@ -1115,7 +1368,15 @@ class ImuPanel:
             try:
                 stop = getattr(transport, "stop_imu_loop", None)
                 if callable(stop):
-                    stop()
+                    stopped = stop(owner="panel")
+                    if stopped is False:
+                        self._queue.put(
+                            (
+                                "log",
+                                "他のジャイロ送出が動いているため、"
+                                "パネルからは停止していません。",
+                            )
+                        )
             except Exception:
                 pass
         self._close_source()
@@ -1124,11 +1385,14 @@ class ImuPanel:
         self._queue.put(("log", "ジャイロ送信を停止しました。"))
 
     def _close_source(self) -> None:
-        """入力源を閉じる。例外は投げない。
+        """入力源と記録器を閉じる。例外は投げない。
 
         HID直結はパッド読みと共有しているため、ここでは閉じない
         （閉じるとボタン入力が止まる）。プロセス終了時に任せる。
         """
+        self._close_recorder()
+        self._playing = False
+        self._player = None
         reader, self._sensor_reader = self._sensor_reader, None
         self._step_gen = None
         if reader is None:
@@ -1142,6 +1406,22 @@ class ImuPanel:
             pass
         try:
             reader.close()
+        except Exception:
+            pass
+
+    def _close_recorder(self) -> None:
+        """記録を閉じ、件数を1行出す。例外は投げない。"""
+        recorder, self._recorder = self._recorder, None
+        if recorder is None:
+            return
+        try:
+            recorder.close()
+        except Exception:
+            pass
+        try:
+            count = int(recorder.count)
+            path = self._start_record_path
+            self._queue.put(("log", f"記録しました: {path} {count}件"))
         except Exception:
             pass
 
@@ -1168,6 +1448,20 @@ class ImuPanel:
                             self._btn_toggle.configure(text="開始")
                     except Exception:
                         pass
+                elif kind == "playback_end":
+                    # 記録を送り切ったら自分で止める。最後の値を送り続けると
+                    # コンソール側で静止姿勢のまま入力が残る。
+                    try:
+                        self._log(f"再生が終了しました（{payload}件）。")
+                    except Exception:
+                        pass
+                    if self._streaming and not self._stopping:
+                        self._stopping = True
+                        try:
+                            self._btn_toggle.configure(text="停止中…")
+                        except Exception:
+                            pass
+                        threading.Thread(target=self._stop_worker, daemon=True).start()
         except Exception:
             pass
         try:
@@ -1201,10 +1495,28 @@ class ImuPanel:
         self._acc_min = [None, None, None]
         self._acc_max = [None, None, None]
         span_txt = f"ΔA=({spans[0]:.2f},{spans[1]:.2f},{spans[2]:.2f})G"
+        rec_txt = ""
+        recorder = self._recorder
+        if recorder is not None:
+            try:
+                rec_txt = f" 記録={recorder.count}件"
+            except Exception:
+                rec_txt = ""
+        if self._playing and self._player is not None:
+            try:
+                rec_txt += f" 再生 全{len(self._player)}件"
+            except Exception:
+                pass
+        owner_note = ""
         try:
             transport = self._transport_provider()
             stats = getattr(transport, "imu_stats", None)
             info = stats() if callable(stats) else None
+            get_owner = getattr(transport, "imu_loop_owner", None)
+            if callable(get_owner):
+                owner = str(get_owner())
+                if owner and owner != "panel":
+                    owner_note = f"（{owner} が送出中）"
         except Exception:
             info = None
         try:
@@ -1222,10 +1534,12 @@ class ImuPanel:
                     f"送出中 sent={info.get('sent', 0)}"
                     f" dropped={info.get('dropped', 0)}{rate_txt}"
                     f" peak|g|={peak_g:.1f}dps peak|a|={peak_a:.2f}G {span_txt}"
+                    f"{rec_txt}{owner_note}"
                 )
             else:
                 self._stats_var.set(
-                    f"送出中 peak|g|={peak_g:.1f}dps peak|a|={peak_a:.2f}G {span_txt}"
+                    f"送出中 peak|g|={peak_g:.1f}dps peak|a|={peak_a:.2f}G "
+                    f"{span_txt}{rec_txt}{owner_note}"
                 )
         except Exception:
             pass

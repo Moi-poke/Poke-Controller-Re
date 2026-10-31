@@ -396,3 +396,9 @@ def test_subroutine_named_stick_release_rejected() -> None:
     errors = blockly_validate.validate_generated_code(code)
     assert errors != []
     assert any("stick_release" in e for e in errors)
+
+
+def test_gyro_play_is_allowed() -> None:
+    """Given: ジャイロ再生の呼び出し / When: 検証する / Then: 公開APIとして通ること。"""
+    code = good_code() + '        self.gyro_play("Commands/PythonCommands/g.pgyro")\n'
+    assert blockly_validate.validate_generated_code(code) == []

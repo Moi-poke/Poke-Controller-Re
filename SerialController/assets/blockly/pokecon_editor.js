@@ -669,10 +669,14 @@
     // 新ブロックの後ろへつけ直す）、無ければプログラムの DO の末尾、
     // プログラムが無ければ空いている所。全体を1つの取り消し単位にする。
     // 作ったブロックの配列を返す（描画なしで検証できる）。
-    insertSteps: function (ws, steps, selected) {
+    // gyro を渡すと、記録したジャイロの再生ブロックを手順の先頭へ置く
+    // （{file} は .pgyro の相対パス）。ジャイロだけの記録でも挿入する。
+    insertSteps: function (ws, steps, selected, gyro) {
       lastMotionBlock = null;
       var made = [];
-      if (!steps || !steps.length) {
+      var hasSteps = !!(steps && steps.length);
+      var hasGyro = !!(gyro && gyro.file);
+      if (!hasSteps && !hasGyro) {
         return made;
       }
       var Ev = Blockly.Events;
@@ -681,6 +685,26 @@
         Ev.setGroup(true);
       }
       try {
+        if (hasGyro) {
+          var g = ws.newBlock("pokecon_gyro");
+          try {
+            g.setFieldValue(String(gyro.file), "FILE");
+          } catch (e) {
+            /* 欄が無ければそのまま */
+          }
+          try {
+            if (typeof g.initSvg === "function") {
+              g.initSvg();
+            }
+            if (typeof g.render === "function") {
+              g.render();
+            }
+          } catch (e) {
+            /* 描画なしの検証では無視する */
+          }
+          made.push(g);
+        }
+        steps = hasSteps ? steps : [];
         steps.forEach(function (s) {
           // release_stick は直前の motion の END を変えるだけで、
           // ブロックを作らない（makeMotionBlock が null を返す）。
