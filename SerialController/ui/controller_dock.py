@@ -115,9 +115,6 @@ class ControllerDock:
         self._away.pack_forget()
         self._pad_area.pack(fill="both", expand=True, padx=4, pady=4)
         self.pop_button.config(text=POP_TEXT)
-        # ジャイロ欄を先に上へ置く。操作盤を先に expand で詰めると、
-        # 欄が短いときにジャイロの開始ボタンが下へ隠れて押せなくなる。
-        self.embedded_companion = self._make_companion(self._pad_area)
         # 送り先は関数のまま渡す。埋め込みは起動時から置きっぱなしなので、
         # 組み立て時の送り先（まだ無い／作り直し前）を掴まないようにする。
         self.embedded = ControllerGUI(
@@ -126,6 +123,7 @@ class ControllerDock:
             container=self._pad_area,
             height_limit=self._visible_height if self._viewport is not None else None,
         )
+        self.embedded_companion = self._make_companion(self._pad_area)
 
     def _visible_height(self) -> int | None:
         """操作盤の上端から、スクロールする欄の見えている下端までの高さ。
