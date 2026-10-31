@@ -258,7 +258,8 @@ def install_dependencies(
         done = subprocess.run(
             [sys.executable, "-m", "pip", "install", *targets],
             capture_output=True,
-            text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=timeout,
         )
     except subprocess.TimeoutExpired as e:

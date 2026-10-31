@@ -183,7 +183,8 @@ class SerialService:
                 ["git", "rev-parse", "--short", "HEAD"],
                 cwd=repo,
                 capture_output=True,
-                text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=5,
             )
             if done.returncode == 0:

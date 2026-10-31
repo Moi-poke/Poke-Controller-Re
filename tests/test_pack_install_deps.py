@@ -86,7 +86,9 @@ def test_approved_install_deps_runs_pip_with_captured_output() -> None:
     assert cmd[:4] == [sys.executable, "-m", "pip", "install"]
     assert "somelib_xyz_unknown_aaa" in cmd
     assert kwargs.get("capture_output") is True
-    assert kwargs.get("text") is True
+    # 出力は厳密な既定デコードではなく、UTF-8＋置換で読む（cp932混在対策）。
+    assert kwargs.get("encoding") == "utf-8"
+    assert kwargs.get("errors") == "replace"
     assert isinstance(kwargs.get("timeout"), (int, float))
 
 

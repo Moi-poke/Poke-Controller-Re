@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import sys
 
+import pytest
+
 
 def test_parse_ready_status() -> None:
     from core.hidhide import parse_cli_output
@@ -100,4 +102,41 @@ def test_detect_hidhide_does_not_cache_transient_failure() -> None:
     assert first.ready is False
     second = hh.detect_hidhide(__file__, runner=runner)
     assert second.ready is True
+    hh.clear_cache()
+
+
+def test_decode_output_falls_back_to_cp932() -> None:
+    """CLIがcp932で書いた行を、復号失敗で落とさず読むこと。"""
+    from core.hidhide import _decode_output
+
+    text = '--dev-hide "HID\\VID_057E&PID_2009\\A&0&0000"  // ジャイロ'
+    assert _decode_output(text.encode("cp932")).endswith("ジャイロ")
+    # どちらでも読めないバイトは置換で返す（例外を投げない）。
+    assert isinstance(_decode_output(b"\xff\xfe"), str)
+
+
+def test_detect_hidhide_survives_cp932_output(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Given: CLIがcp932を返す / When: 状態を読む / Then: 読取スレッドを落とさず解析すること。"""
+    import core.hidhide as hh
+
+    hh.clear_cache()
+    out = "\n".join(
+        [
+            "--cloak-on",
+            '--dev-hide "HID\\VID_057E&PID_2009\\A&43A2154&0&0000"',
+            f'--app-reg "{sys.executable}"',
+            "// デバイス名: プロコントローラー",
+        ]
+    ).encode("cp932")
+
+    class _Done:
+        returncode = 0
+        stdout = out
+        stderr = b""
+
+    monkeypatch.setattr(hh.subprocess, "run", lambda *a, **k: _Done())
+    status = hh.detect_hidhide(__file__)
+    assert status.ready is True
     hh.clear_cache()

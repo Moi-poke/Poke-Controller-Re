@@ -63,6 +63,25 @@ class HidHideStatus:
         return "HidHide準備完了"
 
 
+def _decode_output(data: bytes | str | None) -> str:
+    """CLI の出力を読む。UTF-8 で読めなければ cp932、最後は置換。
+
+    HidHideCLI は日本語環境で cp932 の行（デバイス名・エラー）を混ぜる
+    ことがある。厳密な UTF-8 復号はサブプロセスの読み取りスレッドで
+    UnicodeDecodeError を投げ、アプリの不具合報告ダイアログになる。
+    """
+    if data is None:
+        return ""
+    if isinstance(data, str):
+        return data
+    for encoding in ("utf-8", "cp932"):
+        try:
+            return data.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+    return data.decode("utf-8", "replace")
+
+
 def _expand(path: str) -> str:
     return os.path.expandvars(os.path.expanduser(path))
 
@@ -169,15 +188,19 @@ def detect_hidhide(
             code, out, err = runner(path)
         else:
             flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+            # text=True で読むと、CLI が cp932（日本語の Windows）で書いた
+            # 行を UTF-8 で復号して _readerthread が落ちる。バイトで受けて
+            # 自前で復号する（失敗しても置換で読む）。
             proc = subprocess.run(
                 [path, "--cloak-state", "--dev-list", "--app-list"],
                 capture_output=True,
-                text=True,
                 timeout=2.0,
                 creationflags=flags,
                 check=False,
             )
-            code, out, err = proc.returncode, proc.stdout, proc.stderr
+            code = proc.returncode
+            out = _decode_output(proc.stdout)
+            err = _decode_output(proc.stderr)
         error = "" if int(code) == 0 else str(err or f"exit {code}").strip()
         status = parse_cli_output(
             str(out or ""),
