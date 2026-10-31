@@ -76,7 +76,7 @@ class ControllerDock:
             viewport.bind("<Configure>", self._refit_embedded, add="+")
         self._embed()
 
-    def _make_companion(self, master: Any) -> Any:
+    def _make_companion(self, master: Any, before: Any = None) -> Any:
         """連れ部品を作る。factory無し・失敗はNone。"""
         factory = self._companion_factory
         if factory is None:
@@ -85,7 +85,10 @@ class ControllerDock:
             part = factory(master)
             pack = getattr(part, "pack", None)
             if callable(pack):
-                pack(fill="x", padx=4, pady=(0, 4))
+                options = {"fill": "x", "padx": 4, "pady": (0, 4)}
+                if before is not None:
+                    options["before"] = before
+                pack(**options)
             return part
         except Exception:
             return None
@@ -112,6 +115,9 @@ class ControllerDock:
         self._away.pack_forget()
         self._pad_area.pack(fill="both", expand=True, padx=4, pady=4)
         self.pop_button.config(text=POP_TEXT)
+        # ジャイロ欄を先に上へ置く。操作盤を先に expand で詰めると、
+        # 欄が短いときにジャイロの開始ボタンが下へ隠れて押せなくなる。
+        self.embedded_companion = self._make_companion(self._pad_area)
         # 送り先は関数のまま渡す。埋め込みは起動時から置きっぱなしなので、
         # 組み立て時の送り先（まだ無い／作り直し前）を掴まないようにする。
         self.embedded = ControllerGUI(
@@ -120,7 +126,6 @@ class ControllerDock:
             container=self._pad_area,
             height_limit=self._visible_height if self._viewport is not None else None,
         )
-        self.embedded_companion = self._make_companion(self._pad_area)
 
     def _visible_height(self) -> int | None:
         """操作盤の上端から、スクロールする欄の見えている下端までの高さ。
@@ -170,7 +175,9 @@ class ControllerDock:
         floating_window = getattr(self.floating, "window", None)
         if floating_window is None:
             floating_window = getattr(self.floating, "_window", self.floating)
-        self.floating_companion = self._make_companion(floating_window)
+        self.floating_companion = self._make_companion(
+            floating_window, before=getattr(self.floating, "canvas", None)
+        )
 
     def close_floating(self) -> None:
         """別ウィンドウを閉じ、タブへ戻す。"""

@@ -379,12 +379,17 @@ class SerialPanelMixin:
             frame.place_configure(width=width)
         # 通信方式とポートは、広ければ 1 行に並べて縦を詰める。
         self._reflow_serial_setup(width >= 470)
-        # 1 列なので、折り返し幅は枠の幅から余白を引いた 1 つで足りる。
-        # 上限 300 は、幅いっぱいに伸ばして行長が長くなりすぎないため。
-        wrap = max(120, min(300, width - 36))
+        # 失敗理由・復旧案内は、見えている幅に収まるなら 1 行で出す。
+        # 300 固定だと、広いタブでも 2 行になり、縦を無駄に食う。
+        notice_wrap = max(120, width - 12)
         for label in (
-            self.connection_result,
             self.com_port_notice,
+            self.connection_result,
+        ):
+            self._set_wrap(label, notice_wrap)
+        # 説明・詳細は読みやすい行長に抑える（幅いっぱいには伸ばさない）。
+        wrap = max(120, min(420, width - 12))
+        for label in (
             self.transport_description,
             self.connection_details,
             self.baud_current,
