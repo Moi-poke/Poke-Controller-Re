@@ -600,6 +600,24 @@ class SerialPanelMixin:
         )
         self.arbitration_hint.grid(row=2, column=0, sticky="ew", pady=(2, 0))
 
+        # ジャイロ開始の近道。操作盤は要求した高さで描き、コントローラタブは
+        # 縦にスクロールする。ジャイロ欄は操作盤の下なので、開始ボタンが
+        # 見えない位置まで下がる。常に見えるここにも同じ入口を置く
+        # （同じ理由で一度外して戻した。消さないこと）。
+        self.gyro_row = ttk.Frame(self.control_lf)
+        self.gyro_row.grid(row=10, column=0, sticky="ew", pady=(4, 0))
+        self.gyro_row.columnconfigure(1, weight=1)
+        ttk.Label(self.gyro_row, text="ジャイロ").grid(row=0, column=0, sticky="w")
+        self.gyro_state = tk.StringVar(value="停止中")
+        ttk.Label(self.gyro_row, textvariable=self.gyro_state).grid(
+            row=0, column=1, sticky="w", padx=(6, 0)
+        )
+        self.gyro_button = ttk.Button(
+            self.gyro_row, text="開始", command=self._toggle_gyro
+        )
+        self.gyro_button.grid(row=0, column=2, sticky="e")
+        Tooltip(self.gyro_button, "ジャイロ送出の開始/停止（操作盤の下と同じ）")
+
         self._gamepad_after = None
         self._gamepad_ids = {}
         self._gamepad_names = {}
@@ -627,13 +645,20 @@ class SerialPanelMixin:
         def _make_imu_panel(master: Any) -> Any:
             from ImuPanel import ImuPanel
 
-            return ImuPanel(
+            imu = ImuPanel(
                 master,
                 lambda: getattr(self.serial.sender, "transport", None),
                 self._read_imu_settings,
                 self._write_imu_settings,
                 lambda text: print(text),
             )
+            self._imu_panel = imu
+            try:
+                imu._stats_var.trace_add("write", self._sync_gyro_shortcut)
+                self._sync_gyro_shortcut()
+            except Exception:
+                pass
+            return imu
 
         # 仮想コントローラ。タブの中に常に置き、別ウィンドウへも出せる
         # （ui/controller_dock.py）。送り先は開くたびに今の物を引く。
@@ -761,6 +786,28 @@ class SerialPanelMixin:
                 dock._refit_embedded()
             except Exception:
                 pass
+
+    def _toggle_gyro(self) -> None:
+        """常時見える入口から、操作盤の下のジャイロ欄を開始/停止する。"""
+        imu = getattr(self, "_imu_panel", None)
+        if imu is None:
+            return
+        try:
+            imu._on_toggle()
+        except Exception as e:
+            logger.warning(f"ジャイロの開始/停止に失敗しました: {e}")
+
+    def _sync_gyro_shortcut(self, *_args: Any) -> None:
+        """ジャイロ欄の状態を、常時見える入口の表示へ写す。"""
+        imu = getattr(self, "_imu_panel", None)
+        if imu is None:
+            return
+        try:
+            state = str(imu._stats_var.get())
+            self.gyro_state.set(state)
+            self.gyro_button.config(text="停止" if "送出中" in state else "開始")
+        except Exception:
+            pass
 
     def _open_key_config(self) -> None:
         """既存のキー割当画面を開く（割り当ての確認・変更への導線）。"""
