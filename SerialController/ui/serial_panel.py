@@ -32,12 +32,23 @@ from core.transport.registry import canonical_transport_name, describe_transport
 from core.ui_inbox import post_latest_to_gui, post_to_gui
 from loguru import logger
 from services.serial_service import SenderSpec, SerialService
+from ui.collapsible import CollapsibleSection
 from ui.combo_fit import fit_combo_width
 from ui.controller_dock import ControllerDock
 from ui.tooltip import Tooltip
+from ui.transport_names import display_name as transport_display_name
 
-# STATUS flags の bit5=有線。SSOTは Switch-bcon の spec/protocol_v3.md。
-_STATUS_FLAG_WIRED = 0x20
+#: 設定タブの最低の高さ（px）。内容が短くても、タブ欄が数行しか見えない
+#: 高さまで縮むと操作できない。窓が小さいときはスクロールで届く。
+_TAB_MIN_HEIGHT = 280
+
+#: 入力調停の候補が意味する動作。送信側の実装（core/serial/arbitration.py）
+#: に合わせて書く。未知の候補は名前だけを出す（意味を推測しない）。
+_ARBITRATION_HINTS = {
+    "off": "どちらも断りません（本家と同じ挙動）。",
+    "script": "コマンド実行中は手動入力を断ります（一時停止すれば操作できます）。",
+    "human": "手で触った直後は、スクリプトの操作を断ります。",
+}
 
 
 #: 文字を打つ部品の Tk クラス名。ここにフォーカスがある間は、打鍵を
@@ -96,8 +107,6 @@ class SerialPanelMixin:
     _player_lamp_items: list
     _player_lamp_after: Any
     bcon_row: Any
-    bcon_wired_label: Any
-    bcon_wired: Any
     control_lf: Any
     is_use_keyboard: Any
     _kb_window_active: Any
@@ -134,7 +143,6 @@ class SerialPanelMixin:
     com_port_notice: Any
     runner: Any
     _connection_view: ConnectionSnapshot
-    connection_status: Any
     connection_details: Any
     transport_description: Any
     refreshComPort: Any
@@ -145,46 +153,103 @@ class SerialPanelMixin:
         self._connection_unsubscribe: Any = None
         self._connection_log_unsubscribe: Any = None
         self._pending_transport_switch: tuple[int, str, bool, str] | None = None
-        self.serial_lf = ttk.Labelframe(self.tab_serial)
+        # 1 列で「状態 → 主要操作 → 詳細」の順に並べる。項目名は入力欄の
+        # 上へ置く（左に並べると視線移動が長く、狭い幅で入力欄が痩せる。
+        # Penzo 2006 の視線計測 / デジタル庁デザインシステム）。
+        self.serial_lf = ttk.Frame(self.tab_serial, padding=(6, 4))
+        self.serial_lf.columnconfigure(0, weight=1)
 
-        # 項目名｜値の縦並び（左の列に項目名、右の列に値）。横に並べ切ると
-        # 870px 前後を要し、ログを右に置く配置では常に横スクロールが出ていた。
-        self.com_port_label = ttk.Label(self.serial_lf)
-        self.com_port_label.config(text="COMポート: ")
-        self.com_port_label.grid(column=0, padx="5", pady="2", row=0, sticky="w")
+        # 接続状態は下端の状態バーへ出す（タブ内に常時表示しない）。
+        # ここには失敗理由・復旧操作だけを、起きたときに出す。
+        # 失敗理由・復旧操作（成功時は空にして高さを空けない）。
+        self.com_port_notice = ttk.Label(self.serial_lf, wraplength=300, justify="left")
+        self.com_port_notice.grid(row=1, column=0, sticky="ew", pady=(2, 2))
+        self.com_port_notice.grid_remove()
+
+        # 通信方式とポートは、広いときは左右、狭いときは縦に並べる。
+        # 縦を詰めたいが、狭い幅で横に詰めると入力欄が痩せるため。
+        self._setup_row = ttk.Frame(self.serial_lf)
+        self._setup_row.grid(row=2, column=0, sticky="ew", pady=(4, 2))
+        self._transport_block = ttk.Frame(self._setup_row)
+        self._transport_block.columnconfigure(0, weight=1)
+        self.transport_label = ttk.Label(self._transport_block, text="通信方式")
+        self.transport_label.grid(row=0, column=0, sticky="w")
+        self.transport_cb = ttk.Combobox(self._transport_block)
+        self.transport_cb.config(state="readonly", width=20)
+        self.transport_cb.grid(row=1, column=0, sticky="ew")
+        self.transport_cb.bind("<<ComboboxSelected>>", self.applyTransport, add="")
 
         self.com_port = tk.IntVar()
         self.com_port_name = tk.StringVar()
         # Combobox に出す表示名（'COM3: USB シリアル デバイス'）を持つ。
         # 実際に開くデバイス名は com_port_name、末尾の番号は com_port。
-        # com_port_label は上の Label ウィジェットが使っているため別名にする。
         self.com_port_text = tk.StringVar()
         self._com_port_map: dict[str, str] = {}
-        port_row = ttk.Frame(self.serial_lf)
-        port_row.grid(column=1, padx=5, pady=2, row=0, sticky="ew")
+        self._port_block = ttk.Frame(self._setup_row)
+        self._port_block.columnconfigure(0, weight=1)
+        self.com_port_label = ttk.Label(self._port_block, text="ポート")
+        self.com_port_label.grid(row=0, column=0, sticky="w")
+        port_row = ttk.Frame(self._port_block)
+        port_row.grid(row=1, column=0, sticky="ew")
+        port_row.columnconfigure(0, weight=1)
+        self._port_row = port_row
         self.com_port_cb = ttk.Combobox(port_row)
         self.com_port_cb.config(
             state="readonly", textvariable=self.com_port_text, width=16
         )
-        port_row.columnconfigure(0, weight=1)
         self.com_port_cb.grid(row=0, column=0, sticky="ew")
         self.refreshComPort = ttk.Button(
-            port_row, text="更新", width=4, command=self.refreshComPorts
+            port_row, text="一覧更新", command=self.refreshComPorts
         )
         self.refreshComPort.grid(row=0, column=1, padx=(5, 0), sticky="e")
         self.com_port_cb.bind("<<ComboboxSelected>>", self.onComPortSelected, add="")
 
-        # 行を分けて 1 行の幅を抑える（同じ行に並べると最も幅を取る行になる）。
-        self.baud_rate_label = ttk.Label(self.serial_lf)
-        self.baud_rate_label.config(text="ボーレート: ")
-        self.baud_rate_label.grid(column=0, padx="5", pady="2", row=5, sticky="w")
+        # 主要操作。接続と再接続は同じボタン（状態で文字が変わる）。
+        actions = ttk.Frame(self.serial_lf)
+        actions.grid(row=3, column=0, sticky="ew", pady=(2, 2))
+        actions.columnconfigure(0, weight=1)
+        self.reloadComPort = ttk.Button(actions, command=self.reloadSerialPort)
+        self.reloadComPort.config(text="接続")
+        self.reloadComPort.grid(row=0, column=0, sticky="ew")
+        self.disconnectComPort = ttk.Button(
+            actions, text="切断", command=self.inactivateSerial
+        )
+        self.disconnectComPort.grid(row=0, column=1, padx=(6, 0), sticky="e")
+        # 操作結果（失敗理由を含む）は押したボタンの直下へ。詳細ログは
+        # 診断のまとまりに置き、結果を読むためにスクロールさせない。
+        self.connection_result = ttk.Label(
+            self.serial_lf, wraplength=300, justify="left"
+        )
+        self.connection_result.grid(row=4, column=0, sticky="ew", pady=(0, 2))
+        self.connection_result.grid_remove()
+        # 失敗時だけ出す復旧の導線（速度の探索は BCON の適用条件に従う）。
+        self.recovery_button = ttk.Button(
+            self.serial_lf, text="速度を探す", command=self.huntBconBaud
+        )
+        self.recovery_button.grid(row=5, column=0, sticky="w", pady=(2, 0))
+        self.recovery_button.grid_remove()
 
+        # Switch 側の状態は下端の状態バー（Pico↔Switch）に出す。
+
+        # 詳細は 1 段だけ折りたたむ。開閉しても値・選択・ログは捨てない。
+        self.serial_details = CollapsibleSection(
+            self.serial_lf,
+            "通信の詳細設定",
+            on_toggle=self._on_serial_section_toggled,
+        )
+        self.serial_details.grid(row=7, column=0, sticky="ew", pady=(2, 0))
+        detail_body = self.serial_details.body
+        detail_body.columnconfigure(0, weight=1)
+        self.baud_rate_label = ttk.Label(detail_body, text="通信速度")
+        self.baud_rate_label.grid(row=0, column=0, sticky="w")
+        self.baud_current = ttk.Label(detail_body, wraplength=280, justify="left")
+        self.baud_current.grid(row=1, column=0, sticky="ew")
         self.baud_rate = tk.StringVar()
         # bcon のときだけ使う表示値（115200 / 460800 / 921600 / 1M / 2M）。
         # レガシーの baud_rate と混ぜない（切替で設定が壊れないように）。
         self.bcon_baud = tk.StringVar()
-        baud_row = ttk.Frame(self.serial_lf)
-        baud_row.grid(column=1, padx=5, pady=2, row=5, sticky="w")
+        baud_row = ttk.Frame(detail_body)
+        baud_row.grid(row=2, column=0, sticky="w", pady=(4, 0))
         self.baud_rate_cb = ttk.Combobox(baud_row)
         # values の int 群は実行時に文字列化される。注釈だけの問題のため無視する。
         self.baud_rate_cb.config(  # type: ignore[call-overload]
@@ -192,7 +257,7 @@ class SerialPanelMixin:
             state=self.baud_rate_state,
             textvariable=self.baud_rate,
             values=WindowUtils.BAUD_RATE_VALUES,
-            width=6,
+            width=8,
         )
         self.baud_rate_cb.pack(side="left")
         self.bcon_hunt_button = ttk.Button(
@@ -200,137 +265,38 @@ class SerialPanelMixin:
         )
         self.bcon_hunt_button.pack(side="left", padx=(5, 0))
         self.baud_rate_cb.bind("<<ComboboxSelected>>", self.applyBaudRate, add="")
+        # 通信方式の説明は詳細へ（長文で主要操作を押し下げない）。
+        self.transport_description = ttk.Label(
+            detail_body, wraplength=280, justify="left"
+        )
+        self.transport_description.grid(row=3, column=0, sticky="ew", pady=(6, 0))
 
-        # 接続操作と確認結果は、スクロールしなくても見える先頭へ置く。
-        actions = ttk.Frame(self.serial_lf)
-        actions.grid(column=0, columnspan=2, padx=5, pady=(4, 2), row=1, sticky="w")
-        self.reloadComPort = ttk.Button(actions)
-        self.reloadComPort.config(text="接続", command=self.reloadSerialPort)
-        self.reloadComPort.pack(side="left")
-
-        self.disconnectComPort = ttk.Button(actions)
-        self.disconnectComPort.config(text="切断", command=self.inactivateSerial)
-        self.disconnectComPort.pack(side="left", padx=(5, 0))
-
+        self.serial_diagnostics = CollapsibleSection(
+            self.serial_lf,
+            "診断・送信ログ",
+            on_toggle=self._on_serial_section_toggled,
+        )
+        self.serial_diagnostics.grid(row=8, column=0, sticky="ew", pady=(2, 0))
+        self.connection_details = ttk.Label(
+            self.serial_diagnostics.body, wraplength=280, justify="left"
+        )
+        self.connection_details.pack(fill="x", pady=(0, 4))
         self.is_show_serial = tk.BooleanVar()
         # 値の変化を送信側へ押し込む。送信スレッドに Tk 変数を読ませると、
         # GUI が忙しい間そこで待たされる（実機で 1.5 秒を実測し、その間は
         # 姿勢が1本も送られなかった）。変化は必ず GUI スレッドで起きるため、
         # ここで読んで渡してよい。
         self.is_show_serial.trace_add("write", lambda *_: self._push_show_serial())
-        # 操作ボタンと同じ行に並べると最も幅を取る行になるので、次の行へ。
-        self.cb_show_serial = ttk.Checkbutton(self.serial_lf)
+        self.cb_show_serial = ttk.Checkbutton(self.serial_diagnostics.body)
         self.cb_show_serial.config(
-            text="送信内容を表示",
+            text="送信内容を表示（ログ）",
             variable=self.is_show_serial,
             command=self._on_setting_changed,
         )
-        self.cb_show_serial.grid(column=1, padx="5", pady="2", row=11, sticky="w")
+        self.cb_show_serial.pack(anchor="w")
 
-        # 通信方式の選択。
-        #   候補は通信方式の一覧から引く。ここに名前を
-        #     書き並べない（実装を足したのに画面に出ない、を防ぐ）。
-        self.transport_label = ttk.Label(self.serial_lf)
-        self.transport_label.config(text="通信方式: ")
-        self.transport_label.grid(column=0, padx="5", pady="2", row=6, sticky="w")
+        self._player_lamp_after: Any = None
 
-        self.transport_cb = ttk.Combobox(self.serial_lf)
-        self.transport_cb.config(
-            state="readonly", textvariable=self.transport_name, width=16
-        )
-        self.transport_cb.grid(column=1, padx="5", pady="2", row=6, sticky="ew")
-        self.transport_cb.bind("<<ComboboxSelected>>", self.applyTransport, add="")
-        self.transport_description = ttk.Label(
-            self.serial_lf, wraplength=230, justify="left"
-        )
-        self.transport_description.grid(
-            column=1, padx=5, pady=(0, 3), row=7, sticky="ew"
-        )
-
-        # 入力の優先付けの選択。候補は送信側の許可値から
-        #   引く（画面に名前を書き並べない）。既定の off は本家と同じ
-        #   挙動で、script を選ぶと実行中の手操作を断る。
-        self.arbitration_label = ttk.Label(self.serial_lf)
-        self.arbitration_label.config(text="入力調停: ")
-        self.arbitration_label.grid(column=0, padx="5", pady="2", row=10, sticky="w")
-
-        self.arbitration_cb = ttk.Combobox(self.serial_lf)
-        self.arbitration_cb.config(
-            state="readonly", textvariable=self.arbitration_mode, width=16
-        )
-        self.arbitration_cb.grid(column=1, padx="5", pady="2", row=10, sticky="ew")
-        self.arbitration_cb.bind("<<ComboboxSelected>>", self.applyArbitration, add="")
-        Tooltip(
-            self.arbitration_cb,
-            "コマンド実行中に手動操作を受け付けるかどうか",
-        )
-
-        # プレイヤーランプ（bcon の PLAYER_INFO を省スペース表示）と振動。
-        # Bcon設定小窓の4灯と同じく bit0=LED1..bit3=LED4 の横並び。
-        # bcon のときだけ出す「状態」行に束ねる（通信方式の行の右へ足すと
-        # 横幅が伸び、狭いタブ欄で横スクロールになる）。
-        self.bcon_status_label = ttk.Label(self.serial_lf, text="状態: ")
-        self.bcon_status_label.grid(column=0, padx="5", pady="2", row=9, sticky="w")
-        self.bcon_status = ttk.Frame(self.serial_lf)
-        self.bcon_status.grid(column=1, padx="5", pady="2", row=9, sticky="w")
-        self.player_lamp_label = ttk.Label(self.bcon_status)
-        self.player_lamp_label.config(text="LED: ")
-        self.player_lamp_label.pack(side="left")
-
-        self.player_lamp_canvas = tk.Canvas(
-            self.bcon_status, width=86, height=18, highlightthickness=0
-        )
-        self.player_lamp_canvas.pack(side="left")
-        self._player_lamp_items = []
-        for index in range(4):
-            left = 2 + index * 21
-            self._player_lamp_items.append(
-                self.player_lamp_canvas.create_rectangle(
-                    left,
-                    2,
-                    left + 14,
-                    16,
-                    fill="gray",
-                    outline="#4D4D4D",
-                )
-            )
-        self._player_lamp_after = None
-        self.rumble_label = ttk.Label(self.bcon_status)
-        self.rumble_label.config(text="振動: ")
-        self.rumble_label.pack(side="left", padx=(12, 0))
-
-        # 実際に届いた STATUS だけを表示する。設定の変更は BCON タブへ集める。
-        self.bcon_wired_label = ttk.Label(self.serial_lf, text="Switch 接続: ")
-        self.bcon_wired_label.grid(column=0, padx=5, pady=2, row=8, sticky="w")
-        self.bcon_row = ttk.Frame(self.serial_lf)
-        self.bcon_row.grid(column=1, padx=5, pady=2, row=8, sticky="ew")
-        self.bcon_wired = tk.StringVar(value="不明")
-        ttk.Label(self.bcon_row, textvariable=self.bcon_wired, wraplength=95).pack(
-            side="left"
-        )
-        ttk.Button(
-            self.bcon_row, text="BCON 設定を開く", command=self.select_bcon_tab
-        ).pack(side="left", padx=(12, 0))
-        self.connection_status = ttk.Label(
-            self.serial_lf, text="未接続", wraplength=300, justify="left"
-        )
-        self.connection_status.grid(
-            column=0, columnspan=2, padx=5, pady=(2, 2), row=2, sticky="ew"
-        )
-        self.connection_details = ttk.Label(
-            self.serial_lf, wraplength=300, justify="left"
-        )
-        self.connection_details.grid(
-            column=0, columnspan=2, padx=5, pady=(0, 4), row=3, sticky="ew"
-        )
-        self.com_port_notice = ttk.Label(self.serial_lf, wraplength=300, justify="left")
-        self.com_port_notice.grid(
-            column=0, columnspan=2, padx=5, pady=(0, 4), row=4, sticky="ew"
-        )
-        # 値の列を伸ばし、広い窓では長いポート名・機器名を省略せずに出す。
-        self.serial_lf.columnconfigure(1, weight=1)
-
-        self.serial_lf.config(text="シリアル設定")
         # Notebook は他タブの要求幅まで広がるため、fill では可視範囲を超える。
         # この枠だけを可視 Canvas の幅へ合わせ、タブには要求高さを返して縦スクロールを保つ。
         viewport = self.tab_serial
@@ -341,15 +307,37 @@ class SerialPanelMixin:
                 break
             ancestor = ancestor.master
         self._serial_viewport = viewport
-        self.serial_lf.place(x=5, y=5)
+        self.serial_lf.place(x=0, y=0)
         self.tab_serial.bind("<Configure>", self._fit_serial_viewport, add="+")
         self.tab_serial.bind("<Map>", self._fit_serial_viewport, add="+")
         self.serial_lf.bind("<Configure>", self._fit_serial_viewport, add="+")
         if viewport is not self.tab_serial:
             viewport.bind("<Configure>", self._fit_serial_viewport, add="+")
+        self._bind_release_focus(self.serial_lf, self.tab_serial)
         self.root.after_idle(self._fit_serial_viewport)
         self._refresh_bcon_rows()
         self._poll_connection_summary()
+
+    def _on_serial_section_toggled(self) -> None:
+        """詳細の開閉で高さが変わったら、見えている幅とタブの高さを測り直す。"""
+        try:
+            self.root.after_idle(self._fit_serial_viewport)
+        except tk.TclError:
+            pass
+
+    @staticmethod
+    def _set_wrap(label: Any, wrap: int) -> None:
+        """折り返し幅を変える。同じ値なら触らない（再描画を積まない）。"""
+        try:
+            current = int(float(label.cget("wraplength") or 0))
+        except (tk.TclError, ValueError, TypeError, AttributeError):
+            current = -1
+        if current == wrap:
+            return
+        try:
+            label.config(wraplength=wrap)
+        except (tk.TclError, AttributeError):
+            pass
 
     def _fit_serial_viewport(self, event: Any = None) -> None:
         """他タブで広がった内枠ではなく、実際に見える幅へ接続欄を収める。"""
@@ -366,6 +354,19 @@ class SerialPanelMixin:
             viewport.yview_moveto(0.0)
         requested_width = frame.winfo_reqwidth() + 10
         viewport_width = viewport.winfo_width()
+        root_width = 1
+        try:
+            root_width = int(self.root.winfo_width())
+        except Exception:
+            root_width = 1
+        if viewport is self.tab_serial:
+            if root_width <= 1:
+                # まだ実寸が無い（組み立て直後）。ここで折り返すと、要求幅と
+                # 折り返しが互いを変えて振動する。Map/Configure で測り直す。
+                return
+            # タブ自身の幅は、折り返しを変えると要求幅が変わって振動する。
+            # 親（窓）の実寸を使い、幅→折り返し→幅 の循環を作らない。
+            viewport_width = max(viewport_width, root_width)
         if viewport_width <= 1:
             viewport_width = requested_width
         if viewport is self.tab_serial:
@@ -376,46 +377,61 @@ class SerialPanelMixin:
         width = max(1, min(viewport_width - 10, available))
         if int(float(frame.place_info().get("width") or 0)) != width:
             frame.place_configure(width=width)
-        label_width = max(
-            widget.winfo_reqwidth()
-            for widget in (
-                self.com_port_label,
-                self.baud_rate_label,
-                self.transport_label,
-                self.arbitration_label,
-                self.bcon_wired_label,
-            )
-        )
+        # 通信方式とポートは、広ければ 1 行に並べて縦を詰める。
+        self._reflow_serial_setup(width >= 470)
+        # 1 列なので、折り返し幅は枠の幅から余白を引いた 1 つで足りる。
+        # 上限 300 は、幅いっぱいに伸ばして行長が長くなりすぎないため。
+        wrap = max(120, min(300, width - 36))
         for label in (
-            self.connection_status,
-            self.connection_details,
+            self.connection_result,
             self.com_port_notice,
+            self.transport_description,
+            self.connection_details,
+            self.baud_current,
         ):
-            wrap = max(1, min(300, width - 10))
-            if int(float(label.cget("wraplength"))) != wrap:
-                label.config(wraplength=wrap)
-        description_wrap = max(1, min(230, width - label_width - 10))
-        if (
-            int(float(self.transport_description.cget("wraplength")))
-            != description_wrap
-        ):
-            self.transport_description.config(wraplength=description_wrap)
-        size = (min(requested_width, viewport_width), frame.winfo_reqheight() + 10)
-        if getattr(self, "_serial_requested_size", None) != size:
-            self._serial_requested_size = size
-            self.tab_serial.config(width=size[0], height=size[1])
+            self._set_wrap(label, wrap)
+        # 幅は枠の place で決める。タブ自身の幅は変えない
+        # （変えると、幅→折り返し→要求幅→幅 の循環になる）。
+        height = max(frame.winfo_reqheight() + 10, _TAB_MIN_HEIGHT)
+        if getattr(self, "_serial_requested_height", None) != height:
+            self._serial_requested_height = height
+            self.tab_serial.config(height=height)
+
+    def _reflow_serial_setup(self, wide: bool) -> None:
+        """通信方式とポートを、幅に応じて左右／縦に並べ替える。"""
+        if getattr(self, "_setup_wide", None) == wide:
+            return
+        self._setup_wide = wide
+        try:
+            self._transport_block.grid_forget()
+            self._port_block.grid_forget()
+            if wide:
+                self._setup_row.columnconfigure(0, weight=1, uniform="setup")
+                self._setup_row.columnconfigure(1, weight=1, uniform="setup")
+                self._transport_block.grid(row=0, column=0, sticky="ew", padx=(0, 8))
+                self._port_block.grid(row=0, column=1, sticky="ew")
+            else:
+                self._setup_row.columnconfigure(0, weight=1, uniform="")
+                self._setup_row.columnconfigure(1, weight=0, uniform="")
+                self._transport_block.grid(row=0, column=0, sticky="ew")
+                self._port_block.grid(row=1, column=0, sticky="ew", pady=(4, 0))
+        except tk.TclError:
+            pass
 
     def _build_control_frame(self) -> None:
-        self.control_lf = ttk.Labelframe(
-            self.tab_controller, text="コントローラ", padding=(8, 2)
-        )
+        # コントローラタブも 1 列で「状態 → 主要操作 → 詳細」の順に並べる。
+        # 表示幅が狭いとき、横 2 列のチェックやコンボは詰まって読めなくなる。
+        self.control_lf = ttk.Frame(self.tab_controller, padding=(6, 4))
         self.control_lf.columnconfigure(0, weight=1)
-        self.control_lf.columnconfigure(1, weight=1)
+        self.control_lf.place(x=5, y=5)
+        # 折りたたみを開くと要求高さが変わる。実際の高さが変わった時点で
+        # 操作盤の位置を取り直す（after_idle の順序に依存しない）。
+        self.control_lf.bind("<Configure>", self._fit_control_viewport, add="+")
 
-        # HidHide が未設定なら、ゲームパッド操作のチェックを無効にし、
-        # パッド行の右端に「HidHide セットアップ」を出す。長い案内文は
-        # 置かず、無効な入口の隣に必要な操作を並べる。
+        # 状態（送信先・手動入力の受付）はアプリ下端の状態バーが全タブ共通で
+        # 出す。ここに重複して置くと、タブを開かないと状態が見えなくなる。
 
+        # キーボード。操作方法と既存の割り当てへの導線を入口の直下に置く。
         self.is_use_keyboard = tk.BooleanVar()
         self.cb_use_keyboard = ttk.Checkbutton(self.control_lf)
         self.cb_use_keyboard.config(
@@ -423,9 +439,15 @@ class SerialPanelMixin:
             variable=self.is_use_keyboard,
             command=self._on_keyboard_toggled,
         )
-        self.cb_use_keyboard.grid(column=0, row=0, padx=6, pady=2, sticky="ew")
+        self.cb_use_keyboard.grid(row=0, column=0, sticky="w")
         Tooltip(self.cb_use_keyboard, "キーボードのキーを Switch のボタンとして送る")
+        # キーの意味はキー割当画面で読める。ここに長い説明は置かない。
+        self.key_config_button = ttk.Button(
+            self.control_lf, text="キー割当を確認", command=self._open_key_config
+        )
+        self.key_config_button.grid(row=1, column=0, sticky="w", pady=(0, 4))
 
+        # ゲームパッド。パッド名は横幅を確保し、調整値は詳細へ送る。
         self.is_use_gamepad = tk.BooleanVar()
         self.cb_use_gamepad = ttk.Checkbutton(self.control_lf)
         self.cb_use_gamepad.config(
@@ -433,97 +455,146 @@ class SerialPanelMixin:
             variable=self.is_use_gamepad,
             command=self._on_gamepad_toggled,
         )
-        self.cb_use_gamepad.grid(column=1, row=0, padx=6, pady=2, sticky="ew")
+        self.cb_use_gamepad.grid(row=2, column=0, sticky="w")
         Tooltip(self.cb_use_gamepad, "接続したゲームパッドの入力を Switch へ送る")
         # 状態はここで1回だけ調べ、結果を保持する。設定の流し込み
         # （_apply_settings_to_widgets）は後から is_use_gamepad を
         # 上書きするため、そこでも同じ結果で門を閉じ直す。
         self._hidhide_gamepad_ok = self._gamepad_enabled_by_hidhide()
-        self._apply_hidhide_gamepad_gate()
 
-        self.cb_left_stick_mouse = ttk.Checkbutton(self.control_lf)
-        self.cb_left_stick_mouse.config(
-            text="左スティックをマウスで",
-            variable=self.camera_lf.is_use_left_stick_mouse,
-            command=self._on_left_stick_toggled,
-        )
-
-        self.cb_right_stick_mouse = ttk.Checkbutton(self.control_lf)
-        self.cb_right_stick_mouse.config(
-            text="右スティックをマウスで",
-            variable=self.camera_lf.is_use_right_stick_mouse,
-            command=self._on_right_stick_toggled,
-        )
-        self.cb_left_stick_mouse.grid(column=0, row=1, padx=6, pady=2, sticky="ew")
-        self.cb_right_stick_mouse.grid(column=1, row=1, padx=6, pady=2, sticky="ew")
-        Tooltip(self.cb_left_stick_mouse, "マウスを動かして左スティックを操作する")
-        Tooltip(self.cb_right_stick_mouse, "マウスを動かして右スティックを操作する")
-        # パッドの選択と遊びを 1 行にまとめる。HidHide が未設定なら
-        # この行の右端にセットアップを出す（無効なチェックの理由が隣にある）。
+        self.gamepad_label = ttk.Label(self.control_lf, text="パッド")
+        self.gamepad_label.grid(row=3, column=0, sticky="w", pady=(2, 0))
         self.gamepad_row = ttk.Frame(self.control_lf)
-        self.gamepad_row.grid(
-            column=0, row=2, columnspan=2, padx=6, pady=2, sticky="ew"
-        )
-        self.gamepad_row.columnconfigure(1, weight=1)
-        self.gamepad_label = ttk.Label(self.gamepad_row, text="パッド")
-        self.gamepad_label.grid(row=0, column=0, sticky="w")
+        self.gamepad_row.grid(row=4, column=0, sticky="ew")
+        self.gamepad_row.columnconfigure(0, weight=1)
         self.gamepad_choice = tk.StringVar(value="")
         self.gamepad_cb = ttk.Combobox(
             self.gamepad_row, textvariable=self.gamepad_choice, width=24
         )
-        self.gamepad_cb.grid(row=0, column=1, padx=(6, 0), sticky="ew")
+        self.gamepad_cb.grid(row=0, column=0, sticky="ew")
         self.gamepad_cb.bind("<<ComboboxSelected>>", self._on_gamepad_selected, add="")
         # 手動の再接続。ホットプラグの自動巡回（2秒）で拾えない
         # 中途半端な状態から、SDL/HID のキャッシュを捨てて戻す。
         self.gamepad_reconnect_btn = ttk.Button(
             self.gamepad_row,
             text="再接続",
-            width=6,
             command=self._on_gamepad_reconnect,
         )
-        self.gamepad_reconnect_btn.grid(row=0, column=2, padx=(6, 0))
+        self.gamepad_reconnect_btn.grid(row=0, column=1, padx=(6, 0))
         Tooltip(
             self.gamepad_reconnect_btn,
             "ゲームパッドを探し直す（自動で拾えないとき）",
         )
+        # 読み取りの状態。設定の有効/無効とは別に、機器から読めているかを出す。
+        self.gamepad_status = tk.StringVar(value="読み取り：未接続")
+        self.gamepad_status_label = ttk.Label(
+            self.control_lf, textvariable=self.gamepad_status, wraplength=300
+        )
+        self.gamepad_status_label.grid(row=5, column=0, sticky="ew", pady=(2, 0))
+
+        # HidHide 未設定のときは、無効な入口のすぐ下に理由と入口を並べる。
+        self.hidhide_row = ttk.Frame(self.control_lf)
+        self.hidhide_row.grid(row=6, column=0, sticky="ew", pady=(2, 0))
+        self.hidhide_row.columnconfigure(0, weight=1)
+        self.hidhide_reason = ttk.Label(
+            self.hidhide_row,
+            text="HidHide が未設定のため、ゲームパッド入力を Switch へ送れません。",
+            wraplength=240,
+            justify="left",
+        )
+        self.hidhide_reason.grid(row=0, column=0, sticky="w")
+        self.hidhide_setup_btn = ttk.Button(
+            self.hidhide_row,
+            text="HidHide セットアップ",
+            command=self._open_hidhide_setup,
+        )
+        self.hidhide_setup_btn.grid(row=0, column=1, padx=(6, 0), sticky="e")
+        self._apply_hidhide_gamepad_gate()
+
+        # 詳細（既定は閉じる）。開閉しても入力値・選択は消さない。
+        self.mouse_section = CollapsibleSection(
+            self.control_lf, "マウス操作", on_toggle=self._on_control_section_toggled
+        )
+        self.mouse_section.grid(row=7, column=0, sticky="ew", pady=(4, 0))
+        self.cb_left_stick_mouse = ttk.Checkbutton(
+            self.mouse_section.body, command=self._on_left_stick_toggled
+        )
+        self.cb_left_stick_mouse.config(
+            text="左スティックをマウスで",
+            variable=self.camera_lf.is_use_left_stick_mouse,
+        )
+        self.cb_left_stick_mouse.pack(anchor="w")
+        self.cb_right_stick_mouse = ttk.Checkbutton(
+            self.mouse_section.body, command=self._on_right_stick_toggled
+        )
+        self.cb_right_stick_mouse.config(
+            text="右スティックをマウスで",
+            variable=self.camera_lf.is_use_right_stick_mouse,
+        )
+        self.cb_right_stick_mouse.pack(anchor="w")
+        Tooltip(self.cb_left_stick_mouse, "マウスを動かして左スティックを操作する")
+        Tooltip(self.cb_right_stick_mouse, "マウスを動かして右スティックを操作する")
+
+        self.pad_section = CollapsibleSection(
+            self.control_lf,
+            "ゲームパッドの調整",
+            on_toggle=self._on_control_section_toggled,
+        )
+        self.pad_section.grid(row=8, column=0, sticky="ew", pady=(2, 0))
+        self.gamepad_dz_label = ttk.Label(
+            self.pad_section.body, text="スティックの遊び（0〜8192）"
+        )
+        self.gamepad_dz_label.grid(row=0, column=0, sticky="w")
         # 遊び（デッドゾーン）。既定1638=最大値の5%。drift 時に上げる。
-        self.gamepad_dz_label = ttk.Label(self.gamepad_row, text="遊び")
-        self.gamepad_dz_label.grid(row=0, column=3, padx=(14, 0), sticky="e")
         self.gamepad_dz = tk.StringVar(value="1638")
         self.gamepad_dz_spin = ttk.Spinbox(
-            self.gamepad_row,
+            self.pad_section.body,
             textvariable=self.gamepad_dz,
             from_=0,
             to=8192,
             increment=100,
-            width=7,
+            width=8,
         )
-        self.gamepad_dz_spin.grid(row=0, column=4, padx=(6, 0))
+        self.gamepad_dz_spin.grid(row=1, column=0, sticky="w", pady=(2, 0))
+        ttk.Label(
+            self.pad_section.body,
+            text="大きくするほど、スティックの小さな傾きを無視します（既定 1638）。",
+            wraplength=280,
+            justify="left",
+        ).grid(row=2, column=0, sticky="w", pady=(2, 0))
         Tooltip(
             self.gamepad_dz_spin,
             "スティックの小さな傾きを無視する範囲。勝手に動くときに上げる",
         )
         self.gamepad_dz_spin.bind("<FocusOut>", self._on_gamepad_dz_changed, add="")
         self.gamepad_dz_spin.bind("<Return>", self._on_gamepad_dz_changed, add="")
-        # HidHide が未設定のときだけ、パッド行の右端に出す。
-        self.hidhide_setup_btn = ttk.Button(
-            self.gamepad_row,
-            text="HidHide セットアップ",
-            command=self._open_hidhide_setup,
-        )
-        self.hidhide_setup_btn.grid(row=0, column=5, padx=(10, 0))
-        self.hidhide_setup_btn.grid_remove()
-        # ゲームパッドの状態行。読取中の名前・経路・生軸値を出す。
-        self.gamepad_status = tk.StringVar(value="")
-        self.gamepad_status_label = ttk.Label(
-            self.control_lf, textvariable=self.gamepad_status
-        )
-        self.gamepad_status_label.grid(
-            column=0, columnspan=2, row=3, padx=6, pady=(0, 4), sticky="ew"
-        )
 
-        self.control_lf.config(text="コントローラ")
-        self.control_lf.pack(fill="x", padx=5, pady=5)
+        # 入力調停は「コマンド実行中の手動入力」として、手動入力の近くへ。
+        self.arbitration_section = CollapsibleSection(
+            self.control_lf,
+            "コマンド実行中の手動入力",
+            on_toggle=self._on_control_section_toggled,
+        )
+        self.arbitration_section.grid(row=9, column=0, sticky="ew", pady=(2, 0))
+        self.arbitration_label = ttk.Label(
+            self.arbitration_section.body, text="入力調停"
+        )
+        self.arbitration_label.grid(row=0, column=0, sticky="w")
+        # 候補は送信側の許可値から引く（画面に名前を書き並べない）。
+        # 既定の off は本家と同じ挙動で、script を選ぶと実行中の手操作を断る。
+        self.arbitration_cb = ttk.Combobox(self.arbitration_section.body)
+        self.arbitration_cb.config(state="readonly", width=24)
+        self.arbitration_cb.grid(row=1, column=0, sticky="ew")
+        self.arbitration_cb.bind("<<ComboboxSelected>>", self.applyArbitration, add="")
+        Tooltip(
+            self.arbitration_cb,
+            "コマンド実行中に手動操作を受け付けるかどうか",
+        )
+        self.arbitration_hint = ttk.Label(
+            self.arbitration_section.body, wraplength=300, justify="left"
+        )
+        self.arbitration_hint.grid(row=2, column=0, sticky="ew", pady=(2, 0))
+
         self._gamepad_after = None
         self._gamepad_ids = {}
         self._gamepad_names = {}
@@ -541,6 +612,7 @@ class SerialPanelMixin:
         # 手動再接続では掴み直しを最後に1回だけ行う（一覧の反映と
         # 二重に走らせない）。
         self._gamepad_skip_auto_restart = False
+        self._update_controller_status()
         self.refreshGamepads()
         self._poll_gamepads()
 
@@ -560,8 +632,18 @@ class SerialPanelMixin:
 
         # 仮想コントローラ。タブの中に常に置き、別ウィンドウへも出せる
         # （ui/controller_dock.py）。送り先は開くたびに今の物を引く。
+        # タブの内側は全タブ共通の幅なので、見えている幅へ体を合わせる
+        # （Notebook 全体が広いままでも、主要操作を横スクロールなしで見せる）。
         dock_area = ttk.Frame(self.tab_controller)
-        dock_area.pack(fill="both", expand=True, padx=5, pady=(0, 5))
+        self._dock_area = dock_area
+        dock_area.place(x=5, y=300)
+        self.tab_controller.bind("<Configure>", self._fit_control_viewport, add="+")
+        self.tab_controller.bind("<Map>", self._fit_control_viewport, add="+")
+        viewport = getattr(self, "tabs_scroll", None)
+        canvas = getattr(viewport, "canvas", None)
+        if canvas is not None:
+            canvas.bind("<Configure>", self._fit_control_viewport, add="+")
+        self.root.after_idle(self._fit_control_viewport)
         try:
             self.controller_dock = ControllerDock(
                 self.root,
@@ -579,6 +661,228 @@ class SerialPanelMixin:
                 viewport=getattr(self, "tabs_scroll", None),
             )
         self.simpleConButton = self.controller_dock.pop_button
+        self._bind_release_focus(self.tab_controller, self.tab_controller)
+
+    def _on_control_section_toggled(self) -> None:
+        """詳細の開閉で高さが変わるので、配置と操作盤の高さを測り直す。"""
+        try:
+            self.root.after_idle(self._fit_control_viewport)
+        except tk.TclError:
+            pass
+
+    def _control_available_width(self) -> int:
+        """コントローラタブで実際に見えている幅。"""
+        viewport = getattr(self, "tabs_scroll", None)
+        try:
+            canvas = getattr(viewport, "canvas", None)
+            if canvas is not None:
+                width = int(canvas.winfo_width())
+                if width > 1:
+                    right = canvas.winfo_rootx() + width
+                    avail = right - self.tab_controller.winfo_rootx() - 12
+                    return max(160, min(width, avail))
+        except (tk.TclError, AttributeError, TypeError):
+            pass
+        try:
+            return max(160, int(self.tab_controller.winfo_width()))
+        except (tk.TclError, AttributeError):
+            return 320
+
+    def _control_visible_height(self) -> int:
+        """コントローラタブで実際に見えている高さ。"""
+        viewport = getattr(self, "tabs_scroll", None)
+        try:
+            canvas = getattr(viewport, "canvas", None)
+            if canvas is not None and int(canvas.winfo_height()) > 1:
+                return int(canvas.winfo_height())
+        except (tk.TclError, AttributeError, TypeError):
+            pass
+        try:
+            return int(self.tab_controller.winfo_height())
+        except (tk.TclError, AttributeError):
+            return 480
+
+    def _fit_control_viewport(self, event: Any = None) -> None:
+        """見えている幅・高さへ、操作欄と操作盤を収める。
+
+        Notebook の内側は全タブ共通の幅なので、これを使わないと狭い窓でも
+        広い幅のまま配置され、主要操作に横スクロールが要る。
+        """
+        if getattr(self, "_closing", False):
+            return
+        frame = getattr(self, "control_lf", None)
+        dock_area = getattr(self, "_dock_area", None)
+        if frame is None or dock_area is None:
+            return
+        width = self._control_available_width()
+        wrap = max(120, width - 36)
+        for label in (
+            getattr(self, "send_target_label", None),
+            getattr(self, "manual_state_label", None),
+            getattr(self, "gamepad_status_label", None),
+            getattr(self, "arbitration_hint", None),
+        ):
+            if label is not None:
+                self._set_wrap(label, wrap)
+        self._set_wrap(getattr(self, "hidhide_reason", None), max(100, wrap - 130))
+        try:
+            if int(float(frame.place_info().get("width") or 0)) != width:
+                frame.place_configure(width=width)
+            top = frame.winfo_reqheight() + 14
+            visible = self._control_visible_height()
+            dock_height = max(180, visible - top - 10)
+            info = dock_area.place_info()
+            if (
+                int(float(info.get("y") or 0)) != top
+                or int(float(info.get("width") or 0)) != width
+                or int(float(info.get("height") or 0)) != dock_height
+            ):
+                dock_area.place_configure(x=5, y=top, width=width, height=dock_height)
+            tab_height = max(top + dock_height + 6, _TAB_MIN_HEIGHT)
+            size = (min(width, 520), tab_height)
+            if getattr(self, "_control_tab_size", None) != size:
+                self._control_tab_size = size
+                self.tab_controller.config(width=size[0], height=size[1])
+        except (tk.TclError, AssertionError):
+            pass
+        dock = getattr(self, "controller_dock", None)
+        if dock is not None:
+            try:
+                dock._refit_embedded()
+            except Exception:
+                pass
+
+    def _open_key_config(self) -> None:
+        """既存のキー割当画面を開く（割り当ての確認・変更への導線）。"""
+        opener = getattr(getattr(self, "menu", None), "OpenKeyConfig", None)
+        if not callable(opener):
+            print("メニューの『ツール > キーコンフィグ』から確認できます。")
+            return
+        try:
+            opener()
+        except Exception as e:
+            logger.warning(f"キー割当を開けませんでした: {e}")
+
+    def _set_label_text(self, label: Any, text: str) -> None:
+        """同じ文を入れ直さない（ラベルの折り返し再計算を積まない）。"""
+        if label is None:
+            return
+        try:
+            if str(label.cget("text")) == text:
+                return
+        except (tk.TclError, AttributeError, KeyError):
+            pass
+        try:
+            label.config(text=text)
+        except (tk.TclError, AttributeError):
+            pass
+
+    @staticmethod
+    def _walk_widgets(widget: Any) -> list[Any]:
+        found: list[Any] = []
+        try:
+            children = widget.winfo_children()
+        except Exception:
+            return found
+        for child in children:
+            found.append(child)
+            found.extend(SerialPanelMixin._walk_widgets(child))
+        return found
+
+    def _release_focus_later(self, target: Any) -> None:
+        """クリックした操作部品からフォーカスを外し、タブへ戻す。
+
+        ボタンやコンボにフォーカスが残ると、矢印キーが選択変更に奪われ、
+        キーボード操作（Switch へ送る）と両方に効いてしまう。
+        文字を打つ欄（Entry/Text/Spinbox）はそのままにする。
+        """
+
+        def release(*_args: Any) -> None:
+            try:
+                target.focus_set()
+            except Exception:
+                pass
+
+        try:
+            self.root.after_idle(release)
+        except Exception:
+            pass
+
+    def _bind_release_focus(self, container: Any, target: Any) -> None:
+        """操作部品をクリックした後、フォーカスをタブへ戻すよう結線する。"""
+        for widget in self._walk_widgets(container):
+            try:
+                cls = widget.winfo_class()
+            except Exception:
+                continue
+            if cls in (
+                "TButton",
+                "TCheckbutton",
+                "TRadiobutton",
+                "Button",
+                "Checkbutton",
+                "Radiobutton",
+            ):
+                widget.bind(
+                    "<ButtonRelease-1>",
+                    lambda _e, t=target: self._release_focus_later(t),
+                    add="+",
+                )
+            elif cls in ("TCombobox", "Combobox"):
+                # 開いている候補を閉じた後（選択後）に戻す。押下時だと
+                # ドロップダウンが閉じてしまう。
+                widget.bind(
+                    "<<ComboboxSelected>>",
+                    lambda _e, t=target: self._release_focus_later(t),
+                    add="+",
+                )
+
+    def _update_controller_status(self) -> None:
+        """手動入力の受付状態を、取得できる情報だけで更新する。
+
+        送信先・手動入力はタブ内だけの状態にせず、アプリ下端の状態バー
+        （layout_panel）へ渡す。どのタブを開いていても同じ 1 か所で見える。
+        """
+        try:
+            snapshot = self.serial.connection_snapshot()
+        except Exception:
+            return
+        runner = getattr(self, "runner", None)
+        busy = bool(runner is not None and runner.is_busy())
+        if busy:
+            state = "手動入力: 停止（コマンド実行中）"
+        elif snapshot.phase != "ready" or not snapshot.opened:
+            state = "手動入力: 接続待ち"
+        else:
+            sources: list[str] = []
+            if bool(
+                getattr(self, "is_use_keyboard", None) and self.is_use_keyboard.get()
+            ):
+                sources.append("キーボード")
+            if bool(
+                getattr(self, "is_use_gamepad", None) and self.is_use_gamepad.get()
+            ):
+                sources.append("パッド")
+            mouse_on = bool(
+                getattr(self, "cb_left_stick_mouse", None) is not None
+                and self.camera_lf.is_use_left_stick_mouse.get()
+            ) or bool(
+                getattr(self, "cb_right_stick_mouse", None) is not None
+                and self.camera_lf.is_use_right_stick_mouse.get()
+            )
+            if mouse_on:
+                sources.append("マウス")
+            if sources:
+                state = "手動入力: 受付中（" + "・".join(sources) + "）"
+            else:
+                state = "手動入力: 停止（入力なし）"
+        status = getattr(self, "status_input", None)
+        if status is not None:
+            try:
+                if str(status.get()) != state:
+                    status.set(state)
+            except Exception:
+                pass
 
     def _gamepad_enabled_by_hidhide(self) -> bool:
         """「ゲームパッドで操作」を選べる状態か。
@@ -619,15 +923,27 @@ class SerialPanelMixin:
             logger.warning(f"ゲームパッド操作を止められませんでした: {e}")
 
     def _sync_hidhide_setup_button(self) -> None:
-        """HidHide セットアップの入口を、未設定のときだけ出す。"""
+        """HidHide セットアップの入口と理由を、未設定のときだけ出す。"""
         button = getattr(self, "hidhide_setup_btn", None)
-        if button is None:
-            return
+        reason = getattr(self, "hidhide_reason", None)
+        row = getattr(self, "hidhide_row", None)
+        ok = bool(getattr(self, "_hidhide_gamepad_ok", False))
         try:
-            if getattr(self, "_hidhide_gamepad_ok", False):
-                button.grid_remove()
-            else:
-                button.grid()
+            if row is not None:
+                if ok:
+                    row.grid_remove()
+                else:
+                    row.grid()
+            elif button is not None:
+                if ok:
+                    button.grid_remove()
+                else:
+                    button.grid()
+            if reason is not None:
+                if ok:
+                    reason.grid_remove()
+                else:
+                    reason.grid()
         except tk.TclError:
             pass
 
@@ -733,6 +1049,30 @@ class SerialPanelMixin:
                 values=baud_combo_values(False, WindowUtils.BAUD_RATE_VALUES),
                 textvariable=self.baud_rate,
             )
+        self._render_baud_summary()
+
+    def _render_baud_summary(self) -> None:
+        """詳細欄の「現在／次回の速度」を出す（接続中は実測、未接続は設定）。"""
+        label = getattr(self, "baud_current", None)
+        if label is None:
+            return
+        snapshot = self._connection_view
+        actual = f"{snapshot.baud}bps" if snapshot.baud is not None else "不明"
+        try:
+            if self.serial.uses_bcon(self.transport_name.get()):
+                next_bps = baud_bps_for_index(self._bconBaudIndex())
+                saved = (
+                    f"{next_bps}bps（{baud_label_for_index(self._bconBaudIndex())}）"
+                )
+            else:
+                next_bps = self._currentBaudRate()
+                saved = f"{next_bps}bps"
+        except (ValueError, TypeError):
+            saved = "不明"
+        text = f"次回の接続: {saved}"
+        if snapshot.opened:
+            text += f"　接続中: {actual}"
+        self._set_label_text(label, text)
 
     def applyBaudRate(self, event: Any = None) -> None:
         """オフラインは次回値を保存し、接続中は確認済み snapshot を待つ。"""
@@ -909,25 +1249,49 @@ class SerialPanelMixin:
         """利用者が置いた自作の Transport を読み込む。"""
         self.serial.load_plugins(self.settings.transport_plugin_dir.get())
 
+    def _transport_display(self, name: str) -> str:
+        """内部キー→画面の表示名。未知の方式はキーのまま（落とさない）。"""
+        return transport_display_name(name)
+
+    def _transport_key(self, label: str) -> str:
+        """画面の表示名→内部キー。表に無ければ入力をキーとして扱う。"""
+        text = str(label).strip()
+        for name in self.serial.list_transports():
+            if self._transport_display(name) == text:
+                return name
+        return text
+
     def _refreshTransportChoices(self) -> None:
         """選択欄の候補を登録簿から組み直し、現在値を選ぶ。"""
         names = self.serial.list_transports()
-        self.transport_cb.config(values=names)
+        self.transport_cb.config(
+            values=[self._transport_display(name) for name in names]
+        )
         fit_combo_width(self.transport_cb, min_chars=12, max_chars=32)
         current = self._selectedTransportName()
         self.transport_name.set(current)
+        self.transport_cb.set(self._transport_display(current))
         self._refresh_transport_description()
+        self._refresh_bcon_rows()
         # 選択値が決まった今が Bcon タブを出す最初の機会
         self._refresh_bcon_tab()
 
     def applyTransport(self, event: Any = None) -> None:
-        requested = str(self.transport_name.get())
+        try:
+            raw = str(self.transport_cb.get())
+        except (AttributeError, TypeError):
+            raw = ""
+        requested = self._transport_key(raw) if raw else str(self.transport_name.get())
         actual = (
             self.serial.connection_snapshot().transport_name
             or self._selectedTransportName()
         )
         actual = canonical_transport_name(actual) or actual
         self.transport_name.set(actual)
+        try:
+            self.transport_cb.set(self._transport_display(actual))
+        except (AttributeError, tk.TclError):
+            pass
         if not self._connection_change_allowed():
             return
         if requested not in self.serial.list_transports():
@@ -959,6 +1323,19 @@ class SerialPanelMixin:
             self.settings.arbitration_mode.get(), logger=logger
         )
         self.arbitration_mode.set(mode)
+        try:
+            self.arbitration_cb.set(mode)
+        except (AttributeError, tk.TclError):
+            pass
+        self._render_arbitration_hint(mode)
+
+    def _render_arbitration_hint(self, mode: str) -> None:
+        """候補が意味する動作を、選択肢の下に文章で書く（色・吹き出しだけにしない）。"""
+        hint = getattr(self, "arbitration_hint", None)
+        if hint is None:
+            return
+        text = _ARBITRATION_HINTS.get(mode, f"{mode}：送信側の実装に従います。")
+        self._set_label_text(hint, text)
 
     def _arbitrationCooldown(self) -> float:
         """設定の秒数を数へ直す。読めない値は既定の 2 秒として扱う。"""
@@ -979,7 +1356,12 @@ class SerialPanelMixin:
         )
         # 解決後の名前を画面へ戻す。知らない名前を選んだまま残さない
         self.arbitration_mode.set(mode)
+        try:
+            self.arbitration_cb.set(mode)
+        except (AttributeError, tk.TclError):
+            pass
         self.settings.arbitration_mode.set(mode)
+        self._render_arbitration_hint(mode)
         self.serial.set_arbitration(mode=mode, cooldown=self._arbitrationCooldown())
         message = f"入力調停を {mode} に切り替えました。"
         if mode == "script":
@@ -993,21 +1375,15 @@ class SerialPanelMixin:
         self._on_setting_changed()
 
     def _refresh_bcon_rows(self) -> None:
+        """BCON のときだけ速度探索を出す（状態は下端の状態バー）。"""
         show = self.serial.uses_bcon(self.transport_name.get())
-        for widget in (
-            self.bcon_status_label,
-            self.bcon_status,
-            self.bcon_wired_label,
-            self.bcon_row,
-        ):
+        try:
             if show:
-                widget.grid()
+                self.bcon_hunt_button.pack(side="left", padx=(5, 0))
             else:
-                widget.grid_remove()
-        if show:
-            self.bcon_hunt_button.pack(side="left", padx=(5, 0))
-        else:
-            self.bcon_hunt_button.pack_forget()
+                self.bcon_hunt_button.pack_forget()
+        except (tk.TclError, AttributeError):
+            pass
 
     def _subscribe_connection_state(self) -> None:
         if getattr(self, "_closing", False):
@@ -1100,14 +1476,45 @@ class SerialPanelMixin:
             if uses_bcon and snapshot.opened and not blocked
             else "disabled"
         )
-        self.com_port_notice.config(
-            text="COM ポートが見つかりません。USB 接続を確認して『更新』を押してください。"
-            if not has_ports
-            else ""
-        )
+        # 失敗したときだけ、基本表示に復旧の導線（速度を探す）を出す。
+        failed = snapshot.phase == "failed" and not blocked
+        try:
+            if failed and uses_bcon:
+                self.recovery_button.grid()
+                self.recovery_button.config(state="normal")
+            else:
+                self.recovery_button.grid_remove()
+        except (tk.TclError, AttributeError):
+            pass
+        self._render_connection_notice(snapshot, has_ports)
+        self._render_baud_summary()
+        self._update_controller_status()
         refresh = getattr(self, "_refresh_bcon_controls", None)
         if callable(refresh):
             refresh()
+
+    def _render_connection_notice(
+        self, snapshot: ConnectionSnapshot, has_ports: bool
+    ) -> None:
+        """基本表示に出す注意だけをまとめる（成功時は空）。"""
+        messages: list[str] = []
+        if not has_ports:
+            messages.append(
+                "COM ポートが見つかりません。USB 接続を確認して『一覧更新』を押してください。"
+            )
+        chosen = str(self.com_port_name.get())
+        actual = snapshot.port_name
+        if snapshot.opened and chosen and actual and chosen != actual:
+            messages.append(f"選択 {chosen} と実際 {actual} が異なります。")
+        text = "\n".join(messages)
+        self._set_label_text(self.com_port_notice, text)
+        try:
+            if text:
+                self.com_port_notice.grid()
+            else:
+                self.com_port_notice.grid_remove()
+        except (tk.TclError, AttributeError):
+            pass
 
     def _apply_connection_snapshot(self, snapshot: ConnectionSnapshot) -> None:
         """確認済み状態だけを GUI へ映し、同世代の STATUS では listener を作り直さない。"""
@@ -1142,6 +1549,10 @@ class SerialPanelMixin:
         changed_transport = bool(name) and name != self.transport_name.get()
         if (changed_transport or completed_switch) and snapshot.phase != "opening":
             self.transport_name.set(name)
+            try:
+                self.transport_cb.set(self._transport_display(name))
+            except (AttributeError, tk.TclError):
+                pass
             if completed_switch:
                 self.serial.clear_override()
             self._refreshBaudUi()
@@ -1191,29 +1602,34 @@ class SerialPanelMixin:
 
     def _render_connection_summary(self) -> None:
         snapshot = self._connection_view
-        phases = {
-            "disconnected": "未接続",
-            "opening": "ポート接続中…",
-            "hello": "HELLO 確認中…",
-            "ready": "接続済み",
-            "closing": "切断中…",
-            "restarting": "再起動待ち",
-            "bootloader": "BOOTSEL モード",
-        }
-        state = phases.get(
-            snapshot.phase, "HELLO 失敗" if snapshot.opened else "接続失敗"
-        )
+        transport = snapshot.transport_name or self.transport_name.get()
+        # 接続状態は下端の状態バーが全タブ共通で出す。ここは操作結果だけ。
+
+        # 操作結果・失敗理由は押したボタンの直下へ。詳細ログは診断に置く。
+        result = ""
         if snapshot.phase == "failed":
-            state += f"：{snapshot.message}"
+            result = snapshot.message or "接続に失敗しました。"
             if snapshot.opened and snapshot.baud is None:
-                state += "\n速度を確認できません。『速度を探す』で確認してください。"
-        elif snapshot.phase in {"restarting", "bootloader"}:
-            state += f"\n{snapshot.message}"
-        self.connection_status.config(text=state)
+                result += "\n速度を確認できません。『速度を探す』で確認してください。"
+        elif snapshot.operation:
+            result = f"{snapshot.operation}…"
+        elif snapshot.phase in {"restarting", "bootloader"} and snapshot.message:
+            result = snapshot.message
+        self._set_label_text(getattr(self, "connection_result", None), result)
+        result_label = getattr(self, "connection_result", None)
+        if result_label is not None:
+            try:
+                if result:
+                    result_label.grid()
+                else:
+                    result_label.grid_remove()
+            except (tk.TclError, AttributeError):
+                pass
+
         chosen = str(self.com_port_name.get()) or "未選択"
         actual = snapshot.port_name or "不明"
         baud = f"{snapshot.baud}bps" if snapshot.baud is not None else "不明"
-        if self.serial.uses_bcon(snapshot.transport_name or self.transport_name.get()):
+        if self.serial.uses_bcon(transport):
             ack = snapshot.hello_ack
             hello = (
                 "未確認"
@@ -1222,35 +1638,11 @@ class SerialPanelMixin:
             )
         else:
             hello = "対象外"
-        self.connection_details.config(
-            text=f"選択: {chosen}　実際: {actual}\n通信速度: {baud}　HELLO: {hello}"
+        self._set_label_text(
+            self.connection_details,
+            f"選択: {chosen}　実際: {actual}\n通信速度: {baud}　HELLO: {hello}",
         )
-        status = snapshot.status if snapshot.opened else None
-        switch = (
-            "不明"
-            if status is None
-            else ("有線" if status[0] & _STATUS_FLAG_WIRED else "無線")
-        )
-        if (
-            status is not None
-            and snapshot.status_received_at is not None
-            and time.monotonic() - snapshot.status_received_at > 3.0
-        ):
-            switch += "　更新停止（最終受信値）"
-        self.bcon_wired.set(switch)
-        payload = snapshot.player_info if snapshot.opened else b""
-        lamp = payload[0] & 0x0F if payload else 0
-        for index, item in enumerate(self._player_lamp_items):
-            self.player_lamp_canvas.itemconfigure(
-                item, fill="green yellow" if (lamp >> index) & 1 else "gray"
-            )
-        rumble = snapshot.rumble if snapshot.opened else b""
-        from core.transport.bcon import decode_rumble
-
-        left, right = decode_rumble(rumble)
-        self.rumble_label.config(
-            text=f"振動: L={left} R={right}" if rumble else "振動: （なし）"
-        )
+        self._render_baud_summary()
 
     def _poll_connection_summary(self) -> None:
         # 経過時間の表示だけを更新する。受信要求や transport の照会は行わない。
@@ -1428,6 +1820,7 @@ class SerialPanelMixin:
         保存はその後に行い、画面に見えている状態と設定を一致させる。
         """
         self.activateKeyboard()
+        self._update_controller_status()
         self._on_setting_changed()
 
     def activateGamepad(self) -> None:
@@ -1520,7 +1913,7 @@ class SerialPanelMixin:
             if not data.get("connected"):
                 if getattr(self, "_gamepad_status_text", None) != "none":
                     self._gamepad_status_text = "none"
-                    status.set("ゲームパッド: 未接続")
+                    status.set("読み取り：未接続")
                 return
             now = time.monotonic()
             last = getattr(self, "_gamepad_status_at", 0.0)
@@ -1532,7 +1925,7 @@ class SerialPanelMixin:
             raw = tuple(data.get("raw_axes", ()) or ())
             raw_text = " ".join(f"{float(v):+.2f}" for v in raw[:6])
             buttons = ",".join(data.get("buttons", ()))
-            text = f"{name} [{route}] 軸:{raw_text} {buttons}"
+            text = f"読み取り：{name} [{route}] 軸:{raw_text} {buttons}"
             if getattr(self, "_gamepad_status_text", None) == text:
                 return
             self._gamepad_status_text = text
@@ -2006,14 +2399,17 @@ class SerialPanelMixin:
     def _on_gamepad_toggled(self) -> None:
         """ゲームパッド操作の切り替え。有効化に失敗した場合も保存する。"""
         self.activateGamepad()
+        self._update_controller_status()
         self._on_setting_changed()
 
     def _on_left_stick_toggled(self) -> None:
         self.activate_Left_stick_mouse()
+        self._update_controller_status()
         self._on_setting_changed()
 
     def _on_right_stick_toggled(self) -> None:
         self.activate_Right_stick_mouse()
+        self._update_controller_status()
         self._on_setting_changed()
 
     def activate_Left_stick_mouse(self) -> None:

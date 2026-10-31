@@ -91,7 +91,38 @@ def test_layout_projects_snapshot_without_querying_transport() -> None:
     )
     LayoutPanelMixin._publish_status(host)
     assert host.status_state.value == "HELLO 確認中"
-    assert host.status_device.value == "confirmed-port (switch-bcon-proc)"
+    assert host.status_device.value == (
+        "送信先: confirmed-port / Pico 中継（別プロセス）"
+    )
+
+
+def test_bcon_link_state_is_shown_in_the_global_bar_and_marks_stale(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ui.layout_panel import LayoutPanelMixin
+
+    class Value:
+        value = ""
+
+        def set(self, value: str) -> None:
+            self.value = value
+
+    connection = ConnectionSnapshot(
+        phase="ready",
+        opened=True,
+        status=(0x20, 1, 0, 0, 0),
+        status_received_at=96.0,
+    )
+    host: Any = SimpleNamespace(
+        serial=SimpleNamespace(connection_snapshot=lambda: connection),
+        runner=SimpleNamespace(stop_waited=0),
+        status_state=Value(),
+        status_device=Value(),
+        status_bcon=Value(),
+    )
+    monkeypatch.setattr("ui.layout_panel.time.monotonic", lambda: 100.0)
+    LayoutPanelMixin._publish_status(host)
+    assert host.status_bcon.value == "Pico↔Switch: 有線（更新停止）"
 
 
 def test_a_stopped_and_connected_app_reads_as_idle() -> None:

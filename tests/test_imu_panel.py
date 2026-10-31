@@ -220,6 +220,10 @@ def test_imu_panel_hid_invert_reads_and_writes_hid_keys(tk_root: tk.Tk) -> None:
     panel, root, _transport, settings, _root = _make_panel(tk_root, data)
     try:
         assert panel._source_var.get() == "HID直結"
+        # 入力源・反転は詳細（ジャイロ設定）の中。開いてから確認する。
+        assert panel._invert_cb.winfo_manager() == ""
+        panel._settings.set_open(True)
+        root.update()
         # HID直結は通常運用の源なので、反転はデバッグ表示でだけ出す。
         assert panel._invert_cb.winfo_manager() == ""
         panel._debug_var.set(True)
@@ -315,6 +319,7 @@ def test_imu_panel_manual_and_detail_rows_stay_below_controls(
     )
     try:
         root.deiconify()
+        panel._settings.set_open(True)
         root.update()
         scale = panel._scale_cb
         manual = panel._manual_frame

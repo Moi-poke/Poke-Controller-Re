@@ -35,10 +35,17 @@ from core.transport.bcon_protocol import (
 )
 from core.ui_inbox import UiInbox, post_latest_to_gui
 from services.serial_service import SerialService
+from ui.collapsible import CollapsibleSection, SectionFrame
 from ui.tooltip import Tooltip
 
 BCON_WINDOW_TITLE = "BCON 設定"
 _LOGGER = logging.getLogger(__name__)
+
+#: 操作列と情報列を左右に並べる最小の可視幅（px）。Microsoft の
+#: ブレークポイント（Medium 641 以上）に近い値。狭いときは 1 列。
+_TWO_COLUMN_MIN_WIDTH = 560
+#: タブの最低の高さ（px）。数行しか見えない高さまで縮むと操作できない。
+_TAB_MIN_HEIGHT = 280
 
 # 計測の間引き幅。debugへの書き出しはこの秒数に1件までにする。
 # per-frameのI/Oにしないための枠で、数え自体は毎回行う。
@@ -319,10 +326,14 @@ class BconSetup:
         *,
         embedded: bool = False,
         command_busy: Callable[[], bool] | None = None,
+        on_show_serial: Callable[[], None] | None = None,
+        viewport: Any = None,
     ) -> None:
         """接続と会話の所有者はサービス。画面は写しと操作要求だけを扱う。"""
         self._service = service
         self._command_busy = command_busy or (lambda: False)
+        self._show_serial = on_show_serial
+        self._viewport = viewport
         self._snapshot = service.connection_snapshot()
         self._unsupported: set[str] = set()
         self._color_loaded = False
@@ -362,8 +373,7 @@ class BconSetup:
             self.window.title(BCON_WINDOW_TITLE)
             self.window.protocol("WM_DELETE_WINDOW", self.close)
 
-        body = ttk.Frame(self.window, padding=8)
-        body.pack(fill=tk.BOTH, expand=True)
+        body = ttk.Frame(self.window, padding=4)
         self._body = body
 
         # タブでは操作列と情報列を、幅が足りれば左右に、足りなければ縦に並べる
@@ -372,6 +382,8 @@ class BconSetup:
         # 別窓は従来どおり縦積み（同じ親へ積む＝列を分けない）。
         self._two_columns: bool | None = None
         if embedded:
+            # Notebook の内側は全タブ共通の幅なので、見えている幅へ体を合わせる。
+            body.place(x=4, y=4)
             col_ops = ttk.Frame(body)
             col_info = ttk.Frame(body)
             # 要求幅は狭い方（縦積み）の幅に固定し、実際の幅で並べ方を決める。
@@ -380,7 +392,14 @@ class BconSetup:
             body.grid_propagate(False)
             body.columnconfigure(1, weight=1)
             body.bind("<Configure>", lambda _e: self._reflow_columns(), add="+")
+            self.window.bind("<Configure>", self._fit_viewport, add="+")
+            self.window.bind("<Map>", self._fit_viewport, add="+")
+            canvas = getattr(viewport, "canvas", None)
+            if canvas is not None:
+                canvas.bind("<Configure>", self._fit_viewport, add="+")
+            self.window.after_idle(self._fit_viewport)
         else:
+            body.pack(fill=tk.BOTH, expand=True)
             col_ops = col_info = body
         self._col_ops = col_ops
         self._col_info = col_info
@@ -388,213 +407,170 @@ class BconSetup:
         # 実行中は全ボタンを止める。止めた旨の表示だけ別に置く。
         self._busy_label = ttk.Label(col_ops, text="")
         self._busy_label.pack(anchor=tk.W)
-        self._summary = ttk.Label(
-            col_ops, text="未接続", wraplength=330, justify=tk.LEFT
-        )
-        self._summary.pack(fill=tk.X, pady=(0, 8))
 
-        grp_connect = ttk.LabelFrame(col_ops, text="接続", padding=8)
-        grp_connect.pack(fill=tk.X, pady=(0, 8))
-        grp_connect.columnconfigure(0, weight=1, uniform="btn")
-        grp_connect.columnconfigure(1, weight=1, uniform="btn")
-        self._btn_connect = ttk.Button(
-            grp_connect,
+        # 接続状態は下端の状態バーが全タブ共通で出す（タブ内に常時表示しない）。
+
+        # 主要操作（常時）。枠線は引かず、見出しと余白でまとまりを示す。
+        grp_main = SectionFrame(col_ops, "操作")
+        grp_main.pack(fill=tk.X, pady=(0, 4))
+        main_body = grp_main.body
+        main_body.columnconfigure(0, weight=1, uniform="btn")
+        main_body.columnconfigure(1, weight=1, uniform="btn")
+        self._btn_status = ttk.Button(
+            main_body,
+            text="状態を更新",
+            command=self._on_status,
+        )
+        self._btn_status.grid(row=0, column=0, sticky=tk.EW, padx=2, pady=2)
+        self._btn_reconnect = ttk.Button(
+            main_body,
+            text="Switchへ再接続",
+            command=self._on_reconnect,
+        )
+        self._btn_reconnect.grid(row=0, column=1, sticky=tk.EW, padx=2, pady=2)
+        # 接続に失敗したときだけ出す復旧の導線（詳細を開かなくても届く）。
+        self._recovery_row = ttk.Frame(main_body)
+        self._recovery_row.grid(
+            row=1, column=0, columnspan=2, sticky=tk.EW, pady=(2, 0)
+        )
+        self._recovery_row.columnconfigure(0, weight=1, uniform="btn")
+        self._recovery_row.columnconfigure(1, weight=1, uniform="btn")
+        self._btn_retry_quick = ttk.Button(
+            self._recovery_row,
             text="HELLO をやり直す",
             command=self._on_connect,
         )
-        self._btn_connect.grid(
-            row=0,
-            column=0,
-            columnspan=2,
-            sticky=tk.EW,
-            padx=2,
-            pady=2,
+        self._btn_retry_quick.grid(row=0, column=0, sticky=tk.EW, padx=2, pady=2)
+        self._btn_hunt_quick = ttk.Button(
+            self._recovery_row,
+            text="速度を探す",
+            command=self._on_hunt,
         )
-        self._btn_status = ttk.Button(
-            grp_connect,
-            text="状態確認",
-            command=self._on_status,
-        )
-        self._btn_status.grid(row=1, column=0, sticky=tk.EW, padx=2, pady=2)
-        self._btn_ping = ttk.Button(
-            grp_connect,
-            text="疎通確認（PING）",
-            command=self._on_ping,
-        )
-        self._btn_ping.grid(row=1, column=1, sticky=tk.EW, padx=2, pady=2)
+        self._btn_hunt_quick.grid(row=0, column=1, sticky=tk.EW, padx=2, pady=2)
+        self._recovery_row.grid_remove()
+        self._result = ttk.Label(col_ops, text="", wraplength=250, justify=tk.LEFT)
+        self._result.pack(fill=tk.X, pady=(0, 4))
 
-        grp_pair = ttk.LabelFrame(
-            col_ops,
+        # 接続モードとペアリング（詳細。1 階層だけ折りたたむ）。
+        # 主要な手順（状態→主要操作）は畳まずに左列だけで追える。
+        grp_pair = CollapsibleSection(
+            col_ops, "接続モード・ペアリング", on_toggle=self._reflow_columns
+        )
+        grp_pair.pack(fill=tk.X, pady=(0, 0))
+        self._grp_pair = grp_pair
+        pair_body = grp_pair.body
+        pair_body.columnconfigure(0, weight=1)
+
+        # 操作の前に影響を示す（再起動でポートが外れる）。自動再接続はしない。
+        ttk.Label(
+            pair_body,
+            text="接続方式・種別を変えると Pico が再起動し、COM ポートが外れます。"
+            "再起動後は『シリアルタブで接続し直す』から入り直してください。",
+            wraplength=250,
+            justify=tk.LEFT,
+        ).grid(row=0, column=0, sticky=tk.W, pady=(2, 4))
+
+        mode_row = ttk.Frame(pair_body)
+        mode_row.grid(row=1, column=0, sticky=tk.EW)
+        for column in (1, 2, 3):
+            mode_row.columnconfigure(column, weight=1, uniform="btn")
+        ttk.Label(mode_row, text="接続方式").grid(
+            row=0, column=0, sticky=tk.W, padx=2, pady=2
+        )
+        self._btn_w1 = ttk.Button(
+            mode_row, text="有線にする", command=self._on_wired_on
+        )
+        self._btn_w1.grid(row=0, column=1, sticky=tk.EW, padx=2, pady=2)
+        self._btn_w0 = ttk.Button(
+            mode_row, text="無線にする", command=self._on_wired_off
+        )
+        self._btn_w0.grid(row=0, column=2, sticky=tk.EW, padx=2, pady=2)
+        self._btn_winfo = ttk.Button(
+            mode_row, text="現在の方式", command=self._on_wired_show
+        )
+        self._btn_winfo.grid(row=0, column=3, sticky=tk.EW, padx=2, pady=2)
+
+        type_row = ttk.Frame(pair_body)
+        type_row.grid(row=2, column=0, sticky=tk.EW)
+        for column in (1, 2, 3):
+            type_row.columnconfigure(column, weight=1, uniform="btn")
+        ttk.Label(type_row, text="種別").grid(
+            row=0, column=0, sticky=tk.W, padx=2, pady=2
+        )
+        self._btn_e0 = ttk.Button(
+            type_row, text="Pro Con", command=lambda: self._on_emulate_set(0)
+        )
+        self._btn_e0.grid(row=0, column=1, sticky=tk.EW, padx=2, pady=2)
+        self._btn_e1 = ttk.Button(
+            type_row, text="Joy-Con L", command=lambda: self._on_emulate_set(1)
+        )
+        self._btn_e1.grid(row=0, column=2, sticky=tk.EW, padx=2, pady=2)
+        self._btn_e2 = ttk.Button(
+            type_row, text="Joy-Con R", command=lambda: self._on_emulate_set(2)
+        )
+        self._btn_e2.grid(row=0, column=3, sticky=tk.EW, padx=2, pady=2)
+
+        if self._show_serial is not None:
+            self._btn_serial = ttk.Button(
+                pair_body,
+                text="シリアルタブで接続し直す",
+                command=self._show_serial,
+            )
+            self._btn_serial.grid(row=3, column=0, sticky=tk.EW, pady=(0, 4))
+
+        ttk.Separator(pair_body).grid(row=4, column=0, sticky=tk.EW, pady=6)
+        ttk.Label(
+            pair_body,
             text="無線ペアリング（無線モードのみ）",
-            padding=8,
-        )
-        grp_pair.pack(fill=tk.X, pady=(0, 8))
-        for column in range(4):
-            grp_pair.columnconfigure(column, weight=1, uniform="btn")
-        ttk.Label(grp_pair, text="取込").grid(
-            row=0,
-            column=0,
-            sticky=tk.W,
-            padx=2,
-            pady=2,
-        )
+            wraplength=250,
+            justify=tk.LEFT,
+        ).grid(row=5, column=0, sticky=tk.W)
+        ttk.Label(
+            pair_body,
+            text="前提：無線モードで、Pico と Switch が未接続。"
+            "取込時間内に Joy-Con の HOME を長押しします。PC と Pico の接続は維持されます。",
+            wraplength=250,
+            justify=tk.LEFT,
+        ).grid(row=6, column=0, sticky=tk.W, pady=(2, 4))
+
+        cap_row = ttk.Frame(pair_body)
+        cap_row.grid(row=7, column=0, sticky=tk.EW)
+        cap_row.columnconfigure(1, weight=1)
+        ttk.Label(cap_row, text="取込時間").grid(row=0, column=0, sticky=tk.W, padx=2)
         self._seconds = tk.IntVar(value=15)
         self._seconds_input = ttk.Spinbox(
-            grp_pair,
+            cap_row,
             from_=1,
             to=60,
             width=4,
             textvariable=self._seconds,
         )
-        self._seconds_input.grid(row=0, column=1, sticky=tk.EW, padx=2, pady=2)
-        ttk.Label(grp_pair, text="秒").grid(
-            row=0,
-            column=2,
-            sticky=tk.W,
-            padx=2,
-            pady=2,
-        )
+        self._seconds_input.grid(row=0, column=1, sticky=tk.W, padx=2, pady=2)
+        ttk.Label(cap_row, text="秒").grid(row=0, column=2, sticky=tk.W, padx=2)
         self._btn_cap = ttk.Button(
-            grp_pair,
+            cap_row,
             text="取込開始",
             command=self._on_capture,
         )
-        self._btn_cap.grid(row=0, column=3, sticky=tk.EW, padx=2, pady=2)
+        self._btn_cap.grid(row=0, column=3, sticky=tk.EW, padx=(6, 2), pady=2)
+
         self._btn_beacon = ttk.Button(
-            grp_pair,
+            pair_body,
             text="保存した入力を再生",
             command=self._on_beacon,
         )
-        self._btn_beacon.grid(
-            row=1,
-            column=0,
-            columnspan=2,
-            sticky=tk.EW,
-            padx=2,
-            pady=2,
-        )
-        self._btn_reconnect = ttk.Button(
-            grp_pair,
-            text="再接続を試す",
-            command=self._on_reconnect,
-        )
-        self._btn_reconnect.grid(
-            row=1,
-            column=2,
-            columnspan=2,
-            sticky=tk.EW,
-            padx=2,
-            pady=2,
-        )
-
+        self._btn_beacon.grid(row=8, column=0, sticky=tk.EW, pady=(4, 2))
         ttk.Label(
-            grp_pair,
-            text="無線モード・Pico と Switch が未接続・取込時間内に Joy-Con の HOME を長押し。PC と Pico の接続は維持",
-            wraplength=310,
-        ).grid(row=2, column=0, columnspan=4, sticky=tk.W, pady=4)
+            pair_body,
+            text="取込は完了まで待ち、保存を確認してから『Switchへ再接続』を押します。",
+            wraplength=250,
+            justify=tk.LEFT,
+        ).grid(row=9, column=0, sticky=tk.W, pady=(0, 2))
 
-        grp_mode = ttk.LabelFrame(
-            col_ops,
-            text="動作モード（変更すると再起動）",
-            padding=8,
-        )
-        grp_mode.pack(fill=tk.X, pady=(0, 8))
-        for column in (1, 2, 3):
-            grp_mode.columnconfigure(column, weight=1, uniform="btn")
-        ttk.Label(grp_mode, text="接続方式").grid(
-            row=0,
-            column=0,
-            sticky=tk.W,
-            padx=2,
-            pady=2,
-        )
-        self._btn_w1 = ttk.Button(
-            grp_mode,
-            text="有線にする",
-            command=self._on_wired_on,
-        )
-        self._btn_w1.grid(row=0, column=1, sticky=tk.EW, padx=2, pady=2)
-        self._btn_w0 = ttk.Button(
-            grp_mode,
-            text="無線にする",
-            command=self._on_wired_off,
-        )
-        self._btn_w0.grid(row=0, column=2, sticky=tk.EW, padx=2, pady=2)
-        self._btn_winfo = ttk.Button(
-            grp_mode,
-            text="現在の方式",
-            command=self._on_wired_show,
-        )
-        self._btn_winfo.grid(row=0, column=3, sticky=tk.EW, padx=2, pady=2)
-        ttk.Label(grp_mode, text="種別").grid(
-            row=1,
-            column=0,
-            sticky=tk.W,
-            padx=2,
-            pady=2,
-        )
-        self._btn_e0 = ttk.Button(
-            grp_mode,
-            text="Pro Con",
-            command=lambda: self._on_emulate_set(0),
-        )
-        self._btn_e0.grid(row=1, column=1, sticky=tk.EW, padx=2, pady=2)
-        self._btn_e1 = ttk.Button(
-            grp_mode,
-            text="Joy-Con L",
-            command=lambda: self._on_emulate_set(1),
-        )
-        self._btn_e1.grid(row=1, column=2, sticky=tk.EW, padx=2, pady=2)
-        self._btn_e2 = ttk.Button(
-            grp_mode,
-            text="Joy-Con R",
-            command=lambda: self._on_emulate_set(2),
-        )
-        self._btn_e2.grid(row=1, column=3, sticky=tk.EW, padx=2, pady=2)
-
-        # 取り消せない操作だけ集める。他のボタンはここへ置かない
-        # （押し間違いを防ぐための隔離であり、処理は何も変えない）。
-        grp_danger = ttk.LabelFrame(
-            col_ops,
-            text="保守（取り消せない操作）",
-            padding=8,
-        )
-        grp_danger.pack(fill=tk.X, pady=(0, 8))
-        grp_danger.columnconfigure(0, weight=1, uniform="btn")
-        grp_danger.columnconfigure(1, weight=1, uniform="btn")
-        self._btn_bootsel = ttk.Button(
-            grp_danger,
-            text="BOOTSEL再起動",
-            command=self._on_bootsel,
-        )
-        self._btn_bootsel.grid(
-            row=0,
-            column=0,
-            columnspan=2,
-            sticky=tk.EW,
-            padx=2,
-            pady=2,
-        )
-        self._btn_clear = ttk.Button(
-            grp_danger,
-            text="取込を破棄",
-            command=self._on_clear,
-        )
-        self._btn_clear.grid(row=1, column=0, sticky=tk.EW, padx=2, pady=2)
-        self._btn_keys = ttk.Button(
-            grp_danger,
-            text="ペア鍵を全削除",
-            command=self._on_delete_keys,
-        )
-        self._btn_keys.grid(row=1, column=1, sticky=tk.EW, padx=2, pady=2)
-
-        grp_state = ttk.LabelFrame(
-            col_info,
-            text="コントローラ状態",
-            padding=8,
-        )
-        grp_state.pack(fill=tk.X, pady=(0, 8))
-        ttk.Label(grp_state, text="プレイヤーLED").grid(
+        grp_state = SectionFrame(col_info, "コントローラ状態")
+        grp_state.pack(fill=tk.X, pady=(0, 0))
+        state_body = grp_state.body
+        ttk.Label(state_body, text="プレイヤーLED").grid(
             row=0,
             column=0,
             sticky=tk.W,
@@ -604,12 +580,12 @@ class BconSetup:
         # PLAYER_INFO のLEDはbit0=LED1..bit3=LED4。実機は縦4灯で
         # LED1が最下段・LED4が最上段。ここは左からLED1..LED4の横並びで出す。
         self._lamp_canvas = tk.Canvas(
-            grp_state,
+            state_body,
             width=120,
             height=30,
             highlightthickness=0,
         )
-        self._lamp_canvas.grid(row=0, column=1, sticky=tk.W, padx=2, pady=2)
+        self._lamp_canvas.grid(row=1, column=0, sticky=tk.W, padx=2, pady=2)
         self._lamp_items: list[int] = []
         for index in range(4):
             left = 4 + index * 30
@@ -623,23 +599,24 @@ class BconSetup:
                     outline="#4D4D4D",
                 )
             )
-        self._imu_label = ttk.Label(grp_state, text="ジャイロ: なし")
-        self._imu_label.grid(row=1, column=0, sticky=tk.W, padx=2, pady=2)
-        self._vib_label = ttk.Label(grp_state, text="振動: 未受信")
-        self._vib_label.grid(row=1, column=1, sticky=tk.W, padx=2, pady=2)
+        self._imu_label = ttk.Label(state_body, text="ジャイロ: なし")
+        self._imu_label.grid(row=2, column=0, sticky=tk.W, padx=2, pady=2)
+        self._vib_label = ttk.Label(state_body, text="振動: 未受信")
+        self._vib_label.grid(row=3, column=0, sticky=tk.W, padx=2, pady=2)
 
-        grp_color = ttk.LabelFrame(
-            col_info,
-            text="本体色（RRGGBB）",
-            padding=8,
+        grp_color = CollapsibleSection(
+            col_info, "本体色（RRGGBB）", on_toggle=self._reflow_columns
         )
-        grp_color.pack(fill=tk.X, pady=(0, 8))
+        grp_color.pack(fill=tk.X, pady=(4, 0))
+        self._grp_color = grp_color
+        color_body = grp_color.body
+        color_body.columnconfigure(1, weight=1)
         self._colors: list[Any] = []
         color_entries: list[Any] = []
-        # タブでは 4 欄を 2x2 に並べる（横 1 列だと情報列で最も幅を取る）。
-        slots = ttk.Frame(grp_color)
+        # 4 欄を 2x2 に並べる（横 1 列は狭い列で最も幅を取る）。
+        slots = ttk.Frame(color_body)
         slots.grid(row=0, column=0, columnspan=2, sticky=tk.EW, padx=2, pady=2)
-        per_row = 2 if embedded else len(COLOR_SLOT_NAMES)
+        per_row = 2
         for index, (slot, default) in enumerate(zip(COLOR_SLOT_NAMES, COLOR_DEFAULTS)):
             r, c = divmod(index, per_row)
             ttk.Label(slots, text=slot).grid(
@@ -654,7 +631,7 @@ class BconSetup:
             self._colors.append(var)
             color_entries.append(entry)
         self._color_canvas = tk.Canvas(
-            grp_color,
+            color_body,
             width=96,
             height=20,
             highlightthickness=0,
@@ -672,24 +649,55 @@ class BconSetup:
             entry.bind("<KeyRelease>", lambda _e: self._refresh_color_preview())
             var.trace_add("write", lambda *_a: self._refresh_color_preview())
         self._btn_color = ttk.Button(
-            grp_color,
+            color_body,
             text="色を送る",
             command=self._on_color,
         )
         self._btn_color.grid(row=1, column=1, sticky=tk.EW, padx=2, pady=2)
         self._color_entries = color_entries
         self._refresh_color_preview()
-        grp_baud = ttk.LabelFrame(col_info, text="通信速度", padding=8)
-        grp_baud.pack(fill=tk.X, pady=(0, 8))
-        self._actual_baud = ttk.Label(grp_baud, text="実際の速度: 不明")
-        self._actual_baud.pack(anchor=tk.W)
-        self._btn_hunt = ttk.Button(grp_baud, text="速度を探す", command=self._on_hunt)
-        self._btn_hunt.pack(fill=tk.X)
 
-        grp_log = ttk.LabelFrame(col_info, text="ログ", padding=8)
-        grp_log.pack(fill=tk.BOTH, expand=True, pady=(0, 8))
-        log_frame = ttk.Frame(grp_log)
-        log_frame.pack(fill=tk.BOTH, expand=True)
+        # 通信診断（HELLO 再試行・PING・速度探索）と詳細ログを 1 か所へ。
+        grp_diag = CollapsibleSection(
+            col_info,
+            "通信診断・詳細ログ",
+            expand=True,
+            on_toggle=self._reflow_columns,
+        )
+        grp_diag.pack(fill=tk.BOTH, expand=True, pady=(4, 0))
+        self._grp_diag = grp_diag
+        diag = grp_diag.body
+        diag.columnconfigure(0, weight=1)
+        diag.rowconfigure(3, weight=1)
+        self._summary = ttk.Label(diag, text="未接続", wraplength=250, justify=tk.LEFT)
+        self._summary.grid(row=0, column=0, sticky=tk.EW)
+        self._actual_baud = ttk.Label(diag, text="実際の速度: 不明")
+        self._actual_baud.grid(row=1, column=0, sticky=tk.W)
+        diag_buttons = ttk.Frame(diag)
+        diag_buttons.grid(row=2, column=0, sticky=tk.EW, pady=(4, 4))
+        for column in range(3):
+            diag_buttons.columnconfigure(column, weight=1, uniform="btn")
+        self._btn_connect = ttk.Button(
+            diag_buttons,
+            text="HELLO をやり直す",
+            command=self._on_connect,
+        )
+        self._btn_connect.grid(row=0, column=0, sticky=tk.EW, padx=2, pady=2)
+        self._btn_ping = ttk.Button(
+            diag_buttons,
+            text="疎通確認（PING）",
+            command=self._on_ping,
+        )
+        self._btn_ping.grid(row=0, column=1, sticky=tk.EW, padx=2, pady=2)
+        self._btn_hunt = ttk.Button(
+            diag_buttons,
+            text="速度を探す",
+            command=self._on_hunt,
+        )
+        self._btn_hunt.grid(row=0, column=2, sticky=tk.EW, padx=2, pady=2)
+
+        log_frame = ttk.Frame(diag)
+        log_frame.grid(row=3, column=0, sticky=tk.NSEW)
         log_frame.rowconfigure(0, weight=1)
         log_frame.columnconfigure(0, weight=1)
         self._log = tk.Text(
@@ -705,6 +713,45 @@ class BconSetup:
         )
         log_scroll.grid(row=0, column=1, sticky=tk.NS)
         self._log.configure(yscrollcommand=log_scroll.set)
+
+        # 取り消せない操作だけ集める。他のボタンはここへ置かない
+        # （押し間違いを防ぐための隔離であり、処理は何も変えない）。
+        # 作る順＝Tab の移動順なので、状態・色・診断の後（最下部）に作る。
+        grp_danger = CollapsibleSection(
+            col_info, "保守（取り消せない操作）", on_toggle=self._reflow_columns
+        )
+        self._grp_danger = grp_danger
+        danger_body = grp_danger.body
+        danger_body.columnconfigure(0, weight=1, uniform="btn")
+        danger_body.columnconfigure(1, weight=1, uniform="btn")
+        self._btn_bootsel = ttk.Button(
+            danger_body,
+            text="BOOTSEL再起動",
+            command=self._on_bootsel,
+        )
+        self._btn_bootsel.grid(
+            row=0,
+            column=0,
+            columnspan=2,
+            sticky=tk.EW,
+            padx=2,
+            pady=2,
+        )
+        self._btn_clear = ttk.Button(
+            danger_body,
+            text="取込を破棄",
+            command=self._on_clear,
+        )
+        self._btn_clear.grid(row=1, column=0, sticky=tk.EW, padx=2, pady=2)
+        self._btn_keys = ttk.Button(
+            danger_body,
+            text="ペア鍵を全削除",
+            command=self._on_delete_keys,
+        )
+        self._btn_keys.grid(row=1, column=1, sticky=tk.EW, padx=2, pady=2)
+
+        # 取り消せない操作は最下部へ（情報列の最後に置く）。
+        grp_danger.pack(fill=tk.X, pady=(4, 0))
 
         # ボタン面から外した用語と注意は吹き出しへ移す（面の文言を短く保つ）。
         Tooltip(
@@ -770,10 +817,91 @@ class BconSetup:
         )
         if embedded:
             self._reflow_columns()
+        self._bind_release_focus()
         self.set_visible(True)
 
+    def _bind_release_focus(self) -> None:
+        """操作部品をクリックした後、フォーカスをタブ／窓へ戻す。
+
+        コンボにフォーカスが残ると、矢印キーが選択変更に奪われる。
+        文字を打つ欄（Entry/Spinbox）はそのままにする。
+        """
+        target = self.window
+
+        def walk(widget: Any) -> list[Any]:
+            found: list[Any] = []
+            try:
+                children = widget.winfo_children()
+            except Exception:
+                return found
+            for child in children:
+                found.append(child)
+                found.extend(walk(child))
+            return found
+
+        def release(*_args: Any) -> None:
+            try:
+                target.focus_set()
+            except Exception:
+                pass
+
+        for widget in walk(self._body):
+            try:
+                cls = widget.winfo_class()
+            except Exception:
+                continue
+            if cls in (
+                "TButton",
+                "TCheckbutton",
+                "TRadiobutton",
+                "Button",
+                "Checkbutton",
+                "Radiobutton",
+            ):
+                widget.bind("<ButtonRelease-1>", release, add="+")
+            elif cls in ("TCombobox", "Combobox"):
+                widget.bind("<<ComboboxSelected>>", release, add="+")
+            elif cls in ("TEntry", "Entry", "TSpinbox", "Spinbox"):
+                # 入力後は Enter / FocusOut で確定する既存動作に任せる。
+                continue
+
+    def _available_width(self) -> int:
+        """タブの実際に見えている幅（Notebook の内側の全タブ共通幅ではない）。"""
+        viewport = getattr(self, "_viewport", None)
+        try:
+            canvas = getattr(viewport, "canvas", None)
+            if canvas is not None:
+                width = int(canvas.winfo_width())
+                if width > 1:
+                    right = canvas.winfo_rootx() + width
+                    avail = right - self.window.winfo_rootx() - 12
+                    return max(160, min(width, avail))
+        except (tk.TclError, AttributeError, TypeError):
+            pass
+        try:
+            width = int(self.window.winfo_width())
+            if width > 1:
+                return max(160, width - 12)
+        except (tk.TclError, AttributeError):
+            pass
+        try:
+            return max(160, int(self._body.winfo_width()))
+        except (tk.TclError, AttributeError):
+            return 320
+
+    def _fit_viewport(self, _event: Any = None) -> None:
+        """見えている幅が変わったら、体の幅と並べ方を測り直す。"""
+        if getattr(self, "_closed", False):
+            return
+        self._reflow_columns()
+
     def _reflow_columns(self) -> None:
-        """タブの幅に合わせて、操作列と情報列を左右に並べるか縦に積むか決める。"""
+        """見えている幅に合わせて、操作列と情報列を左右に並べるか縦に積むか決める。
+
+        幅は Notebook の内側（全タブ共通）ではなく、スクロールする欄で
+        実際に見えている幅を使う。全タブ共通の幅で決めると、狭い窓でも
+        左右に並べた幅が要求として残り、横スクロールが出続ける。
+        """
         body, ops, info = self._body, self._col_ops, self._col_info
         if ops is info:
             return
@@ -781,7 +909,10 @@ class BconSetup:
             gap = 16
             ow, oh = ops.winfo_reqwidth(), ops.winfo_reqheight()
             iw, ih = info.winfo_reqwidth(), info.winfo_reqheight()
-            two = body.winfo_width() >= ow + gap + iw + 16
+            width = self._available_width()
+            # 左右に並べる下限。中身の要求幅で決めると、いったん 1 列に
+            # 折り返した幅が要求として残り、広げても 2 列へ戻れなくなる。
+            two = width >= _TWO_COLUMN_MIN_WIDTH
             if two != self._two_columns:
                 self._two_columns = two
                 if two:
@@ -802,13 +933,47 @@ class BconSetup:
                     body.rowconfigure(0, weight=0)
                     body.rowconfigure(1, weight=1)
             # padding=8 の上下左右の分を足す。
-            height = max(oh, ih) if two else oh + gap + ih
-            width, height = max(ow, iw) + 16, height + 16
-            if (int(str(body.cget("width"))), int(str(body.cget("height")))) != (
-                width,
-                height,
+            height = (max(oh, ih) if two else oh + gap + ih) + 16
+            body_width = max(160, width - 8)
+            # 状態・ログの折り返しも見えている幅に合わせる（長い機器名や
+            # エラー文で列を押し広げない）。
+            column_w = (
+                (max(160, width - gap - 32) // 2) if two else max(160, width - 32)
+            )
+            for name in (
+                "_result",
+                "_summary",
+                "_imu_label",
+                "_vib_label",
             ):
-                body.configure(width=width, height=height)
+                label = getattr(self, name, None)
+                if label is None:
+                    continue
+                try:
+                    current = int(float(label.cget("wraplength") or 0))
+                except (tk.TclError, ValueError, TypeError):
+                    current = 0
+                if current != column_w:
+                    try:
+                        label.configure(wraplength=column_w)
+                    except tk.TclError:
+                        pass
+            size = (body_width, height)
+            if getattr(self, "_body_size", None) != size:
+                self._body_size = size
+                body.place_configure(width=body_width, height=height)
+            # タブの要求も狭い方にそろえる（全タブ最大幅で横スクロールが
+            # 出続けないように）。中身が後から増えても追従させる。
+            tab_width = min(width, max(ow, iw) + 16)
+            for option, value in (
+                ("width", tab_width),
+                ("height", max(height + 4, _TAB_MIN_HEIGHT)),
+            ):
+                try:
+                    if int(self.window.cget(option) or 0) != value:
+                        self.window.configure(**{option: value})
+                except (tk.TclError, ValueError, TypeError):
+                    pass
         except tk.TclError:
             pass
 
@@ -846,12 +1011,17 @@ class BconSetup:
     @staticmethod
     def _apply_text(widget: Any, text: str) -> None:
         """文が変わるときだけ configure する（理由は _apply_state と同じ）。"""
+        if widget is None:
+            return
         try:
             if str(widget.cget("text")) == text:
                 return
         except Exception:
             pass
-        widget.configure(text=text)
+        try:
+            widget.configure(text=text)
+        except Exception:
+            pass
 
     @staticmethod
     def _apply_state(widget: Any, state: str) -> None:
@@ -904,6 +1074,12 @@ class BconSetup:
             self._apply_state(widget, tk.NORMAL if ready else tk.DISABLED)
         for widget in (self._btn_connect, self._btn_hunt):
             self._apply_state(widget, tk.NORMAL if recovery else tk.DISABLED)
+        for widget in (
+            getattr(self, "_btn_retry_quick", None),
+            getattr(self, "_btn_hunt_quick", None),
+        ):
+            if widget is not None:
+                self._apply_state(widget, tk.NORMAL if recovery else tk.DISABLED)
         optional = {
             "状態確認中": (self._btn_status, self._btn_winfo),
             "疎通確認中": (self._btn_ping,),
@@ -950,6 +1126,13 @@ class BconSetup:
             except Exception:
                 pass
         self._log.configure(state=tk.DISABLED)
+        # 直近の結果は操作の近くにも出す（ログは追跡用。毎回スクロールしない）。
+        result = getattr(self, "_result", None)
+        if result is not None:
+            try:
+                self._apply_text(result, text)
+            except Exception:
+                pass
 
     def _trim_log(self) -> None:
         log = getattr(self, "_log", None)
@@ -1159,16 +1342,6 @@ class BconSetup:
 
     def _render_summary(self) -> None:
         snapshot = self._snapshot
-        phases = {
-            "disconnected": "未接続",
-            "opening": "ポートを開いています",
-            "hello": "HELLO 確認中",
-            "ready": "接続済み",
-            "failed": "接続失敗",
-            "closing": "切断中",
-            "restarting": "再起動待ち",
-            "bootloader": "書込み待ち",
-        }
         hello = "未確認"
         if snapshot.hello_ack is not None:
             adopted, major, minor, result = snapshot.hello_ack
@@ -1176,25 +1349,23 @@ class BconSetup:
         status = "未受信（不明）"
         if snapshot.status_received_at is not None:
             age = max(0.0, time.monotonic() - snapshot.status_received_at)
-            # 小数まで出すと表示が 0.1 秒ごとに変わり、そのたびにラベルの
-            # 折り返しが計算し直される。1 秒刻みで十分（3 秒で古い情報扱い）。
-            status = f"{age:.0f}秒前" + ("（古い情報）" if age > 3 else "")
-        mode = "不明"
-        if snapshot.status is not None:
-            mode = "有線" if snapshot.status[0] & STATUS_FLAG_WIRED else "無線"
-            if (
-                snapshot.status_received_at is None
-                or time.monotonic() - snapshot.status_received_at > 3
-            ):
-                mode += "（古い情報）"
+            status = f"{age:.0f}秒前" + ("（更新停止）" if age > 3 else "")
         baud = f"{snapshot.baud}bps" if snapshot.baud is not None else "不明"
+        recovery = getattr(self, "_recovery_row", None)
+        if recovery is not None:
+            try:
+                if snapshot.phase == "failed":
+                    recovery.grid()
+                else:
+                    recovery.grid_remove()
+            except tk.TclError:
+                pass
         # 同じ文を入れ直すと ttk ラベル（wraplength 付き）が折り返しを
         # 計算し直し、そのたびに画面全体の描画が積まれる。変わったときだけ。
         self._apply_text(
             self._summary,
-            f"{phases[snapshot.phase]}: {snapshot.message}\n"
             f"ポート: {snapshot.port_name or '未選択'} / {baud}\n"
-            f"HELLO: {hello}\nSwitch 接続方式: {mode} / STATUS: {status}",
+            f"HELLO: {hello}\nSTATUS: {status}",
         )
         self._apply_text(self._actual_baud, f"実際の速度: {baud}")
 

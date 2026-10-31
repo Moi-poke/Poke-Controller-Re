@@ -42,6 +42,15 @@ class _Host(SerialPanelMixin, AudioPanelMixin):
         from types import SimpleNamespace
 
         self.runner = SimpleNamespace(is_busy=lambda: False)
+        self.settings = SimpleNamespace(
+            bcon_baud_index=tk.IntVar(master=window, value=3),
+            com_port_name=tk.StringVar(master=window, value=""),
+            baud_rate=tk.StringVar(master=window, value="9600"),
+            setting_path="unused",
+            transport_plugin_dir=tk.StringVar(master=window, value=""),
+            arbitration_mode=tk.StringVar(master=window, value="off"),
+            arbitration_cooldown=tk.StringVar(master=window, value="2.0"),
+        )
         self._closing = False
         self.cb_use_keyboard = None
         self.cb_use_gamepad = None
@@ -76,21 +85,44 @@ def test_the_serial_tab_fits_a_narrow_tab_area(host: _Host) -> None:
     assert host.serial_lf.winfo_reqwidth() <= _limit(host.serial_lf)
 
 
+def test_serial_shows_state_and_primary_action_before_details(host: _Host) -> None:
+    host.root.update()
+
+    # Then: 状態 → 通信方式 → ポート → 接続 の順。詳細は初期で閉じる。
+    assert host.transport_cb.winfo_rooty() < host.com_port_cb.winfo_rooty()
+    assert host.com_port_cb.winfo_rooty() < host.reloadComPort.winfo_rooty()
+    assert host.serial_details.open is False
+    assert host.serial_diagnostics.open is False
+    assert host.disconnectComPort.winfo_ismapped()
+
+
+def test_opening_serial_details_keeps_the_selected_values(host: _Host) -> None:
+    host.com_port_text.set("COM3: USB Serial Port (COM3)")
+    host.baud_rate.set("9600")
+
+    # When: 詳細を開いて閉じる。
+    host.serial_details.set_open(True)
+    host.serial_diagnostics.set_open(True)
+    host.root.update()
+    host.serial_details.set_open(False)
+    host.serial_diagnostics.set_open(False)
+    host.root.update()
+
+    # Then: 選択・入力値はそのまま（作り直さない）。
+    assert host.com_port_text.get() == "COM3: USB Serial Port (COM3)"
+    assert host.baud_rate.get() == "9600"
+
+
 def test_the_serial_tab_still_fits_when_the_bcon_rows_appear(host: _Host) -> None:
-    # When: switched to bcon, which shows the LED / rumble / wired rows.
+    # When: switched to bcon, which shows the Switch summary row.
     host.transport_name.set("switch-bcon")
     host._refresh_bcon_rows()
+    host.serial_details.set_open(True)
     host.root.update()
 
     # Then: 出てくる行を足しても幅は収まり、隠れていた部品は見えている。
     assert host.serial_lf.winfo_reqwidth() <= _limit(host.serial_lf)
-    for widget in (
-        host.bcon_status_label,
-        host.bcon_status,
-        host.bcon_wired_label,
-        host.bcon_row,
-    ):
-        assert widget.winfo_ismapped(), widget
+    assert host.bcon_hunt_button.winfo_ismapped()
 
 
 def test_the_audio_tab_fits_a_narrow_tab_area(host: _Host) -> None:
@@ -99,12 +131,17 @@ def test_the_audio_tab_fits_a_narrow_tab_area(host: _Host) -> None:
 
 
 def test_every_serial_and_audio_control_is_still_shown(host: _Host) -> None:
+    # Given: 詳細（通信の詳細設定・診断）は初期表示では畳んである。
+    host.serial_details.set_open(True)
+    host.serial_diagnostics.set_open(True)
+    host.root.update()
+
     # Then: 幅を詰めるために部品を落としていない（全部見えている）。
+    # 入力調停はコントローラタブの「コマンド実行中の手動入力」へ移した。
     for widget in (
         host.com_port_cb,
         host.baud_rate_cb,
         host.transport_cb,
-        host.arbitration_cb,
         host.reloadComPort,
         host.disconnectComPort,
         host.cb_show_serial,
@@ -265,9 +302,13 @@ def test_a_bcon_tab_built_while_hidden_asks_for_its_full_size_once_shown(
         notebook.select(tab)
         window.update()
 
-        # Then: 中身の大きさ全部を求めている（欠けない・縦スクロールが足りる）。
+        # Then: 見えている幅へ配置し、1x1 のまま残らない。長い項目は
+        #       折り返して収める（タブが狭ければ内容幅より小さくなる）。
         ops, info = setup._col_ops, setup._col_info
-        assert tab.winfo_reqwidth() >= max(ops.winfo_reqwidth(), info.winfo_reqwidth())
+        assert tab.winfo_reqwidth() >= 160
+        placed = int(float(setup._body.place_info()["width"]))
+        assert placed > 100
+        assert placed <= tab.winfo_reqwidth()
         assert tab.winfo_reqheight() >= min(
             ops.winfo_reqheight(), info.winfo_reqheight()
         )
@@ -316,6 +357,10 @@ def test_serial_primary_controls_fit_the_visible_scrolled_notebook(
     notebook.add(h.tab_serial, text="シリアル")
     notebook.add(ttk.Frame(notebook, width=1000, height=200), text="別の設定")
     h._build_serial_frame()
+    # アプリと同じく、開いているタブの要求高さを Notebook とスクロール欄へ渡す。
+    from ui.notebook_fit import SelectedTabHeight
+
+    tab_height = SelectedTabHeight(notebook, on_change=scroll.relayout)
     h.transport_name.set("switch-bcon")
     h._refresh_bcon_rows()
     h.com_port_cb["values"] = ["COM3: USB Serial Port (COM3)"]
@@ -341,40 +386,48 @@ def test_serial_primary_controls_fit_the_visible_scrolled_notebook(
         assert notebook.winfo_width() > scroll.canvas.winfo_width()
 
         def inside(widget: tk.Misc) -> None:
+            """横にははみ出さない。縦はスクロールで届く範囲に置く。"""
             assert widget.winfo_ismapped()
-            left, top = widget.winfo_rootx(), widget.winfo_rooty()
+            left = widget.winfo_rootx()
+            right = scroll.canvas.winfo_rootx() + scroll.canvas.winfo_width()
             assert left >= scroll.canvas.winfo_rootx()
-            assert top >= scroll.canvas.winfo_rooty()
+            assert left + widget.winfo_width() <= right
+            # 中身の座標（スクロール位置に依らない）がスクロール範囲に含まれる。
+            assert widget.winfo_rooty() - scroll.inner.winfo_rooty() >= 0
             assert (
-                left + widget.winfo_width()
-                <= scroll.canvas.winfo_rootx() + scroll.canvas.winfo_width()
-            )
-            assert (
-                top + widget.winfo_height()
-                <= scroll.canvas.winfo_rooty() + scroll.canvas.winfo_height()
+                widget.winfo_rooty()
+                - scroll.inner.winfo_rooty()
+                + widget.winfo_height()
+                <= scroll.inner.winfo_height()
             )
 
-        for widget in (
+        primary = (
             h.com_port_cb,
             h.refreshComPort,
             h.reloadComPort,
             h.disconnectComPort,
-            h.connection_status,
-            h.connection_details,
-        ):
+        )
+        for widget in primary:
             inside(widget)
+        # 選択値・実際・HELLO は診断の詳細へ移した（開けば可視範囲に収まる）。
+        h.serial_diagnostics.set_open(True)
+        deadline = time.monotonic() + 0.6
+        while time.monotonic() < deadline:
+            window.update()
+            tab_height.sync()
+            time.sleep(0.02)
+        inside(h.connection_details)
+        h.serial_diagnostics.set_open(False)
+        deadline = time.monotonic() + 0.6
+        while time.monotonic() < deadline:
+            window.update()
+            tab_height.sync()
+            time.sleep(0.02)
         assert scroll.canvas.xview()[0] == 0.0
         assert scroll.canvas.yview()[0] == 0.0
         window.geometry(f"{max(320, viewport_size[0] - 100)}x{viewport_size[1]}")
         window.update()
-        for widget in (
-            h.com_port_cb,
-            h.refreshComPort,
-            h.reloadComPort,
-            h.disconnectComPort,
-            h.connection_status,
-            h.connection_details,
-        ):
+        for widget in primary:
             inside(widget)
         assert (
             h.transport_description.winfo_rooty()
