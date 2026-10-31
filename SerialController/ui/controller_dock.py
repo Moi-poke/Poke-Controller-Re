@@ -121,7 +121,9 @@ class ControllerDock:
             self.root,
             self._sender,
             container=self._pad_area,
-            height_limit=self._visible_height if self._viewport is not None else None,
+            # 埋め込み先はスクロールする。見えている高さで描き縮めず、
+            # 要求した大きさで描いて、はみ出た分をスクロールで見せる。
+            height_limit=None,
         )
         self.embedded_companion = self._make_companion(self._pad_area)
 

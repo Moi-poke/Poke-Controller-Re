@@ -759,8 +759,13 @@ class SerialPanelMixin:
             if int(float(frame.place_info().get("width") or 0)) != width:
                 frame.place_configure(width=width)
             top = frame.winfo_reqheight() + 14
-            visible = self._control_visible_height()
-            dock_height = max(180, visible - top - 10)
+            # 操作盤とジャイロ欄の要求高さをそのまま使う。見えている高さへ
+            # 押し込めると、スクロールする欄なのに下側が切れる。タブの高さを
+            # 内容に合わせて伸ばし、はみ出た分は ScrollHost にスクロールさせる。
+            content = int(dock_area.winfo_reqheight())
+            if content <= 1:
+                content = max(240, self._control_visible_height() - top - 10)
+            dock_height = max(240, content)
             info = dock_area.place_info()
             if (
                 int(float(info.get("y") or 0)) != top
