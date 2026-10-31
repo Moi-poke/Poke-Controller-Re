@@ -15,7 +15,7 @@ def _fresh() -> configparser.ConfigParser:
 def test_imu_section_defaults():
     parser = _fresh()
     imu = parser["IMU"]
-    assert imu["source"] == "sensor"
+    assert imu["source"] == "hid"
     assert imu["pad_index"] == "0"
     assert imu["sine_axis"] == "2"
     assert imu["sine_amp"] == "4096"
@@ -53,7 +53,7 @@ def test_imu_section_repairs_invalid():
     parser["IMU"]["hid_gyro_scale"] = "5,0,1"
     changed = config.complete_missing(parser)
     imu = parser["IMU"]
-    assert imu["source"] == "sensor"
+    assert imu["source"] == "hid"
     assert imu["sine_axis"] == "2"
     assert imu["sine_amp"] == "4096"
     assert imu["sine_period_s"] == "2.0"

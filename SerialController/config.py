@@ -107,14 +107,18 @@ def default_sections() -> dict[str, dict[str, Any]]:
             # プロファイルごとの色（#RRGGBB）。空文字なら色を出さない。
             # 候補は core.display_mode.PROFILE_COLORS が正。
             "profile_color": "",
-            # 欄の並べ方。log_right（ログを右）/ side（右にタブとログ）/
-            # stack（縦一列）。候補は core.pane_arrangement.ARRANGEMENTS が正。
+            # 欄の並べ方。log_right（ログを右）/ log_bottom（ログを下）/
+            # side（右にタブとログ）/ stack（縦一列）。
+            # 候補は core.pane_arrangement.ARRANGEMENTS が正。
             "arrangement": DEFAULT_ARRANGEMENT,
             # 設定タブとログ欄の表示（False で折りたたむ）。
             "show_tabs": True,
             "show_log": True,
             # 仕切り位置（形ごとの割合、JSON）。空なら既定の位置。
             "pane_sashes": "",
+            # 下端の状態バーに常時表示する項目（カンマ区切り）。
+            # state/target/input/bcon/camera/fps。表示(V)メニューで選ぶ。
+            "status_items": "state,target,input,bcon,camera,fps",
         },
         "Input Log": {
             # プリセット名（simple / detail / compact / csv / command / raw）
@@ -248,10 +252,10 @@ def default_sections() -> dict[str, dict[str, Any]]:
             "Hat.CENTER": "",
         },
         "IMU": {
-            # ジャイロ入力源。sensor … 実コントローラのSDLセンサー /
-            # hid … ProCon USB HID直結 / sine … SINE波形 / step … STEP波形 /
-            # rest … 静止値 / manual … 手動入力。
-            "source": "sensor",
+            # ジャイロ入力源。hid … ProCon USB HID直結（既定） /
+            # sensor … 実コントローラのSDLセンサー / sine … SINE波形 /
+            # step … STEP波形 / rest … 静止値 / manual … 手動入力。
+            "source": "hid",
             # センサー用パッド番号（SdlPadReaderと同じ番号空間）。
             "pad_index": 0,
             # SINE波形のgyro軸（0..2）・振幅raw・周期秒。
@@ -510,6 +514,12 @@ def complete_missing(parser: configparser.ConfigParser) -> list[str]:
             parsed = parse_sash_ratios(sashes)
             window["pane_sashes"] = format_sash_ratios(parsed) if parsed else ""
             changed.append("Window.pane_sashes")
+        valid_items = {"state", "target", "input", "bcon", "camera", "fps"}
+        items = [part.strip() for part in window.get("status_items", "").split(",")]
+        items = [part for part in items if part]
+        if not items or any(part not in valid_items for part in items):
+            window["status_items"] = "state,target,input,bcon,camera,fps"
+            changed.append("Window.status_items")
     if parser.has_section("PreviewFilter"):
         filt = parser["PreviewFilter"]
         float_rules = {
@@ -558,7 +568,7 @@ def complete_missing(parser: configparser.ConfigParser) -> list[str]:
             "rest",
             "manual",
         ):
-            imu["source"] = "sensor"
+            imu["source"] = "hid"
             changed.append("IMU.source")
         int_rules = {
             "pad_index": ("0", lambda value: 0 <= value <= 3),

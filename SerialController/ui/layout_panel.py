@@ -21,6 +21,7 @@ Window 本体は import しない（循環になる）。
 
 from __future__ import annotations
 
+import time
 import tkinter as tk
 import tkinter.ttk as ttk
 from typing import Any
@@ -28,6 +29,21 @@ from typing import Any
 from core.display_mode import LAYOUTS, layout_plan, normalize_profile_color
 from core.pane_arrangement import arrangement_tree, normalize_arrangement
 from core.status_view import BADGE_COLORS, status_view
+from ui.transport_names import display_name as transport_display_name
+
+# 下端の状態バーに常時表示できる項目（キー, メニュー名）。
+# 表示(V) メニューで選び、settings.ini の Window.status_items に保存する。
+STATUS_ITEMS: tuple[tuple[str, str], ...] = (
+    ("state", "実行状態"),
+    ("target", "送信先"),
+    ("input", "手動入力"),
+    ("bcon", "Pico↔Switch"),
+    ("camera", "カメラ"),
+    ("fps", "表示 fps"),
+)
+_DEFAULT_STATUS_ITEMS = "state,target,input,bcon,camera,fps"
+# STATUS flags の bit5=有線（Switch-bcon の spec/protocol_v3.md）。
+_STATUS_FLAG_WIRED = 0x20
 
 # コンパクトバーの色チップの幅（px）。色つきなら一目で分かる細帯。
 _COMPACT_CHIP_WIDTH = 12
@@ -78,6 +94,10 @@ class LayoutPanelMixin:
     status_bar: Any
     status_state: Any
     status_device: Any
+    status_input: Any
+    status_bcon: Any
+    status_item_vars: dict[str, Any]
+    settings: Any
     status_fps: Any
     status_camera: Any
     compact_pause: Any
@@ -126,27 +146,97 @@ class LayoutPanelMixin:
         self.compact_start.config(command=lambda: self.startButton.invoke())
         self.compact_start.pack(side="right")
 
-        # 標準レイアウトの下端の 1 行。状態・接続先・表示 fps を常に見せる。
+        # 標準レイアウトの下端の 1 行。状態・送信先・手動入力・表示 fps を
+        # どのタブを開いていても見せる（タブの中だけの状態にしない）。
         # 出し入れは _apply_layout（root 直下に pack する）。
         self.status_bar = ttk.Frame(self.root, padding=(6, 1))
         self.status_state = tk.StringVar(value="")
-        self.status_device = tk.StringVar(value="")
-        self.status_fps = tk.StringVar(value="")
-        ttk.Label(self.status_bar, textvariable=self.status_state).pack(side="left")
-        ttk.Separator(self.status_bar, orient="vertical").pack(
-            side="left", fill="y", padx=8
-        )
-        ttk.Label(self.status_bar, textvariable=self.status_device).pack(side="left")
-        # 今のカメラ。カメラの選択はカメラタブにあり、プレビューの上には
-        # 出さないので、何を映しているかはここで分かるようにする。
-        # 値は camera_panel._show_camera_state が入れる。
+        self.status_device = tk.StringVar(value="送信先: 未接続")
+        self.status_input = tk.StringVar(value="手動入力: 停止（入力なし）")
+        self.status_bcon = tk.StringVar(value="Pico↔Switch: 不明")
         if getattr(self, "status_camera", None) is None:
             self.status_camera = tk.StringVar(value="")
-        ttk.Separator(self.status_bar, orient="vertical").pack(
-            side="left", fill="y", padx=8
-        )
-        ttk.Label(self.status_bar, textvariable=self.status_camera).pack(side="left")
-        ttk.Label(self.status_bar, textvariable=self.status_fps).pack(side="right")
+        self.status_fps = tk.StringVar(value="")
+        self._status_vars = {
+            "state": self.status_state,
+            "target": self.status_device,
+            "input": self.status_input,
+            "bcon": self.status_bcon,
+            "camera": self.status_camera,
+            "fps": self.status_fps,
+        }
+        default_items = set(_DEFAULT_STATUS_ITEMS.split(","))
+        self.status_item_vars = {
+            key: tk.BooleanVar(value=key in default_items) for key, _ in STATUS_ITEMS
+        }
+        self._status_labels: dict[str, Any] = {}
+        self._status_seps: dict[str, Any] = {}
+        for key, _label in STATUS_ITEMS:
+            self._status_labels[key] = ttk.Label(
+                self.status_bar, textvariable=self._status_vars[key]
+            )
+            self._status_seps[key] = ttk.Separator(self.status_bar, orient="vertical")
+        self._status_items_loaded = False
+        self._repack_status_items()
+
+    def _repack_status_items(self) -> None:
+        """選ばれている項目だけを、状態バーの左から順に並べ直す。"""
+        for widget in self._status_labels.values():
+            widget.pack_forget()
+        for sep in self._status_seps.values():
+            sep.pack_forget()
+        first = True
+        for key, _label in STATUS_ITEMS:
+            try:
+                if not self.status_item_vars[key].get():
+                    continue
+            except Exception:
+                continue
+            if not first:
+                try:
+                    self._status_seps[key].pack(side="left", fill="y", padx=8)
+                except Exception:
+                    pass
+            try:
+                self._status_labels[key].pack(side="left")
+            except Exception:
+                pass
+            first = False
+
+    def _sync_status_items(self) -> None:
+        """設定（Window.status_items）から表示項目を一度だけ反映する。"""
+        if getattr(self, "_status_items_loaded", False):
+            return
+        settings = getattr(self, "settings", None)
+        text = ""
+        try:
+            text = str(settings.status_items.get()) if settings is not None else ""
+        except Exception:
+            text = ""
+        if not text:
+            text = _DEFAULT_STATUS_ITEMS
+        enabled = {part.strip() for part in text.split(",") if part.strip()}
+        for key, _label in STATUS_ITEMS:
+            try:
+                self.status_item_vars[key].set(key in enabled)
+            except Exception:
+                pass
+        self._status_items_loaded = True
+        self._repack_status_items()
+
+    def applyStatusItem(self, key: str) -> None:
+        """状態バーの表示項目を切り替えて保存する（表示(V) メニュー）。"""
+        if key not in self.status_item_vars:
+            return
+        enabled = [
+            name for name, _label in STATUS_ITEMS if self.status_item_vars[name].get()
+        ]
+        try:
+            self.settings.status_items.set(",".join(enabled))
+        except Exception:
+            pass
+        self._repack_status_items()
+        self._on_setting_changed()
 
     # ------------------------------------------------------------------
     # レイアウト適用
@@ -166,6 +256,7 @@ class LayoutPanelMixin:
 
     def _apply_layout(self) -> None:
         """現在のレイアウトに合わせて、部品の出し入れとプレビューを直す。"""
+        self._sync_status_items()
         plan = self._layout_plan()
 
         # カメラ欄の操作部（見出し・入力・コンボ・ボタン）。
@@ -289,11 +380,28 @@ class LayoutPanelMixin:
         if getattr(self, "status_state", None) is not None:
             self.status_state.set(bar_view.text)
             transport = connection.transport_name
-            if device and connection.opened:
-                suffix = f" ({transport})" if transport else ""
-                self.status_device.set(f"{device}{suffix}")
+            if connection.phase == "failed":
+                self.status_device.set("送信先: 接続失敗")
+            elif connection.phase == "opening":
+                self.status_device.set("送信先: 接続処理中")
+            elif device and connection.opened:
+                name = transport_display_name(transport) if transport else "不明"
+                self.status_device.set(f"送信先: {device} / {name}")
             else:
-                self.status_device.set("未接続")
+                self.status_device.set("送信先: 未接続")
+            if getattr(self, "status_bcon", None) is not None:
+                if not connection.opened or connection.status is None:
+                    self.status_bcon.set("Pico↔Switch: 不明")
+                else:
+                    flags = int(connection.status[0])
+                    mode = "有線" if flags & _STATUS_FLAG_WIRED else "無線"
+                    stale = (
+                        connection.status_received_at is not None
+                        and time.monotonic() - connection.status_received_at > 3.0
+                    )
+                    self.status_bcon.set(
+                        f"Pico↔Switch: {mode}" + ("（更新停止）" if stale else "")
+                    )
 
         # コンパクトバーがあれば 1 行と操作ボタンの中身を写す。
         if getattr(self, "compact_status", None) is not None:

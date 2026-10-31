@@ -114,6 +114,8 @@ class GuiSettings:
         self.show_log = tk.BooleanVar(value=window.getboolean("show_log"))
         # 仕切り位置（形ごとの割合、JSON 文字列）。補完で読める形に揃っている。
         self.pane_sashes = tk.StringVar(value=window.get("pane_sashes"))
+        # 下端の状態バーに常時表示する項目（カンマ区切り）。
+        self.status_items = tk.StringVar(value=window.get("status_items"))
 
         # 入力ログ。従来は Sender.py の定数を書き換える必要があった
         input_log = self.setting["Input Log"]
@@ -388,6 +390,7 @@ class GuiSettings:
                 "show_tabs": self.show_tabs.get(),
                 "show_log": self.show_log.get(),
                 "pane_sashes": self.pane_sashes.get(),
+                "status_items": self.status_items.get(),
             }
         )
         self.setting["Input Log"] = self._str_values(

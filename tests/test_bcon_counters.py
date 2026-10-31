@@ -61,24 +61,28 @@ def test_serial_summary_renders_memory_without_transport_access() -> None:
         opened=True,
         phase="ready",
         transport_name="switch-bcon",
+        port_name="COM3",
+        baud=1000000,
+        hello_ack=(4, 1, 2, 0),
         player_info=b"\x05\x03",
         rumble=b"\x0a\x05",
     )
     obj.com_port_name = SimpleNamespace(get=lambda: "COM3")
     obj.transport_name = SimpleNamespace(get=lambda: "switch-bcon")
-    obj.bcon_wired = SimpleNamespace(set=lambda _value: None)
-    obj._player_lamp_items = [0, 1, 2, 3]
+    obj.settings = SimpleNamespace(
+        bcon_baud_index=SimpleNamespace(get=lambda: 3),
+        baud_rate=SimpleNamespace(get=lambda: "9600"),
+    )
     for name in (
-        "connection_status",
         "connection_details",
-        "player_lamp_canvas",
-        "rumble_label",
+        "connection_result",
+        "baud_current",
     ):
         setattr(obj, name, Widget())
     obj._render_connection_summary()
-    assert obj.player_lamp_canvas.values["0"]["fill"] == "green yellow"
-    assert obj.player_lamp_canvas.values["1"]["fill"] == "gray"
-    assert "L=10 R=5" in obj.rumble_label.values["text"]
+    # シリアル側は要約だけ。LED・振動の描画は BCON タブが持つ（触れば例外）。
+    assert "採用=4" in obj.connection_details.values["text"]
+    assert "1000000bps" in obj.connection_details.values["text"]
 
 
 def test_proc_call_latency_and_fanout(monkeypatch) -> None:

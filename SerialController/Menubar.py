@@ -12,6 +12,7 @@ from SerialMonitor import SerialMonitor
 from core.pane_arrangement import ARRANGEMENTS
 from get_pokestatistics import GetFromHomeGUI
 from loguru import logger
+from ui.layout_panel import STATUS_ITEMS
 from ui.window_aspect import WindowAspectLock
 
 # 使い方の置き場所（ヘルプ > ドキュメント / バージョン情報）。
@@ -175,6 +176,20 @@ class PokeController_Menubar(tk.Menu):
                 variable=var,
                 command=self._pane_command(name, var),
             )
+        # 下端の状態バーに何を常時表示するか。状態はタブ内ではなく、
+        # どのタブでも見える 1 行に出す方針なので、項目を選べるようにする。
+        status_vars = getattr(self.app, "status_item_vars", None)
+        if isinstance(status_vars, dict) and status_vars:
+            status_menu = tk.Menu(m, tearoff=False)
+            for key, text in STATUS_ITEMS:
+                if key not in status_vars:
+                    continue
+                status_menu.add_checkbutton(
+                    label=text,
+                    variable=status_vars[key],
+                    command=self._status_item_command(key),
+                )
+            m.add_cascade(label="常時表示する項目", menu=status_menu)
         # ドラッグの代わりの手段（ドラッグできない／動かしすぎたときの戻り道）。
         m.add_command(
             label="仕切りを既定の位置に戻す", command=self._app_call("resetPaneSashes")
@@ -227,6 +242,10 @@ class PokeController_Menubar(tk.Menu):
     def _arrangement_command(self, value: str) -> Any:
         """並べ方 1 つ分の command（ループ変数を閉じ込める）。"""
         return lambda: self.app.applyArrangement(value)
+
+    def _status_item_command(self, key: str) -> Any:
+        """状態バーの項目 1 つ分の command（ループ変数を閉じ込める）。"""
+        return lambda: self.app.applyStatusItem(key)
 
     def _pane_command(self, name: str, var: Any) -> Any:
         """欄の出し入れ 1 つ分の command。チェックの状態をそのまま渡す。"""

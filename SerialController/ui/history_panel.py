@@ -21,6 +21,7 @@ from typing import Any
 
 from core import CommandHistory
 from loguru import logger
+from ui.tab_fit import TabFit
 from ui.tooltip import Tooltip
 
 # 列名 → 見出し文字。並べ替えの印（▲▼）はここへ足す。
@@ -71,8 +72,7 @@ class HistoryPanelMixin:
         # 利用者の操作も同じ問いかけになり、取り違えの検査ができない。
         if "_history_confirm" not in self.__dict__:
             self._history_confirm = self._ask_history_clear_confirm
-        self.history_lf = ttk.Labelframe(self.tab_history, text="実行履歴")
-        self.history_lf.pack(fill="both", expand=True, padx=5, pady=5)
+        self.history_lf = ttk.Frame(self.tab_history, padding=(6, 4))
 
         # 上段は検索と件数。探す→選ぶ が上から下へ並ぶよう検索を上に置く。
         search_f = ttk.Frame(self.history_lf)
@@ -120,11 +120,11 @@ class HistoryPanelMixin:
                 text=_HISTORY_TITLES[column],
                 command=lambda c=column: self.sort_history_by(c),
             )
-        self.history_tv.column("started", width=150, stretch=False)
-        self.history_tv.column("kind", width=70, stretch=False)
-        self.history_tv.column("name", width=220, stretch=True)
-        self.history_tv.column("result", width=110, stretch=False)
-        self.history_tv.column("seconds", width=80, stretch=False)
+        self.history_tv.column("started", width=130, stretch=False)
+        self.history_tv.column("kind", width=60, stretch=False)
+        self.history_tv.column("name", width=150, stretch=True)
+        self.history_tv.column("result", width=90, stretch=False)
+        self.history_tv.column("seconds", width=60, stretch=False, anchor="e")
         # 実行中は青系、失敗は赤系、存在しない命令は薄く出す。
         # 色そのものより「行の状態が見た目で分かる」ことが要点。
         self.history_tv.tag_configure("running", foreground="#0066CC")
@@ -134,6 +134,9 @@ class HistoryPanelMixin:
             list_f, orient="vertical", command=self.history_tv.yview
         )
         self.history_tv.configure(yscrollcommand=scrollbar.set)
+        # 幅が狭いときは補助列を隠し、主要列だけで読めるようにする。
+        self._history_visible_columns = list(_HISTORY_COLUMNS)
+        self.history_tv.bind("<Configure>", self._fit_history_columns, add="+")
         self.history_tv.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
         # 行の真ん叩きだけが実行になる。見出し・区切りは対象にしない。
@@ -146,32 +149,45 @@ class HistoryPanelMixin:
         self.history_tv.bind("<<TreeviewSelect>>", self._on_history_selected)
         self.history_tv.bind("<Button-3>", self._on_history_right_click)
 
+        # 0 件のときの案内。空の表だけを出さない。
+        self.history_empty_label = ttk.Label(
+            list_f,
+            text="実行履歴はまだありません",
+            anchor="center",
+            justify="center",
+            wraplength=260,
+        )
+
         # 下段は操作。選ぶ→実行 が左から右へ続くよう並べる。
         button_f = ttk.Frame(self.history_lf)
         button_f.pack(fill="x", padx=5, pady=(0, 5), side="top")
+        for col in range(3):
+            button_f.columnconfigure(col, weight=1)
         self.historyRunButton = ttk.Button(
             button_f, text="実行", command=self.run_history_selection
         )
-        self.historyRunButton.pack(side="left", padx="2")
+        self.historyRunButton.grid(row=0, column=0, padx=2, pady=1, sticky="ew")
         # 履歴から走らせた無限ループ系（手動停止が前提）のコマンドを、
         # コマンドタブへ戻らずにその場で止められるようにする。実行と
         # 兼用にしないのは、ダブルクリックの打ち損じで止まらないため。
         self.historyStopButton = ttk.Button(
             button_f, text="停止", command=self.stop_from_history
         )
-        self.historyStopButton.pack(side="left", padx="2")
+        self.historyStopButton.grid(row=0, column=1, padx=2, pady=1, sticky="ew")
         self.historySelectButton = ttk.Button(
             button_f, text="選択", command=self.select_history_selection
         )
-        self.historySelectButton.pack(side="left", padx="2")
+        self.historySelectButton.grid(row=0, column=2, padx=2, pady=1, sticky="ew")
         self.historyDeleteButton = ttk.Button(
             button_f, text="削除", command=self.delete_history_selection
         )
-        self.historyDeleteButton.pack(side="left", padx="2")
+        self.historyDeleteButton.grid(row=1, column=0, padx=2, pady=1, sticky="ew")
         self.historyClearButton = ttk.Button(
             button_f, text="全消去", command=self.clear_history
         )
-        self.historyClearButton.pack(side="left", padx="2")
+        self.historyClearButton.grid(
+            row=1, column=1, columnspan=2, padx=2, pady=1, sticky="ew"
+        )
 
         # 右クリックの一覧。ボタンと同じ手順に通す（二重に持たない）。
         self.history_menu = tk.Menu(self.root, tearoff=0)
@@ -189,6 +205,12 @@ class HistoryPanelMixin:
         )
         self.history_menu.add_command(
             label="履歴をすべて消去", command=self.clear_history
+        )
+        self._history_tab_fit = TabFit(
+            self.tab_history,
+            self.history_lf,
+            getattr(self, "tabs_scroll", None),
+            expand_height=True,
         )
         self._update_history_heading_marks()
         self.refresh_history_view()
@@ -223,6 +245,34 @@ class HistoryPanelMixin:
         if entry.kind == CommandHistory.KIND_MCU:
             return entry.name not in self.mcu_map
         return entry.name not in self.py_map
+
+    def _fit_history_columns(self, _event: Any = None) -> None:
+        """表の幅に合わせて、補助列を隠す（横スクロールを要求しない）。"""
+        tv = self.__dict__.get("history_tv")
+        if tv is None:
+            return
+        width = int(tv.winfo_width())
+        if width <= 1:
+            return
+        if width < 380:
+            columns = ["started", "name"]
+        elif width < 520:
+            columns = ["started", "name", "result"]
+        else:
+            columns = list(_HISTORY_COLUMNS)
+        if columns == getattr(self, "_history_visible_columns", None):
+            return
+        self._history_visible_columns = columns
+        try:
+            tv.configure(displaycolumns=columns)
+        except Exception:
+            pass
+        empty = self.__dict__.get("history_empty_label")
+        if empty is not None:
+            try:
+                empty.configure(wraplength=max(140, width - 24))
+            except Exception:
+                pass
 
     def refresh_history_view(self) -> None:
         """一覧を作り直す。選択と先頭位置はできるだけ保つ。
@@ -286,6 +336,21 @@ class HistoryPanelMixin:
             self.history_count_label["text"] = f"{len(ordered)} / {total} 件"
         else:
             self.history_count_label["text"] = f"{total} 件"
+        self._fit_history_columns()
+        empty = self.__dict__.get("history_empty_label")
+        if empty is not None:
+            if ordered:
+                empty.place_forget()
+            else:
+                text = (
+                    "該当する履歴はありません\n検索語を変えてください"
+                    if query.strip()
+                    else "実行履歴はまだありません\nコマンドタブで実行すると残ります"
+                )
+                empty.configure(
+                    text=text, wraplength=max(120, int(tv.winfo_width()) - 24)
+                )
+                empty.place(relx=0.5, rely=0.45, anchor="center")
         self._update_history_buttons()
 
     def _update_history_buttons(self) -> None:

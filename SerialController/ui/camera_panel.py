@@ -30,6 +30,7 @@ from core.display_mode import (
 from core.dshow_devices import list_video_input_devices
 from loguru import logger
 from ui.combo_fit import fit_combo_width
+from ui.tab_fit import TabFit
 from ui.tooltip import Tooltip
 
 # openCamera() が錠を待つ上限。裏の CameraOpener が握ったままなのは、
@@ -215,17 +216,24 @@ class CameraPanelMixin:
         """
         self.tab_camera = ttk.Frame(self.setting_nb)
         self.setting_nb.insert(self.tab_audio, self.tab_camera, text="カメラ")
-        lf = ttk.Labelframe(self.tab_camera, text="カメラ")
-        lf.pack(fill="both", expand=True, padx=5, pady=5)
-        lf.columnconfigure(1, weight=1)
+        frame = ttk.Frame(self.tab_camera, padding=(6, 4))
+        self.camera_tab_frame = frame
+        frame.columnconfigure(0, weight=1)
 
-        # 表示名は「番号: 機器名 [識別子]」（WindowUtils.cameraLabel）。番号が
-        # 入るので、名前を出せる環境では Camera ID 欄を別に出さない。
-        self.camera_name_l = ttk.Label(lf, text="カメラ: ")
-        self.camera_name_l.grid(column=0, padx="5", pady="2", row=0, sticky="w")
-        self.Camera_Name = ttk.Combobox(lf, width=16)
+        # 枠線の箱はやめ、項目名を入力欄の上へ置く（狭い幅でも切れない）。
+        head = ttk.Frame(frame)
+        head.grid(row=0, column=0, sticky="ew")
+        head.columnconfigure(0, weight=1)
+        self.camera_name_l = ttk.Label(head, text="使用するカメラ")
+        self.camera_name_l.grid(row=0, column=0, sticky="w")
+        self.reloadButton = ttk.Button(head)
+        self.reloadButton.config(text="再読み込み", command=self.reloadCameraFromTab)
+        self.reloadButton.grid(row=0, column=1, sticky="e", padx=(6, 0))
+
+        # 表示名は「番号: 機器名 [識別子]」（WindowUtils.cameraLabel）。
+        self.Camera_Name = ttk.Combobox(frame, width=16)
         self.Camera_Name.config(state="readonly", textvariable=self.camera_name_fromDLL)
-        self.Camera_Name.grid(column=1, padx="5", pady="2", row=0, sticky="ew")
+        self.Camera_Name.grid(row=1, column=0, sticky="ew")
         self.Camera_Name.bind("<<ComboboxSelected>>", self.set_cameraid, add="")
         # ラベルは幅の上限で切るため、長い名前では末尾の識別子（key）が
         # 見切れる。ホバーで切らない全文（識別子つき）を出す。
@@ -234,23 +242,19 @@ class CameraPanelMixin:
             "<<ComboboxSelected>>", self._refresh_camera_name_tooltip, add="+"
         )
 
-        self.reloadButton = ttk.Button(lf)
-        self.reloadButton.config(text="再読み込み", command=self.reloadCameraFromTab)
-        self.reloadButton.grid(column=2, padx="5", pady="2", row=0, sticky="w")
-
         # Camera ID。カメラ名を取れない環境（Linux 等）でだけ使う。
         # 出し入れは _setup_camera_name が決める。
-        self.camera_id_label = ttk.Label(lf, text="カメラ ID: ")
-        self.camera_id_label.grid(column=0, padx="5", pady="2", row=1, sticky="w")
-        self.camera_entry = ttk.Entry(lf)
+        self.camera_id_label = ttk.Label(frame, text="カメラ ID")
+        self.camera_id_label.grid(row=2, column=0, sticky="w", pady=(6, 0))
+        self.camera_entry = ttk.Entry(frame)
         self.camera_entry.config(state="normal", textvariable=self.camera_id, width=6)
-        self.camera_entry.grid(column=1, padx="5", pady="2", row=1, sticky="w")
+        self.camera_entry.grid(row=3, column=0, sticky="w")
 
-        ttk.Label(lf, text="表示フィルタ: ").grid(
-            column=0, padx="5", pady="2", row=2, sticky="w"
+        ttk.Label(frame, text="表示フィルタ").grid(
+            row=4, column=0, sticky="w", pady=(6, 0)
         )
-        filt_row = ttk.Frame(lf)
-        filt_row.grid(column=1, columnspan=2, padx="5", pady="2", row=2, sticky="w")
+        filt_row = ttk.Frame(frame)
+        filt_row.grid(row=5, column=0, sticky="w")
         self.filt_check = ttk.Checkbutton(filt_row)
         self.filt_check.config(
             text="使う",
@@ -261,6 +265,9 @@ class CameraPanelMixin:
         self.filt_setting_button = ttk.Button(filt_row)
         self.filt_setting_button.config(text="調整...", command=self.openFilterDialog)
         self.filt_setting_button.pack(side="left", padx=(8, 0))
+        self._camera_tab_fit = TabFit(
+            self.tab_camera, frame, getattr(self, "tabs_scroll", None)
+        )
 
     def selectCameraTab(self) -> None:
         """カメラタブを開く（カメラを開けないときの近道）。"""

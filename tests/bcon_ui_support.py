@@ -126,6 +126,7 @@ def setup(service: Service | None = None) -> Any:
         "window",
         "_body",
         "_summary",
+        "_result",
         "_actual_baud",
         "_busy_label",
         "_log",

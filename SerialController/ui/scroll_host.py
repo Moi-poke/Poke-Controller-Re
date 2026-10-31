@@ -37,6 +37,9 @@ class ScrollHost(ttk.Frame):
         self._window = self.canvas.create_window(0, 0, window=self.inner, anchor="nw")
         self.bind("<Configure>", self._relayout, add="+")
         self.inner.bind("<Configure>", self._relayout, add="+")
+        # マウスホイールで縦スクロールする。ポインタがこの欄の上にあるときだけ
+        # 動かし、Text/Listbox など自前でスクロールする部品では邪魔をしない。
+        self.bind_all("<MouseWheel>", self._on_mousewheel, add="+")
 
     def relayout(self) -> None:
         """中身の要求サイズが変わったときに呼ぶ。
@@ -76,6 +79,41 @@ class ScrollHost(ttk.Frame):
             self.canvas.yview_moveto(0.0)
         if not need_h:
             self.canvas.xview_moveto(0.0)
+
+    def _on_mousewheel(self, event: Any) -> str | None:
+        """ホイールで中身を縦スクロールする（この欄の上だけ）。"""
+        try:
+            if not self.winfo_exists():
+                return None
+            widget: Any = event.widget
+            inside = False
+            while widget is not None:
+                if widget is self.inner or widget is self or widget is self.canvas:
+                    inside = True
+                    break
+                try:
+                    if widget.winfo_class() in (
+                        "Text",
+                        "Listbox",
+                        "TListbox",
+                        "Treeview",
+                    ):
+                        return None
+                except Exception:
+                    pass
+                widget = getattr(widget, "master", None)
+            if not inside:
+                return None
+            if not self.vbar.winfo_ismapped():
+                return None
+            delta = getattr(event, "delta", 0)
+            if not delta:
+                return None
+            steps = max(1, abs(int(delta)) // 120)
+            self.canvas.yview_scroll(-steps if delta > 0 else steps, "units")
+        except Exception:
+            return None
+        return "break"
 
     @staticmethod
     def _set_bar(bar: Any, needed: bool, *, row: int, column: int, sticky: str) -> None:
