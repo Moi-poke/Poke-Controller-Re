@@ -22,6 +22,8 @@ from collections.abc import Callable
 from tkinter import ttk
 from typing import Any
 
+from ui.collapsible import CollapsibleSection
+
 # 通常運用では使わない入力源。デバッグ時だけ選べる。
 DEBUG_SOURCES = frozenset({"sine", "step", "rest", "manual"})
 
@@ -123,24 +125,39 @@ class ImuPanel:
         frame.columnconfigure(1, weight=1)
         self.frame = frame
 
-        ttk.Label(frame, text="入力源").grid(
+        # 状態と開始/停止は常時見せる。入力源・反転・調整・手動入力は
+        # 「ジャイロ設定」へまとめ、初回は閉じる（T01: 状態→主要操作→詳細）。
+        ttk.Label(frame, text="状態").grid(row=0, column=0, sticky=tk.W, padx=2)
+        self._stats_var = tk.StringVar(value="停止中")
+        self._stats_label = ttk.Label(
+            frame, textvariable=self._stats_var, wraplength=180, justify=tk.LEFT
+        )
+        self._stats_label.grid(row=0, column=1, sticky=tk.W, padx=2)
+        self._btn_toggle = ttk.Button(frame, text="開始", command=self._on_toggle)
+        self._btn_toggle.grid(row=0, column=2, sticky=tk.EW, padx=2)
+
+        self._settings = CollapsibleSection(frame, "ジャイロ設定")
+        self._settings.grid(row=1, column=0, columnspan=3, sticky=tk.EW, pady=(4, 0))
+        body = self._settings.body
+        self._body = body
+        body.columnconfigure(1, weight=1)
+
+        ttk.Label(body, text="入力源").grid(
             row=0, column=0, sticky=tk.W, padx=2, pady=2
         )
-        self._source_var = tk.StringVar(value="sensor")
+        self._source_var = tk.StringVar(value="HID直結")
         self._source_cb = ttk.Combobox(
-            frame,
+            body,
             width=10,
             state="readonly",
             textvariable=self._source_var,
             values=[label for _, label in SOURCE_LABELS],
         )
         self._source_cb.grid(row=0, column=1, sticky=tk.EW, padx=2, pady=2)
-        self._btn_toggle = ttk.Button(frame, text="開始", command=self._on_toggle)
-        self._btn_toggle.grid(row=0, column=2, sticky=tk.EW, padx=2, pady=2)
 
         # パッド番号は SDL センサー入力のときだけ意味がある。行ごと
         # 出し分け、ラベルで説明しない（レイアウトで示す）。
-        self._pad_frame = ttk.Frame(frame)
+        self._pad_frame = ttk.Frame(body)
         ttk.Label(self._pad_frame, text="パッド").grid(
             row=0, column=0, sticky=tk.W, padx=2, pady=2
         )
@@ -154,18 +171,14 @@ class ImuPanel:
         )
         self._pad_cb.grid(row=0, column=1, sticky=tk.EW, padx=2, pady=2)
         self._pad_frame.grid(row=1, column=0, columnspan=2, sticky=tk.EW)
-        self._btn_step = ttk.Button(frame, text="STEP発火", command=self._on_step_fire)
+        self._btn_step = ttk.Button(body, text="STEP発火", command=self._on_step_fire)
         self._btn_step.grid(row=1, column=2, sticky=tk.EW, padx=2, pady=2)
 
-        self._stats_var = tk.StringVar(value="停止中")
-        ttk.Label(frame, textvariable=self._stats_var).grid(
-            row=2, column=0, columnspan=2, sticky=tk.W, padx=2, pady=2
-        )
-        self._invert_label = ttk.Label(frame, text="反転")
+        self._invert_label = ttk.Label(body, text="反転")
         self._invert_label.grid(row=3, column=0, sticky=tk.W, padx=2, pady=2)
         self._invert_var = tk.StringVar(value=CURRENT_INVERT_LABEL)
         self._invert_cb = ttk.Combobox(
-            frame,
+            body,
             width=10,
             state="readonly",
             textvariable=self._invert_var,
@@ -173,11 +186,11 @@ class ImuPanel:
         )
         self._invert_cb.grid(row=3, column=1, sticky=tk.EW, padx=2, pady=2)
         self._invert_cb.bind("<<ComboboxSelected>>", self._on_invert_changed, add="+")
-        self._scale_label = ttk.Label(frame, text="感度")
+        self._scale_label = ttk.Label(body, text="感度")
         self._scale_label.grid(row=4, column=0, sticky=tk.W, padx=2, pady=2)
         self._scale_var = tk.StringVar(value="1.0")
         self._scale_cb = ttk.Combobox(
-            frame,
+            body,
             width=10,
             state="readonly",
             textvariable=self._scale_var,
@@ -187,7 +200,7 @@ class ImuPanel:
         self._scale_cb.bind("<<ComboboxSelected>>", self._on_scale_changed, add="+")
         self._debug_var = tk.BooleanVar(value=False)
         self._debug_cb = ttk.Checkbutton(
-            frame,
+            body,
             text="デバッグ",
             variable=self._debug_var,
             command=self._on_debug_toggled,
@@ -195,7 +208,7 @@ class ImuPanel:
         self._debug_cb.grid(row=2, column=2, sticky=tk.EW, padx=2, pady=2)
         self._detail_var = tk.BooleanVar(value=False)
         self._detail_cb = ttk.Checkbutton(
-            frame,
+            body,
             text="詳細表示",
             variable=self._detail_var,
             command=self._on_detail_toggled,
@@ -207,7 +220,7 @@ class ImuPanel:
         self._manual_values = [0, 0, 4096, 0, 0, 0]
         self._manual_vars: list[tk.StringVar] = []
         self._manual_frame = ttk.LabelFrame(
-            frame, text="手動入力（生値 LSB）", padding=4
+            body, text="手動入力（生値 LSB）", padding=4
         )
         for i, (name, dflt) in enumerate(
             zip(("AX", "AY", "AZ", "GX", "GY", "GZ"), self._manual_values)
@@ -260,7 +273,7 @@ class ImuPanel:
         except Exception:
             return
         try:
-            source = str(settings.get("source", "sensor"))
+            source = str(settings.get("source", "hid"))
             if source == "hid":
                 try:
                     from core.hidhide import hidhide_ready
@@ -673,7 +686,7 @@ class ImuPanel:
             self._queue.put(("log", f"STEP発火に失敗: {e!r}"))
 
     def _on_detail_toggled(self) -> None:
-        """詳細表示の切替。ONで同frame内に展開、OFFで畳む。送出は続ける。"""
+        """詳細表示の切替。ONでジャイロ設定の中へ展開、OFFで畳む。送出は続ける。"""
         try:
             show = bool(self._detail_var.get())
         except Exception:
@@ -684,7 +697,7 @@ class ImuPanel:
             try:
                 from GyroView import GyroView
 
-                view = GyroView(self.frame, rate_range=500)
+                view = GyroView(getattr(self, "_body", self.frame), rate_range=500)
                 # 反転（3）・感度（4）・手動入力（5）・詳細チェック（6）と
                 # 重ねない。それらの下へ置く。
                 view.grid(row=7, column=0, columnspan=3, sticky=tk.EW)

@@ -104,7 +104,6 @@ def serial_view(service: Any) -> Any:
     host.transport_name = Value("switch-bcon")
     host.bcon_baud = Value(baud_label_for_index(3))
     host.baud_rate = Value("9600")
-    host.bcon_wired = Value("")
     host.com_port_name = Value("test-port")
     host.com_port = Value(0)
     host.com_port_text = Value("test device")
@@ -112,8 +111,6 @@ def serial_view(service: Any) -> Any:
     host.is_use_keyboard = Value(False)
     host.is_use_gamepad = Value(False)
     host._gamepad_active = Event()
-    host._player_lamp_items = [0, 1, 2, 3]
-    host.player_lamp_canvas = Lamps()
     for name in (
         "com_port_cb",
         "transport_cb",
@@ -122,9 +119,8 @@ def serial_view(service: Any) -> Any:
         "refreshComPort",
         "baud_rate_cb",
         "bcon_hunt_button",
-        "connection_status",
         "connection_details",
-        "rumble_label",
+        "connection_result",
         "com_port_notice",
         "cb_use_keyboard",
         "cb_use_gamepad",
@@ -161,6 +157,8 @@ DETAIL_BUTTONS = (
     "_btn_color",
     "_btn_connect",
     "_btn_hunt",
+    "_btn_retry_quick",
+    "_btn_hunt_quick",
 )
 
 
@@ -184,6 +182,7 @@ def detail_view(service: SnapshotService) -> Any:
     for name in (
         *DETAIL_BUTTONS,
         "_summary",
+        "_result",
         "_actual_baud",
         "_busy_label",
         "_imu_label",
@@ -244,24 +243,30 @@ def test_disconnected_baud_choice_is_saved_for_next_connection() -> None:
     assert service.requests == []
 
 
-def test_summary_snapshots_clear_lamps_and_ignore_old_generation() -> None:
+def test_switch_details_live_in_the_bcon_tab_and_the_serial_tab_keeps_a_summary() -> (
+    None
+):
+    """LED・振動は BCON タブへ集約し、シリアル側は Switch 側の要約だけにする。"""
     service = SnapshotService(
-        ready_snapshot(player_info=b"\x0f\x03", rumble=b"\xff\xff")
+        ready_snapshot(
+            player_info=b"\x0f\x03",
+            rumble=b"\xff\xff",
+            status=(0x20, 1, 0, 0, 0),
+            status_received_at=100.0,
+        )
     )
     host = serial_view(service)
     detail = detail_view(service)
     host._apply_connection_snapshot(service.snapshot)
     detail._apply_snapshot(service.snapshot)
-    assert set(host.player_lamp_canvas.colors.values()) == {"green yellow"}
     from BconSetup import PLAYER_LAMP_OFF_COLOR, PLAYER_LAMP_ON_COLOR
 
     assert set(detail._lamp_canvas.colors.values()) == {PLAYER_LAMP_ON_COLOR}
+    assert "L=255 R=255" in detail._vib_label["text"]
     old = service.snapshot
     service.snapshot = ConnectionSnapshot(generation=2, transport_name="switch-bcon")
     host._apply_connection_snapshot(service.snapshot)
     detail._apply_snapshot(service.snapshot)
-    assert host.bcon_wired.get() == "不明"
-    assert set(host.player_lamp_canvas.colors.values()) == {"gray"}
     assert set(detail._lamp_canvas.colors.values()) == {PLAYER_LAMP_OFF_COLOR}
     host._apply_connection_snapshot(old)
     detail._apply_snapshot(old)
@@ -282,15 +287,13 @@ def test_status_freshness_is_display_only(
     detail = detail_view(service)
     host._apply_connection_snapshot(service.snapshot)
     detail._apply_snapshot(service.snapshot)
-    assert host.bcon_wired.get() == mode
     fresh = detail._summary["text"]
-    assert mode in fresh
+    assert "STATUS:" in fresh
     monkeypatch.setattr("ui.serial_panel.time.monotonic", lambda: 104.0)
     host._render_connection_summary()
     detail._render_summary()
-    assert host.bcon_wired.get().startswith(mode)
-    assert host.bcon_wired.get() != mode
     assert detail._summary["text"] != fresh
+    assert "更新停止" in detail._summary["text"]
     assert service.snapshot.phase == "ready"
     assert service.requests == []
 
@@ -368,12 +371,10 @@ def test_worker_snapshot_delivery_waits_for_gui_drain_and_drops_after_close() ->
     worker.join(5)
     assert not worker.is_alive()
     assert host._connection_view == before
-    assert host.player_lamp_canvas.colors == {}
     assert detail._lamp_canvas.colors == {}
     host.inbox.drain()
     detail.inbox.drain()
     assert host._connection_view.phase == "ready"
-    assert host.player_lamp_canvas.colors
     assert detail._lamp_canvas.colors
     host.inbox.close()
     detail.inbox.close()

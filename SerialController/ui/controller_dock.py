@@ -76,7 +76,7 @@ class ControllerDock:
             viewport.bind("<Configure>", self._refit_embedded, add="+")
         self._embed()
 
-    def _make_companion(self, master: Any) -> Any:
+    def _make_companion(self, master: Any, before: Any = None) -> Any:
         """連れ部品を作る。factory無し・失敗はNone。"""
         factory = self._companion_factory
         if factory is None:
@@ -85,7 +85,10 @@ class ControllerDock:
             part = factory(master)
             pack = getattr(part, "pack", None)
             if callable(pack):
-                pack(fill="x", padx=4, pady=(0, 4))
+                options = {"fill": "x", "padx": 4, "pady": (0, 4)}
+                if before is not None:
+                    options["before"] = before
+                pack(**options)
             return part
         except Exception:
             return None
@@ -118,7 +121,9 @@ class ControllerDock:
             self.root,
             self._sender,
             container=self._pad_area,
-            height_limit=self._visible_height if self._viewport is not None else None,
+            # 埋め込み先はスクロールする。見えている高さで描き縮めず、
+            # 要求した大きさで描いて、はみ出た分をスクロールで見せる。
+            height_limit=None,
         )
         self.embedded_companion = self._make_companion(self._pad_area)
 
@@ -170,7 +175,9 @@ class ControllerDock:
         floating_window = getattr(self.floating, "window", None)
         if floating_window is None:
             floating_window = getattr(self.floating, "_window", self.floating)
-        self.floating_companion = self._make_companion(floating_window)
+        self.floating_companion = self._make_companion(
+            floating_window, before=getattr(self.floating, "canvas", None)
+        )
 
     def close_floating(self) -> None:
         """別ウィンドウを閉じ、タブへ戻す。"""

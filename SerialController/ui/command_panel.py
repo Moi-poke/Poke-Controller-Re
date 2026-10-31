@@ -25,6 +25,7 @@ from core.CommandTags import TAG_ALL
 from loguru import logger
 from services.command_runner import CommandRunner
 from services.serial_service import SerialService
+from ui.tab_fit import TabFit
 
 
 class CommandPanelMixin:
@@ -87,7 +88,7 @@ class CommandPanelMixin:
     _update_title: Any
 
     def _build_command_frame(self) -> None:
-        self.command_lf = ttk.Labelframe(self.tab_command)
+        self.command_lf = ttk.Frame(self.tab_command, padding=(6, 4))
         self.Commands_f = ttk.Frame(self.command_lf)
         self.Commands_2_f = ttk.Frame(self.command_lf)
 
@@ -116,7 +117,7 @@ class CommandPanelMixin:
         self.filter_f = ttk.Frame(self.Commands_f)
         self.search_name = tk.StringVar()
         self.search_entry = ttk.Entry(self.filter_f, textvariable=self.search_name)
-        self.search_entry.pack(side="left", fill="x", expand=True, padx="2")
+        self.search_entry.pack(side="top", fill="x", padx="2")
         # 打つそばから絞る。確定を待つと、目当てが出るまで見えない。
         self.search_entry.bind("<KeyRelease>", self.onCommandFilterChanged, add="")
         # Enter で入力を終えて検索欄から抜ける。フォーカスが残ったままだと
@@ -126,26 +127,30 @@ class CommandPanelMixin:
         # Esc は絞り込みを解除して抜ける。迷子になったときの戻り道。
         self.search_entry.bind("<Escape>", self.clearCommandFilter, add="")
 
+        filter_row = ttk.Frame(self.filter_f)
+        filter_row.pack(side="top", fill="x", padx="2", pady=(2, 0))
+        filter_row.columnconfigure(0, weight=1)
+        self.filter_row = filter_row
         self.tag_name = tk.StringVar(value=TAG_ALL)
-        self.tag_cb = ttk.Combobox(self.filter_f, width=12)
+        self.tag_cb = ttk.Combobox(filter_row, width=12)
         self.tag_cb.config(state="readonly", textvariable=self.tag_name)
         self.tag_cb["values"] = [TAG_ALL]
-        self.tag_cb.pack(side="left", padx="2")
+        self.tag_cb.grid(row=0, column=0, sticky="ew", padx="2")
         self.tag_cb.bind("<<ComboboxSelected>>", self.onCommandFilterChanged, add="")
 
         # タグの編集。選択中のコマンドに対して開く。タグは絞り込みの
         # すぐ隣にあるほうが「絞れない→付ける」の流れが切れない。
-        self.tagEditButton = ttk.Button(self.filter_f)
+        self.tagEditButton = ttk.Button(filter_row)
         self.tagEditButton.config(text="タグ", width=5, command=self.openTagEditor)
-        self.tagEditButton.pack(side="left", padx="2")
+        self.tagEditButton.grid(row=0, column=1, padx="2", sticky="e")
 
         # コマンドフォルダを開くボタン。Notebook を縦積みにしたので、
         # 横に並べる置き場所は絞り込みの段しかない。右端へ寄せる。
-        self.OpenCommandDirButton = ttk.Button(self.filter_f)
+        self.OpenCommandDirButton = ttk.Button(filter_row)
         self.OpenCommandDirButton.config(
             image=self.open_folder_img, command=self.OpenCommandDir
         )
-        self.OpenCommandDirButton.pack(side="left", padx="2")
+        self.OpenCommandDirButton.grid(row=0, column=2, padx="2", sticky="e")
 
         # Notebook より先に pack して、絞り込みを上の段に置く。
         self.filter_f.pack(fill="x", expand=False, padx="5", pady="2", side="top")
@@ -159,11 +164,13 @@ class CommandPanelMixin:
 
         self.reloadCommandButton = ttk.Button(self.Commands_2_f)
         self.reloadCommandButton.config(text="再読み込み", command=self.reloadCommands)
-        self.reloadCommandButton.grid(column=0, padx="5", pady="5", row=1, sticky="ew")
+        for column in range(3):
+            self.Commands_2_f.columnconfigure(column, weight=1)
+        self.reloadCommandButton.grid(column=0, padx="2", pady="4", row=1, sticky="ew")
 
         self.startButton = ttk.Button(self.Commands_2_f)
         self.startButton.config(text="開始", command=self.startPlay)
-        self.startButton.grid(column=1, padx="5", pady="5", row=1, sticky="ew")
+        self.startButton.grid(column=1, padx="2", pady="4", row=1, sticky="ew")
 
         # 一時停止。Start/Stop の隣に置く。停止と紛らわしくならないよう
         # 実行中だけ押せる状態にする。
@@ -171,13 +178,14 @@ class CommandPanelMixin:
         self.pauseButton.config(
             text="一時停止", command=self.togglePause, state="disabled"
         )
-        self.pauseButton.grid(column=2, padx="5", pady="5", row=1, sticky="ew")
+        self.pauseButton.grid(column=2, padx="2", pady="4", row=1, sticky="ew")
 
         # 選ぶ→開始 が上から下へ続くよう、ボタンは選択欄のすぐ下の右端へ。
         self.Commands_f.pack(fill="x", padx="5", pady=(5, 0), side="top")
         self.Commands_2_f.pack(padx=5, pady=(0, 5), anchor=tk.E, side="top")
-        self.command_lf.config(height="200", text="コマンド")
-        self.command_lf.pack(fill="both", expand=True, padx=5, pady=5)
+        self._command_tab_fit = TabFit(
+            self.tab_command, self.command_lf, getattr(self, "tabs_scroll", None)
+        )
 
     def _bind_keys(self) -> None:
         self.root.bind("<Key-F5>", self.ReloadCommandWithF5)

@@ -244,7 +244,7 @@ def test_the_standard_layout_shows_a_status_bar_with_state_device_and_fps(
     #       表示 fps を出す。
     assert host.status_bar.winfo_ismapped()
     assert host.status_state.get() == "■ 停止中"
-    assert host.status_device.get() == "COM9 (switch-bcon)"
+    assert host.status_device.get() == "送信先: COM9 / Pico 中継（USB）"
     assert host.status_fps.get() == "表示 44.9 fps"
 
 
@@ -286,11 +286,11 @@ def test_a_closed_port_reads_as_not_connected(host: _Host) -> None:
     host._publish_status()
 
     # Then: ポート名を出したままにしない（繋がっていると誤解する）。
-    assert host.status_device.get() == "未接続"
+    assert host.status_device.get() == "送信先: 未接続"
 
 
 def test_rearranging_keeps_every_area_and_status_in_place(host: _Host) -> None:
-    for arrangement in ("side", "stack", "log_right"):
+    for arrangement in ("side", "stack", "log_bottom", "log_right"):
         # When: the user picks another arrangement.
         host.applyArrangement(arrangement)
         _settle(host)

@@ -21,7 +21,12 @@ from core.pane_arrangement import (
 
 def test_the_presets_are_log_right_side_and_stack_with_log_right_as_default() -> None:
     # Then: 既定は今までと同じ見た目（ログが右）。
-    assert [key for key, _label in ARRANGEMENTS] == ["log_right", "side", "stack"]
+    assert [key for key, _label in ARRANGEMENTS] == [
+        "log_right",
+        "log_bottom",
+        "side",
+        "stack",
+    ]
     assert DEFAULT_ARRANGEMENT == "log_right"
 
 
@@ -30,6 +35,8 @@ def test_the_presets_are_log_right_side_and_stack_with_log_right_as_default() ->
     [
         # 今までどおり: 左にプレビューとタブを縦、右にログ。
         ("log_right", "H[V[preview,tabs],log]"),
+        # Web 版の構図: 上段にプレビューとタブ、下段にログ。
+        ("log_bottom", "V[H[preview,tabs],log]"),
         # 横長の画面向け: 左にプレビュー、右にタブとログを縦。
         ("side", "H[preview,V[tabs,log]]"),
         # 縦長・狭い画面向け: 上から順に。
@@ -47,6 +54,7 @@ def test_each_preset_nests_the_three_areas_in_its_own_shape(
     ("arrangement", "shape"),
     [
         ("log_right", "V[preview,tabs]"),
+        ("log_bottom", "H[preview,tabs]"),
         # 右に並べる配置では、残ったタブはプレビューの右のまま。
         ("side", "H[preview,tabs]"),
         ("stack", "V[preview,tabs]"),

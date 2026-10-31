@@ -74,6 +74,8 @@ class BconPanelMixin:
                     self.serial,
                     embedded=True,
                     command_busy=lambda: self.runner.is_busy(),
+                    on_show_serial=self._show_serial_for_recovery,
+                    viewport=getattr(self, "tabs_scroll", None),
                 )
             else:
                 self._bcon_setup.set_visible(True)
@@ -101,6 +103,20 @@ class BconPanelMixin:
         setup = getattr(self, "_bcon_setup", None)
         if setup is not None:
             setup._set_busy()
+
+    def _show_serial_for_recovery(self) -> None:
+        """モード変更でポートが外れたあとの導線。シリアルタブへ移して一覧を更新する。"""
+        try:
+            self.setting_nb.select(self.tab_serial)
+        except Exception:
+            logger.exception("シリアルタブを前面にできませんでした")
+            return
+        refresh = getattr(self, "refreshComPorts", None)
+        if callable(refresh):
+            try:
+                refresh()
+            except Exception:
+                logger.exception("COM ポートの一覧を更新できませんでした")
 
     def _close_bcon_tab(self) -> None:
         """中身を閉じる。購読・期限予約・poll を残さない。二重に呼んでよい。"""

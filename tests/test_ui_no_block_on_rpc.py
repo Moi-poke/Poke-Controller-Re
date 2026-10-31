@@ -312,11 +312,14 @@ def test_late_status_notification_renders_failed_service_truth(
         host.inbox.drain()
         detail.inbox.drain()
         assert host._connection_view == current == detail._snapshot
-        assert host.bcon_wired.get() == "不明"
-        assert set(host.player_lamp_canvas.colors.values()) == {"gray"}
+        assert detail._snapshot.phase == "failed"
+        # LED は BCON タブが持つ（シリアル側は要約だけ）。全消灯を保つ。
+        from BconSetup import PLAYER_LAMP_OFF_COLOR
+
+        assert set(detail._lamp_canvas.colors.values()) == {PLAYER_LAMP_OFF_COLOR}
         assert detail._btn_connect["state"] == "normal"
         assert detail._btn_hunt["state"] == "normal"
-        assert "接続失敗" in detail._summary["text"]
+        assert "STATUS:" in detail._summary["text"]
 
         # 旧世代の通知が現在の表示を上書きしても、現在の写しを描く。
         service.disconnect()
