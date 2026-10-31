@@ -246,7 +246,7 @@ def test_the_docked_pad_fills_a_tall_tab_and_clicks_still_land(
     dock.shutdown()
 
 
-def test_the_docked_pad_fits_the_visible_part_of_a_scrolling_tab_area(
+def test_the_docked_pad_is_scrolled_into_view_instead_of_squeezed(
     area: tk.Toplevel,
 ) -> None:
     # Given: タブ欄はスクロールする入れ物の中にあり、一番高いタブ（Bcon）に
@@ -267,18 +267,18 @@ def test_the_docked_pad_fits_the_visible_part_of_a_scrolling_tab_area(
     pad = dock.embedded
     assert pad is not None
 
-    # Then: スクロールしなくても操作盤の全体が見える（見える範囲に収めて描く）。
-    _x0, _y0, _x1, y1 = pad.canvas.bbox("all")
-    bottom = pad.canvas.winfo_rooty() + y1
-    assert bottom <= host.canvas.winfo_rooty() + host.canvas.winfo_height() + 1
+    # Then: 見えている高さに押し込めず、自然な大きさで描く。はみ出た分は
+    #       スクロールする欄の範囲に入る（切れたまま押せない、にしない）。
+    assert pad.canvas.winfo_height() > 280
+    assert host.inner.winfo_reqheight() > host.canvas.winfo_height()
 
-    # When: the window is made taller.
-    before = _width_of(pad, "X")
-    area.geometry("1000x600")
+    # When: the area is scrolled to the bottom.
+    host.canvas.yview_moveto(1)
     area.update()
 
-    # Then: 見える高さが増えた分だけ大きく描く。
-    assert _width_of(pad, "X") > before * 1.3
+    # Then: 操作盤の下端まで見える。
+    bottom = pad.canvas.winfo_rooty() + pad.canvas.winfo_height()
+    assert bottom <= host.canvas.winfo_rooty() + host.canvas.winfo_height() + 1
     dock.shutdown()
 
 
