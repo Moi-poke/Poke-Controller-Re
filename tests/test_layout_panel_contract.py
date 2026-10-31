@@ -290,7 +290,7 @@ def test_a_closed_port_reads_as_not_connected(host: _Host) -> None:
 
 
 def test_rearranging_keeps_every_area_and_status_in_place(host: _Host) -> None:
-    for arrangement in ("side", "stack", "log_right"):
+    for arrangement in ("side", "stack", "log_bottom", "log_right"):
         # When: the user picks another arrangement.
         host.applyArrangement(arrangement)
         _settle(host)

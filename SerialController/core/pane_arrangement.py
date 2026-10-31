@@ -17,6 +17,7 @@ from typing import Final
 # (キー, メニューに出す名前)。キーは settings.ini の [Window] arrangement。
 ARRANGEMENTS: Final[tuple[tuple[str, str], ...]] = (
     ("log_right", "ログを右"),
+    ("log_bottom", "ログを下"),
     ("side", "右にタブとログ"),
     ("stack", "縦一列"),
 )
@@ -78,7 +79,10 @@ def arrangement_tree(
     log = Leaf("log", _SIDE_WEIGHT) if show_log else None
 
     key = normalize_arrangement(arrangement)
-    if key == "side":
+    if key == "log_bottom":
+        # Web 版の構図: 上段にプレビューとタブ、下段にログを横いっぱい。
+        tree = _split(VERTICAL, [_split(HORIZONTAL, [preview, tabs]), log])
+    elif key == "side":
         tree = _split(HORIZONTAL, [preview, _split(VERTICAL, [tabs, log])])
     elif key == "stack":
         tree = _split(VERTICAL, [preview, tabs, log])

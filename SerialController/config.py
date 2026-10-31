@@ -107,8 +107,9 @@ def default_sections() -> dict[str, dict[str, Any]]:
             # プロファイルごとの色（#RRGGBB）。空文字なら色を出さない。
             # 候補は core.display_mode.PROFILE_COLORS が正。
             "profile_color": "",
-            # 欄の並べ方。log_right（ログを右）/ side（右にタブとログ）/
-            # stack（縦一列）。候補は core.pane_arrangement.ARRANGEMENTS が正。
+            # 欄の並べ方。log_right（ログを右）/ log_bottom（ログを下）/
+            # side（右にタブとログ）/ stack（縦一列）。
+            # 候補は core.pane_arrangement.ARRANGEMENTS が正。
             "arrangement": DEFAULT_ARRANGEMENT,
             # 設定タブとログ欄の表示（False で折りたたむ）。
             "show_tabs": True,
