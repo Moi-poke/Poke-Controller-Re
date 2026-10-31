@@ -448,9 +448,9 @@ class SerialPanelMixin:
         Tooltip(self.cb_use_keyboard, "キーボードのキーを Switch のボタンとして送る")
         # キーの意味はキー割当画面で読める。ここに長い説明は置かない。
         self.key_config_button = ttk.Button(
-            self.control_lf, text="キー割当を確認", command=self._open_key_config
+            self.control_lf, text="キー割当", command=self._open_key_config
         )
-        self.key_config_button.grid(row=1, column=0, sticky="w", pady=(0, 4))
+        self.key_config_button.grid(row=0, column=1, sticky="e", padx=(6, 0))
 
         # ゲームパッド。パッド名は横幅を確保し、調整値は詳細へ送る。
         self.is_use_gamepad = tk.BooleanVar()
@@ -467,16 +467,16 @@ class SerialPanelMixin:
         # 上書きするため、そこでも同じ結果で門を閉じ直す。
         self._hidhide_gamepad_ok = self._gamepad_enabled_by_hidhide()
 
-        self.gamepad_label = ttk.Label(self.control_lf, text="パッド")
-        self.gamepad_label.grid(row=3, column=0, sticky="w", pady=(2, 0))
         self.gamepad_row = ttk.Frame(self.control_lf)
         self.gamepad_row.grid(row=4, column=0, sticky="ew")
-        self.gamepad_row.columnconfigure(0, weight=1)
+        self.gamepad_row.columnconfigure(1, weight=1)
+        self.gamepad_label = ttk.Label(self.gamepad_row, text="パッド")
+        self.gamepad_label.grid(row=0, column=0, sticky="w", padx=(0, 4))
         self.gamepad_choice = tk.StringVar(value="")
         self.gamepad_cb = ttk.Combobox(
             self.gamepad_row, textvariable=self.gamepad_choice, width=24
         )
-        self.gamepad_cb.grid(row=0, column=0, sticky="ew")
+        self.gamepad_cb.grid(row=0, column=1, sticky="ew")
         self.gamepad_cb.bind("<<ComboboxSelected>>", self._on_gamepad_selected, add="")
         # 手動の再接続。ホットプラグの自動巡回（2秒）で拾えない
         # 中途半端な状態から、SDL/HID のキャッシュを捨てて戻す。
@@ -485,7 +485,7 @@ class SerialPanelMixin:
             text="再接続",
             command=self._on_gamepad_reconnect,
         )
-        self.gamepad_reconnect_btn.grid(row=0, column=1, padx=(6, 0))
+        self.gamepad_reconnect_btn.grid(row=0, column=2, padx=(6, 0))
         Tooltip(
             self.gamepad_reconnect_btn,
             "ゲームパッドを探し直す（自動で拾えないとき）",
