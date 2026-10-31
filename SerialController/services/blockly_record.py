@@ -497,6 +497,12 @@ class Recorder:
         self.use_motion = bool(use_motion)
         self._transport: Any = None
         self._motion_transport: Any = None
+        #: 記録中に送った IMU サンプル（perf_counter, 6値）。Blockly の記録で
+        #: ボタン操作と同時にジャイロを残すための材料。線の聞き手から来る。
+        self._gyro_events: list[tuple[float, tuple[int, int, int, int, int, int]]] = []
+        self._gyro_lock = threading.Lock()
+        self._gyro_transport: Any = None
+        self._gyro_t0 = 0.0
         #: 記録を始めた時刻（壁時計）。手順の変換には使わない。
         self.started_at: float = 0.0
         #: 記録中に本体側の操作が混ざったかの latch。一度立ったら次の
@@ -646,9 +652,67 @@ class Recorder:
                 except Exception:
                     self._motion_transport = None
             self.started_at = time.time()
+            # ジャイロも同じ記録に残す。IMU を送っている間だけ届く
+            # （送っていなければ 0 件で、ボタンだけの記録になる）。
+            self._gyro_transport = None
+            with self._gyro_lock:
+                self._gyro_events = []
+            self._gyro_t0 = time.perf_counter()
+            add_imu = getattr(transport, "add_imu_listener", None)
+            if callable(add_imu):
+                try:
+                    if add_imu(self._on_imu_sample):
+                        self._gyro_transport = transport
+                except Exception:
+                    self._gyro_transport = None
             return True
         except Exception:
             return False
+
+    def _on_imu_sample(self, sample: tuple[int, int, int, int, int, int]) -> None:
+        """送ったIMUサンプルを溜める（線のIMU loopスレッドから呼ばれる）。"""
+        try:
+            vals = tuple(int(v) for v in sample)
+            if len(vals) != 6:
+                return
+        except (TypeError, ValueError):
+            return
+        at = time.perf_counter()
+        with self._gyro_lock:
+            self._gyro_events.append(
+                (at, (vals[0], vals[1], vals[2], vals[3], vals[4], vals[5]))
+            )
+
+    def take_gyro(
+        self,
+    ) -> tuple[float, list[tuple[float, tuple[int, int, int, int, int, int]]]] | None:
+        """記録したジャイロを取り出す（取り出したら空にする）。
+
+        戻りは (記録開始の perf_counter, サンプル列)。ジャイロを1件も
+        受け取っていなければ None。呼び出し側が .pgyro へ書く。
+        """
+        with self._gyro_lock:
+            events = self._gyro_events
+            self._gyro_events = []
+        if not events:
+            return None
+        return (self._gyro_t0, events)
+
+    def timeline_origin(self) -> float | None:
+        """記録した操作のうち最も早い perf_counter。無ければ None。
+
+        手順の再生は最初の操作から始まる（記録開始からの空白は再現しない）
+        ため、ジャイロの起点もここへ合わせる。
+        """
+        ats = [ev.at for ev in self._logger.snapshot()]
+        ats.extend(ev.at for ev in self._motion_logger.snapshot())
+        return min(ats) if ats else None
+
+    def timeline_end(self) -> float | None:
+        """記録した操作のうち最も遅い perf_counter。無ければ None。"""
+        ats = [ev.at for ev in self._logger.snapshot()]
+        ats.extend(ev.at for ev in self._motion_logger.snapshot())
+        return max(ats) if ats else None
 
     def follow(self, transport: Any) -> bool:
         """記録中に線が差し替わっていたら、聞き手を新しい線へ付け替える。
@@ -682,6 +746,17 @@ class Recorder:
                     self._motion_transport = transport
             except Exception:
                 self._motion_transport = None
+            # ジャイロの聞き手も同じ線へ移す（移せなくても記録は続ける）。
+            try:
+                old_imu = getattr(old, "remove_imu_listener", None)
+                if callable(old_imu) and self._gyro_transport is not None:
+                    old_imu(self._on_imu_sample)
+                self._gyro_transport = None
+                add_imu = getattr(transport, "add_imu_listener", None)
+                if callable(add_imu) and add_imu(self._on_imu_sample):
+                    self._gyro_transport = transport
+            except Exception:
+                self._gyro_transport = None
             return True
         except Exception:
             return False
@@ -714,6 +789,15 @@ class Recorder:
                     remove_motion = getattr(motion_transport, "remove_listener", None)
                     if callable(remove_motion):
                         remove_motion(self._motion_logger.feed)
+                except Exception:
+                    pass
+            # ジャイロの聞き手を外す。溜めたサンプルは take_gyro で読むまで残す。
+            gyro_transport, self._gyro_transport = self._gyro_transport, None
+            if gyro_transport is not None:
+                try:
+                    remove_imu = getattr(gyro_transport, "remove_imu_listener", None)
+                    if callable(remove_imu):
+                        remove_imu(self._on_imu_sample)
                 except Exception:
                     pass
             # 同時押しは motion より先に試す。stick 無し＋重なり有り（hold系が

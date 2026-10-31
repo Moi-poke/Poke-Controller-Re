@@ -296,6 +296,11 @@ def default_sections() -> dict[str, dict[str, Any]]:
             # ジャイロ出力の倍率。1.0で生値そのまま。コンソール側の
             # スケール解釈が想定と違う場合の実測用トリム（0.01〜4.0）。
             "gyro_scale": 1.0,
+            # ジャイロの記録と再生（.pgyro）。record_path は送出値を保存する
+            # 先、play_path は「記録の再生」で読むファイル。BASE_DIR 起点の
+            # 相対パスも可（起動時に os.chdir(BASE_DIR) される）。
+            "record_path": "records/motion.pgyro",
+            "play_path": "",
         },
     }
 
@@ -547,6 +552,7 @@ def complete_missing(parser: configparser.ConfigParser) -> list[str]:
         if imu.get("source", "").strip() not in (
             "sensor",
             "hid",
+            "file",
             "sine",
             "step",
             "rest",

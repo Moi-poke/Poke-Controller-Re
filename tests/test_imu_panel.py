@@ -26,17 +26,23 @@ class _FakeTransport:
         self.opened = True
         self.source: Any = None
         self.running = False
+        self.interval_s: float | None = None
         self.sent = 0
 
     def is_open(self) -> bool:
         return self.opened
 
-    def start_imu_loop(self, source: Any) -> bool:
+    def start_imu_loop(
+        self, source: Any, interval_s: float = 0.005, **kwargs: Any
+    ) -> bool:
         self.source = source
+        self.interval_s = interval_s
+        self.start_kwargs = kwargs
         self.running = True
         return True
 
-    def stop_imu_loop(self) -> bool:
+    def stop_imu_loop(self, owner: str | None = None) -> bool:
+        self.stop_owner = owner
         self.running = False
         return True
 
@@ -54,15 +60,20 @@ class _GatedTransport(_FakeTransport):
         self.start_gate = threading.Event()
         self.stop_gate = threading.Event()
 
-    def start_imu_loop(self, source: Any) -> bool:
+    def start_imu_loop(
+        self, source: Any, interval_s: float = 0.005, **kwargs: Any
+    ) -> bool:
         self.start_calls += 1
         self.source = source
+        self.interval_s = interval_s
+        self.start_kwargs = kwargs
         released = self.start_gate.wait(3.0)
         self.running = True
         return released
 
-    def stop_imu_loop(self) -> bool:
+    def stop_imu_loop(self, owner: str | None = None) -> bool:
         self.stop_calls += 1
+        self.stop_owner = owner
         released = self.stop_gate.wait(3.0)
         self.running = False
         return released
@@ -154,9 +165,12 @@ def test_imu_panel_start_stop_calls_transport(tk_root: tk.Tk) -> None:
         assert _wait_until(lambda: transport.running, root), "start not called"
         assert _wait_until(lambda: panel._streaming is True, root)
         assert settings.saved >= 1
+        # 手動の送出はマクロの再生を引き継ぎ、停止は自分の持ち主として行う。
+        assert transport.start_kwargs == {"replace": True, "owner": "panel"}
         panel._on_toggle()
         assert _wait_until(lambda: not transport.running, root), "stop not called"
         assert _wait_until(lambda: panel._streaming is False, root)
+        assert transport.stop_owner == "panel"
     finally:
         panel.close()
         root.destroy()
@@ -744,6 +758,153 @@ def test_imu_panel_hid_start_always_rearms_even_when_live(
         assert source() == (1, 2, 3, 4, 5, 6)
         assert fake.arm_calls == 1
         assert fake.ensure_calls == 0
+    finally:
+        panel.close()
+        root.destroy()
+
+
+def test_imu_panel_records_sent_values(tk_root: tk.Tk, tmp_path) -> None:
+    """送出値をそのまま .pgyro へ記録し、停止後に同じ値で読み戻せる。"""
+    from core.motion_track import MotionPlayer
+
+    path = str(tmp_path / "rec.pgyro")
+    data = {
+        "source": "manual",
+        "accel_signs": "1,1,1",
+        "gyro_signs": "1,1,1",
+        "gyro_scale": "1.0",
+        "gyro_dead_dps": "0",
+        "record_path": path,
+    }
+    panel, root, transport, _settings, _root = _make_panel(tk_root, data)
+    try:
+        for i, value in enumerate(("11", "22", "4096", "100", "-200", "0")):
+            panel._manual_vars[i].set(value)
+        panel._record_var.set(True)
+
+        panel._on_toggle()
+        assert _wait_until(lambda: panel._streaming, root)
+        source = transport.source
+        assert source is not None
+        sent = [source() for _ in range(3)]
+
+        panel._on_toggle()
+        assert _wait_until(lambda: not panel._streaming, root)
+
+        player = MotionPlayer(path)
+        assert player.load() is True
+        assert list(player) == sent
+        assert _wait_until(
+            lambda: any("記録しました" in line for line in panel._logged), root
+        )
+    finally:
+        panel.close()
+        root.destroy()
+
+
+def test_imu_panel_plays_recording_and_stops_at_end(tk_root: tk.Tk, tmp_path) -> None:
+    """記録の再生は値を加工せずに返し、終端で自動停止する。"""
+    from core.motion_track import MotionRecorder
+
+    path = str(tmp_path / "play.pgyro")
+    samples = [
+        (1, 2, 4096, 100, -200, 0),
+        (3, 4, 4096, 300, -400, 50),
+        (5, 6, 4096, 500, -600, 100),
+    ]
+    with MotionRecorder(path) as recorder:
+        for sample in samples:
+            recorder.write(sample)
+    data = {
+        "source": "file",
+        "play_path": path,
+        # 再生では掛けない（記録済みの送出値をそのまま返す）。
+        "gyro_scale": "0.5",
+        "gyro_signs": "-1,-1,-1",
+    }
+    panel, root, transport, _settings, _root = _make_panel(tk_root, data)
+    try:
+        assert panel._play_path_var.get() == path
+        panel._on_toggle()
+        assert _wait_until(lambda: panel._streaming, root)
+        assert transport.interval_s == pytest.approx(0.005)
+        source = transport.source
+        assert source is not None
+        assert [source() for _ in range(3)] == samples
+        assert source() is None
+
+        assert _wait_until(lambda: not transport.running, root)
+        assert _wait_until(lambda: not panel._streaming, root)
+        assert any("再生が終了しました" in line for line in panel._logged)
+    finally:
+        panel.close()
+        root.destroy()
+
+
+def test_imu_panel_playback_missing_file_stays_stopped(
+    tk_root: tk.Tk, tmp_path
+) -> None:
+    """読めない記録を選んだら理由を出し、送出は始めない。"""
+    data = {"source": "file", "play_path": str(tmp_path / "none.pgyro")}
+    panel, root, transport, _settings, _root = _make_panel(tk_root, data)
+    try:
+        panel._on_toggle()
+        assert _wait_until(lambda: len(panel._logged) >= 1, root)
+        assert any("記録を読めません" in line for line in panel._logged)
+        assert transport.running is False
+        assert panel._streaming is False
+    finally:
+        panel.close()
+        root.destroy()
+
+
+def test_imu_panel_refuses_missing_record_path(tk_root: tk.Tk) -> None:
+    """記録を有効にして保存先が空なら、黙って送出を始めない。"""
+    data = {"source": "sine"}
+    panel, root, transport, _settings, _root = _make_panel(tk_root, data)
+    try:
+        panel._record_path_var.set("")
+        panel._record_var.set(True)
+        panel._on_toggle()
+        assert _wait_until(lambda: len(panel._logged) >= 1, root)
+        assert any("記録先が未設定" in line for line in panel._logged)
+        assert transport.running is False
+        assert panel._streaming is False
+    finally:
+        panel.close()
+        root.destroy()
+
+
+def test_imu_panel_keeps_playback_file_when_record_path_matches(
+    tk_root: tk.Tk, tmp_path
+) -> None:
+    """再生元と同じ記録先を指定されても、元ファイルを上書きしない。"""
+    from core.motion_track import MotionPlayer, MotionRecorder
+
+    path = str(tmp_path / "same.pgyro")
+    samples = [(1, 2, 4096, 100, -200, 0), (3, 4, 4096, 300, -400, 50)]
+    with MotionRecorder(path) as recorder:
+        for sample in samples:
+            recorder.write(sample)
+    data = {"source": "file", "play_path": path, "record_path": path}
+    panel, root, transport, _settings, _root = _make_panel(tk_root, data)
+    try:
+        panel._record_var.set(True)
+        panel._on_toggle()
+        assert _wait_until(lambda: panel._streaming, root)
+        assert panel._recorder is None
+        source = transport.source
+        assert source is not None
+        assert [source() for _ in range(2)] == samples
+        assert _wait_until(
+            lambda: any("同じため" in line for line in panel._logged), root
+        )
+
+        panel._on_toggle()
+        assert _wait_until(lambda: not panel._streaming, root)
+        player = MotionPlayer(path)
+        assert player.load() is True
+        assert list(player) == samples
     finally:
         panel.close()
         root.destroy()

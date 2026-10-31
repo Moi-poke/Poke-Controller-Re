@@ -32,6 +32,8 @@ def test_imu_section_defaults():
     assert imu["hid_gyro_signs"] == "1,1,1"
     assert imu["hid_gyro_scale"] == "1.0,1.0,1.0"
     assert imu["gyro_bias"] == "0.0,0.0,0.0"
+    assert imu["record_path"] == "records/motion.pgyro"
+    assert imu["play_path"] == ""
 
 
 def test_imu_section_repairs_invalid():
@@ -147,3 +149,19 @@ def test_sample_transform_hid_uses_own_keys() -> None:
     fn = ImuPanel._sample_transform(flipped, hid=True)
     assert fn is not None
     assert fn((100, 200, 300, 10, 20, 30)) == (100, 200, 300, 10, -20, -30)
+
+
+def test_imu_section_keeps_file_source_and_paths():
+    """記録の再生（file）と記録・再生パスは補正で壊さない。"""
+    import config
+
+    parser = _fresh()
+    parser["IMU"]["source"] = "file"
+    parser["IMU"]["record_path"] = "records/take1.pgyro"
+    parser["IMU"]["play_path"] = "records/take0.pgyro"
+    changed = config.complete_missing(parser)
+    imu = parser["IMU"]
+    assert not [c for c in changed if c.startswith("IMU.")]
+    assert imu["source"] == "file"
+    assert imu["record_path"] == "records/take1.pgyro"
+    assert imu["play_path"] == "records/take0.pgyro"

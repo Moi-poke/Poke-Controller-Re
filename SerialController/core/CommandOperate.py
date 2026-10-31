@@ -25,6 +25,7 @@
 
 from __future__ import annotations
 
+import os
 import threading
 import time
 from collections.abc import Callable
@@ -546,3 +547,121 @@ class OperateMixin:
         except AttributeError:
             pass
         self.checkIfAlive()
+
+    # -- ジャイロ（Blockly の記録の再生） ---------------------------------
+
+    @staticmethod
+    def _resolve_gyro_path(name: str) -> str | None:
+        """記録ファイルの実パスを探す。無ければ None。
+
+        絶対パスはそのまま。相対は「今の作業ディレクトリ（起動時の
+        SerialController）」と「core の親（SerialController）」の順に見る。
+        """
+        if not name:
+            return None
+        if os.path.isabs(name):
+            candidates = [name]
+        else:
+            here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            candidates = [
+                name,
+                os.path.join(os.getcwd(), name),
+                os.path.join(here, name),
+            ]
+        for path in candidates:
+            if os.path.isfile(path):
+                return path
+        return None
+
+    def _gyro_transport_handle(self) -> Any:
+        """ジャイロを送る線を keys から引く。無ければ None。"""
+        keys = getattr(self, "keys", None)
+        ser = getattr(keys, "ser", None)
+        transport = getattr(ser, "transport", None)
+        if transport is not None:
+            return transport
+        sender = getattr(ser, "sender", None)
+        return getattr(sender, "transport", None)
+
+    def gyro_play(self, name: str) -> bool:
+        """記録したジャイロ（.pgyro）を、命令と並行して送出する。
+
+        Blockly の「記録」が作るブロックから呼ばれる。記録済みの値は
+        加工せずそのまま送り、ファイルの周期（v1 は 200Hz）で進める。
+        先頭の遅れ（start_offset_us）は待ってから始める。マクロが
+        終わると _cleanup が IMU loop を止める。
+
+        既にジャイロを送っていても差し替える（パネルの送出を引き継ぐ）。
+        戻りは開始できたか。例外は外へ投げない。
+        """
+        from core.motion_track import MotionPlayer
+
+        path = self._resolve_gyro_path(str(name))
+        if path is None:
+            print(f"ジャイロの記録が見つかりません: {name}")
+            logger.warning(f"ジャイロの記録が見つかりません: {name}")
+            return False
+        player = MotionPlayer(path)
+        if not player.load() or len(player) == 0:
+            reason = player.error or "空"
+            print(f"ジャイロの記録を読めません: {name}（{reason}）")
+            logger.warning(f"ジャイロの記録を読めません: {name}（{reason}）")
+            return False
+        transport = self._gyro_transport_handle()
+        if transport is None:
+            print("送信線が無いためジャイロを再生できません")
+            return False
+        self._stop_gyro_playback()
+        offset_s = max(0, int(player.start_offset_us)) / 1_000_000.0
+        started = time.perf_counter()
+        inner = player.as_source()
+
+        def paced() -> tuple[int, int, int, int, int, int] | None:
+            if time.perf_counter() - started < offset_s:
+                return None
+            return inner()
+
+        period_s = max(1, int(player.period_us)) / 1_000_000.0
+        # 持ち主の名札。停止はこの名札が一致するときだけ行う
+        # （パネルの手動送出が割り込んだあとに、マクロの後始末で
+        # その送出を止めてしまわないため）。
+        owner = f"macro:{id(self):x}"
+        ok = False
+        try:
+            start = getattr(transport, "start_imu_loop", None)
+            if callable(start):
+                try:
+                    ok = bool(start(paced, period_s, replace=True, owner=owner))
+                except TypeError:
+                    # 差し替え・持ち主引数を持たない線（将来の別実装）。
+                    ok = bool(start(paced, period_s))
+                    owner = ""
+        except Exception as e:
+            logger.warning(f"ジャイロ再生を開始できません: {e!r}")
+            ok = False
+        if ok:
+            self._gyro_transport = transport
+            self._gyro_owner = owner
+        else:
+            print("ジャイロ再生を開始できませんでした")
+        return ok
+
+    def _stop_gyro_playback(self) -> None:
+        """マクロのジャイロ再生を止める。例外は投げない。
+
+        自分が起こしたループだけを止める（持ち主の名札を渡す）。
+        パネルの手動送出に引き継がれていれば何もしない。
+        """
+        transport, self._gyro_transport = getattr(self, "_gyro_transport", None), None
+        owner, self._gyro_owner = getattr(self, "_gyro_owner", ""), ""
+        if transport is None:
+            return
+        try:
+            stop = getattr(transport, "stop_imu_loop", None)
+            if callable(stop):
+                if owner:
+                    stop(owner=owner)
+                else:
+                    stop()
+        except Exception:
+            pass

@@ -405,6 +405,7 @@ button.run:hover { background: #17793a; }
         { kind: 'block', type: 'pokecon_stick' },
         { kind: 'block', type: 'pokecon_motion' },
         { kind: 'block', type: 'pokecon_motion2' },
+        { kind: 'block', type: 'pokecon_gyro' },
         { kind: 'block', type: 'pokecon_press_rep' },
         { kind: 'block', type: 'pokecon_hold' },
         { kind: 'block', type: 'pokecon_hold_end' },
@@ -2123,7 +2124,7 @@ button.run:hover { background: #17793a; }
     var rs = byId('runstate');
     if (rs) {
       if (rec.active) {
-        rs.textContent = '● 記録中… 本体で操作してください（押した操作がブロックになります）';
+        rs.textContent = '● 記録中… 本体で操作してください（ジャイロ送出中ならジャイロも記録します）';
         rs.className = 'is-running';
       } else if (!run.active) {
         rs.textContent = '';
@@ -2142,7 +2143,11 @@ button.run:hover { background: #17793a; }
         return;
       }
       setRecUi(true);
-      setStatus('記録中… 本体で操作してください（押した操作がブロックになります）', false);
+      if (j.imu === false) {
+        setStatus('記録中… ジャイロ送出が止まっています（ジャイロ欄で開始すると途中から記録します）', false);
+      } else {
+        setStatus('記録中… 本体で操作してください（ボタンとジャイロを記録します）', false);
+      }
     }).catch(function (e) {
       setRecUi(false);
       setStatus('記録できません: ' + e, true);
@@ -2158,13 +2163,18 @@ button.run:hover { background: #17793a; }
         return;
       }
       var steps = j.steps || [];
-      if (!steps.length) {
-        setStatus('操作が記録されませんでした（本体でボタンを押してから止めてください）', true);
+      var gyro = j.gyro || null;
+      if (!steps.length && !gyro) {
+        setStatus(j.gyroNote || '操作が記録されませんでした（本体でボタンを押してから止めてください）', true);
         return;
       }
       var sel = (typeof Blockly.getSelected === 'function') ? Blockly.getSelected() : null;
-      var made = (E && E.insertSteps) ? E.insertSteps(ws, steps, sel) : [];
-      setStatus(j.message || (made.length + ' 個の操作を記録しました'), false);
+      var made = (E && E.insertSteps) ? E.insertSteps(ws, steps, sel, gyro) : [];
+      var text = j.message || (made.length + ' 個の操作を記録しました');
+      if (j.gyroNote) {
+        text += '（' + j.gyroNote + '）';
+      }
+      setStatus(text, false);
     }).catch(function (e) {
       setRecUi(false);
       setStatus('記録できません: ' + e, true);
