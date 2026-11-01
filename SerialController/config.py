@@ -26,6 +26,7 @@ from core.display_mode import (
     SHOW_SIZES,
     normalize_profile_color,
 )
+from core.gamepad_map import DEADZONE_MAX
 from core.pane_arrangement import (
     DEFAULT_ARRANGEMENT,
     format_sash_ratios,
@@ -87,7 +88,7 @@ def default_sections() -> dict[str, dict[str, Any]]:
             "is_use_keyboard": True,
             "is_use_gamepad": False,
             "gamepad_index": 0,
-            # ゲームパッドのスティック遊び（0〜8192、既定1638=最大値の5%）。
+            # ゲームパッドのスティック遊び（0〜16383、既定1638=最大値の5%）。
             # XInput 既定 7849・約24% より浅く、Pro コン実測ブレ（1600前後）を抑える。
             "gamepad_deadzone": 1638,
             "is_use_left_stick_mouse": False,
@@ -366,11 +367,17 @@ def parse_imu_scale(text: str) -> tuple[float, float, float] | None:
     return scale
 
 
-def complete_missing(parser: configparser.ConfigParser) -> list[str]:
+def complete_missing(
+    parser: configparser.ConfigParser, *, legacy_arrangement: bool = False
+) -> list[str]:
     """不足項目と不正値を既定値へ補正する。直した箇所の一覧を返す。
 
+    legacy_arrangement は、設定ファイルが既に存在したのに arrangement
+    キーが無い場合に使う。新規既定の tabs_right ではなく、旧既定の
+    log_right を入れて既存利用者の見た目を変えない。
     書き出しは呼び出し側が行う（ここは辞書を直すだけ）。
     """
+    had_arrangement = parser.has_option("Window", "arrangement")
     defaults = default_sections()
     changed: list[str] = []
     for section, values in defaults.items():
@@ -391,7 +398,7 @@ def complete_missing(parser: configparser.ConfigParser) -> list[str]:
         "bcon_baud_index": (3, lambda value: 0 <= value <= 4),
         "fps": (60, lambda value: value in (5, 15, 30, 45, 60)),
         "gamepad_index": (0, lambda value: 0 <= value <= 3),
-        "gamepad_deadzone": (1638, lambda value: 0 <= value <= 8192),
+        "gamepad_deadzone": (1638, lambda value: 0 <= value <= DEADZONE_MAX),
     }
     for key, (default, valid) in integer_rules.items():
         try:
@@ -505,7 +512,11 @@ def complete_missing(parser: configparser.ConfigParser) -> list[str]:
             window["profile_color"] = color
             changed.append("Window.profile_color")
         arrangement = window.get("arrangement", "")
-        if normalize_arrangement(arrangement) != arrangement:
+        if not had_arrangement and legacy_arrangement:
+            if arrangement != "log_right":
+                window["arrangement"] = "log_right"
+                changed.append("Window.arrangement")
+        elif normalize_arrangement(arrangement) != arrangement:
             window["arrangement"] = DEFAULT_ARRANGEMENT
             changed.append("Window.arrangement")
         sashes = window.get("pane_sashes", "")

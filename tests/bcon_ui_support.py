@@ -147,7 +147,6 @@ def setup(service: Service | None = None) -> Any:
         "_btn_e1",
         "_btn_e2",
         "_btn_bootsel",
-        "_btn_clear",
         "_btn_keys",
         "_btn_color",
         "_lamp_canvas",

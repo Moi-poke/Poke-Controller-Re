@@ -35,6 +35,10 @@ class ScrollHost(ttk.Frame):
 
         self.inner = ttk.Frame(self.canvas)
         self._window = self.canvas.create_window(0, 0, window=self.inner, anchor="nw")
+        # 縦バーの表示状態。中身の高さとバー幅が同じ桁で変わると、
+        # 「バーが出る→中身が縮む→バーが消える→中身が伸びる」が
+        # 往復する。バー幅に対するパッドの縦横比から余裕を毎回計算する。
+        self._vbar_shown = False
         self.bind("<Configure>", self._relayout, add="+")
         self.inner.bind("<Configure>", self._relayout, add="+")
         # マウスホイールで縦スクロールする。ポインタがこの欄の上にあるときだけ
@@ -65,6 +69,15 @@ class ScrollHost(ttk.Frame):
             avail_h = height - (bar_h if need_h else 0)
             need_v = req_h > height - (bar_h if need_h else 0)
             need_h = req_w > width - (bar_w if need_v else 0)
+        # 縦バーの表示には状態で余裕を持たせる。バーの有無で中身の幅・
+        # パッドの高さが変わるため、境界で往復しないようにする。余裕は
+        # バー幅×パッドの縦横比（約0.41）＋4px。DPIが上がっても足りる。
+        hysteresis = max(8, round(bar_w * 0.41) + 4)
+        if self._vbar_shown:
+            need_v = req_h > height - (bar_h if need_h else 0) - hysteresis
+        else:
+            need_v = req_h > height - (bar_h if need_h else 0)
+        self._vbar_shown = need_v
         avail_w = width - (bar_w if need_v else 0)
         avail_h = height - (bar_h if need_h else 0)
 

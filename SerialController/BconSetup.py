@@ -36,6 +36,14 @@ from core.transport.bcon_protocol import (
 from core.ui_inbox import UiInbox, post_latest_to_gui
 from services.serial_service import SerialService
 from ui.collapsible import CollapsibleSection, SectionFrame
+from ui.spacing import (
+    GAP_GROUP,
+    GAP_ITEM,
+    PAD_BUTTON,
+    TAB_PAD_X,
+    TAB_PAD_Y,
+    px,
+)
 from ui.tooltip import Tooltip
 
 BCON_WINDOW_TITLE = "BCON 設定"
@@ -373,24 +381,18 @@ class BconSetup:
             self.window.title(BCON_WINDOW_TITLE)
             self.window.protocol("WM_DELETE_WINDOW", self.close)
 
-        body = ttk.Frame(self.window, padding=4)
+        body = ttk.Frame(
+            self.window,
+            padding=(px(self.window, TAB_PAD_X), px(self.window, TAB_PAD_Y)),
+        )
         self._body = body
 
-        # タブでは操作列と情報列を、幅が足りれば左右に、足りなければ縦に並べる
-        # （_reflow_columns）。常に左右だと 800px 前後を要し、タブ欄の要求幅が
-        # 一番広いタブで決まるため、他のタブを開いていても横スクロールが出た。
-        # 別窓は従来どおり縦積み（同じ親へ積む＝列を分けない）。
+        # 埋め込みタブは常に 1 列。2 列は幅によって位置が動き、状態が
+        # 操作より下になるため使わない。別窓だけ従来の 2 列を残す。
         self._two_columns: bool | None = None
         if embedded:
-            # Notebook の内側は全タブ共通の幅なので、見えている幅へ体を合わせる。
-            body.place(x=4, y=4)
-            col_ops = ttk.Frame(body)
-            col_info = ttk.Frame(body)
-            # 要求幅は狭い方（縦積み）の幅に固定し、実際の幅で並べ方を決める。
-            # 中身から要求幅を決めさせると、左右に並べた広さが要求として残り、
-            # 窓を狭めても縦積みへ戻れない。
-            body.grid_propagate(False)
-            body.columnconfigure(1, weight=1)
+            body.pack(fill=tk.BOTH, expand=True)
+            col_ops = col_info = body
             body.bind("<Configure>", lambda _e: self._reflow_columns(), add="+")
             self.window.bind("<Configure>", self._fit_viewport, add="+")
             self.window.bind("<Map>", self._fit_viewport, add="+")
@@ -411,8 +413,9 @@ class BconSetup:
         # 接続状態は下端の状態バーが全タブ共通で出す（タブ内に常時表示しない）。
 
         # 主要操作（常時）。枠線は引かず、見出しと余白でまとまりを示す。
-        grp_main = SectionFrame(col_ops, "操作")
-        grp_main.pack(fill=tk.X, pady=(0, 4))
+        grp_main = SectionFrame(col_ops, "")
+        self._grp_main = grp_main
+        grp_main.pack(fill=tk.X, pady=(0, px(self.window, GAP_GROUP)))
         main_body = grp_main.body
         main_body.columnconfigure(0, weight=1, uniform="btn")
         main_body.columnconfigure(1, weight=1, uniform="btn")
@@ -421,40 +424,88 @@ class BconSetup:
             text="状態を更新",
             command=self._on_status,
         )
-        self._btn_status.grid(row=0, column=0, sticky=tk.EW, padx=2, pady=2)
+        self._btn_status.grid(
+            row=0,
+            column=0,
+            sticky=tk.EW,
+            padx=px(self.window, PAD_BUTTON),
+            pady=px(self.window, GAP_ITEM),
+        )
         self._btn_reconnect = ttk.Button(
             main_body,
             text="Switchへ再接続",
             command=self._on_reconnect,
         )
-        self._btn_reconnect.grid(row=0, column=1, sticky=tk.EW, padx=2, pady=2)
-        # 接続に失敗したときだけ出す復旧の導線（詳細を開かなくても届く）。
-        self._recovery_row = ttk.Frame(main_body)
-        self._recovery_row.grid(
-            row=1, column=0, columnspan=2, sticky=tk.EW, pady=(2, 0)
+        self._btn_reconnect.grid(
+            row=0,
+            column=1,
+            sticky=tk.EW,
+            padx=px(self.window, PAD_BUTTON),
+            pady=px(self.window, GAP_ITEM),
         )
-        self._recovery_row.columnconfigure(0, weight=1, uniform="btn")
-        self._recovery_row.columnconfigure(1, weight=1, uniform="btn")
+        # 理由と復旧操作は同じ 1 行。理由が空でもボタン高さを確保し、
+        # 失敗時に下の折りたたみが動かないようにする。
+        self._reason_row = ttk.Frame(main_body)
+        self._recovery_row = self._reason_row
+        self._reason_row.grid(
+            row=1,
+            column=0,
+            columnspan=2,
+            sticky=tk.EW,
+            pady=(px(self.window, GAP_ITEM), 0),
+        )
+        self._reason_row.columnconfigure(0, weight=1)
+        self._reason_text = tk.StringVar(value="")
+        self._reason_label = ttk.Label(
+            self._reason_row, textvariable=self._reason_text, justify=tk.LEFT
+        )
+        self._reason_label.grid(row=0, column=0, sticky=tk.W)
+        self._reason_actions = ttk.Frame(self._reason_row)
+        self._reason_actions.grid(row=0, column=1, sticky=tk.E)
+        self._reason_actions.columnconfigure(0, weight=1, uniform="btn")
+        self._reason_actions.columnconfigure(1, weight=1, uniform="btn")
         self._btn_retry_quick = ttk.Button(
-            self._recovery_row,
+            self._reason_actions,
             text="HELLO をやり直す",
             command=self._on_connect,
         )
-        self._btn_retry_quick.grid(row=0, column=0, sticky=tk.EW, padx=2, pady=2)
+        self._btn_retry_quick.grid(
+            row=0, column=0, sticky=tk.EW, padx=px(self.window, PAD_BUTTON)
+        )
         self._btn_hunt_quick = ttk.Button(
-            self._recovery_row,
+            self._reason_actions,
             text="速度を探す",
             command=self._on_hunt,
         )
-        self._btn_hunt_quick.grid(row=0, column=1, sticky=tk.EW, padx=2, pady=2)
-        self._recovery_row.grid_remove()
+        self._btn_hunt_quick.grid(
+            row=0, column=1, sticky=tk.EW, padx=px(self.window, PAD_BUTTON)
+        )
+        self._btn_open_serial = ttk.Button(
+            self._reason_actions,
+            text="シリアルタブを開く",
+            command=self._open_serial,
+        )
+        self._btn_open_serial.grid(
+            row=0,
+            column=0,
+            columnspan=2,
+            sticky=tk.EW,
+            padx=px(self.window, PAD_BUTTON),
+        )
+        for btn in (self._btn_retry_quick, self._btn_hunt_quick):
+            btn.grid_remove()
+        self._btn_open_serial.grid_remove()
+        main_body.rowconfigure(1, minsize=px(self.window, 30))
         self._result = ttk.Label(col_ops, text="", wraplength=250, justify=tk.LEFT)
         self._result.pack(fill=tk.X, pady=(0, 4))
 
         # 接続モードとペアリング（詳細。1 階層だけ折りたたむ）。
         # 主要な手順（状態→主要操作）は畳まずに左列だけで追える。
         grp_pair = CollapsibleSection(
-            col_ops, "接続モード・ペアリング", on_toggle=self._reflow_columns
+            col_ops,
+            "接続モード・ペアリング",
+            on_toggle=self._reflow_columns,
+            bold=True,
         )
         grp_pair.pack(fill=tk.X, pady=(0, 0))
         self._grp_pair = grp_pair
@@ -465,7 +516,7 @@ class BconSetup:
         ttk.Label(
             pair_body,
             text="接続方式・種別を変えると Pico が再起動し、COM ポートが外れます。"
-            "再起動後は『シリアルタブで接続し直す』から入り直してください。",
+            "再起動後はシリアルタブで接続し直してください。",
             wraplength=250,
             justify=tk.LEFT,
         ).grid(row=0, column=0, sticky=tk.W, pady=(2, 4))
@@ -513,7 +564,7 @@ class BconSetup:
         if self._show_serial is not None:
             self._btn_serial = ttk.Button(
                 pair_body,
-                text="シリアルタブで接続し直す",
+                text="シリアルタブを開く（一覧更新）",
                 command=self._show_serial,
             )
             self._btn_serial.grid(row=3, column=0, sticky=tk.EW, pady=(0, 4))
@@ -568,10 +619,17 @@ class BconSetup:
         ).grid(row=9, column=0, sticky=tk.W, pady=(0, 2))
 
         grp_state = SectionFrame(col_info, "コントローラ状態")
+        self._grp_state = grp_state
         grp_state.pack(fill=tk.X, pady=(0, 0))
         state_body = grp_state.body
+        state_body.columnconfigure(1, weight=1)
+        ttk.Label(state_body, text="接続方式").grid(
+            row=0, column=0, sticky=tk.W, padx=2, pady=2
+        )
+        self._mode_label = ttk.Label(state_body, text="—", justify=tk.LEFT)
+        self._mode_label.grid(row=0, column=1, sticky=tk.W, padx=2, pady=2)
         ttk.Label(state_body, text="プレイヤーLED").grid(
-            row=0,
+            row=1,
             column=0,
             sticky=tk.W,
             padx=2,
@@ -585,7 +643,7 @@ class BconSetup:
             height=30,
             highlightthickness=0,
         )
-        self._lamp_canvas.grid(row=1, column=0, sticky=tk.W, padx=2, pady=2)
+        self._lamp_canvas.grid(row=2, column=1, sticky=tk.W, padx=2, pady=2)
         self._lamp_items: list[int] = []
         for index in range(4):
             left = 4 + index * 30
@@ -595,17 +653,26 @@ class BconSetup:
                     4,
                     left + 22,
                     26,
-                    fill=PLAYER_LAMP_OFF_COLOR,
+                    fill="",
                     outline="#4D4D4D",
                 )
             )
-        self._imu_label = ttk.Label(state_body, text="ジャイロ: なし")
-        self._imu_label.grid(row=2, column=0, sticky=tk.W, padx=2, pady=2)
-        self._vib_label = ttk.Label(state_body, text="振動: 未受信")
-        self._vib_label.grid(row=3, column=0, sticky=tk.W, padx=2, pady=2)
+        ttk.Label(state_body, text="ジャイロ").grid(
+            row=3, column=0, sticky=tk.W, padx=2, pady=2
+        )
+        self._imu_label = ttk.Label(state_body, text="—")
+        self._imu_label.grid(row=3, column=1, sticky=tk.W, padx=2, pady=2)
+        ttk.Label(state_body, text="振動").grid(
+            row=4, column=0, sticky=tk.W, padx=2, pady=2
+        )
+        self._vib_label = ttk.Label(state_body, text="—")
+        self._vib_label.grid(row=4, column=1, sticky=tk.W, padx=2, pady=2)
 
         grp_color = CollapsibleSection(
-            col_info, "本体色（RRGGBB）", on_toggle=self._reflow_columns
+            col_info,
+            "本体色",
+            on_toggle=self._reflow_columns,
+            bold=True,
         )
         grp_color.pack(fill=tk.X, pady=(4, 0))
         self._grp_color = grp_color
@@ -660,9 +727,10 @@ class BconSetup:
         # 通信診断（HELLO 再試行・PING・速度探索）と詳細ログを 1 か所へ。
         grp_diag = CollapsibleSection(
             col_info,
-            "通信診断・詳細ログ",
+            "通信テスト・詳細ログ",
             expand=True,
             on_toggle=self._reflow_columns,
+            bold=True,
         )
         grp_diag.pack(fill=tk.BOTH, expand=True, pady=(4, 0))
         self._grp_diag = grp_diag
@@ -718,7 +786,10 @@ class BconSetup:
         # （押し間違いを防ぐための隔離であり、処理は何も変えない）。
         # 作る順＝Tab の移動順なので、状態・色・診断の後（最下部）に作る。
         grp_danger = CollapsibleSection(
-            col_info, "保守（取り消せない操作）", on_toggle=self._reflow_columns
+            col_info,
+            "保守（取り消せない操作）",
+            on_toggle=self._reflow_columns,
+            bold=True,
         )
         self._grp_danger = grp_danger
         danger_body = grp_danger.body
@@ -737,18 +808,20 @@ class BconSetup:
             padx=2,
             pady=2,
         )
-        self._btn_clear = ttk.Button(
-            danger_body,
-            text="取込を破棄",
-            command=self._on_clear,
-        )
-        self._btn_clear.grid(row=1, column=0, sticky=tk.EW, padx=2, pady=2)
         self._btn_keys = ttk.Button(
             danger_body,
             text="ペア鍵を全削除",
             command=self._on_delete_keys,
         )
         self._btn_keys.grid(row=1, column=1, sticky=tk.EW, padx=2, pady=2)
+        self._keys_note = ttk.Label(
+            danger_body,
+            text="有線モードでは鍵を削除できません。無線で起動してください。",
+            wraplength=230,
+            justify=tk.LEFT,
+        )
+        self._keys_note.grid(row=2, column=0, columnspan=2, sticky=tk.W, padx=2)
+        self._keys_note.grid_remove()
 
         # 取り消せない操作は最下部へ（情報列の最後に置く）。
         grp_danger.pack(fill=tk.X, pady=(4, 0))
@@ -804,19 +877,16 @@ class BconSetup:
             "ファームウェア書き込み用のモードで再起動する（COM ポートが外れる）。",
         )
         Tooltip(
-            self._btn_clear,
-            "Pico に取り込んだ入力を破棄する。Switch 側のペアリング解除も別途必要。",
-        )
-        Tooltip(
             self._btn_keys,
-            "Pico に保存したペアリング情報をすべて削除する。Switch 側の登録解除も別途必要。",
+            "無線モードで起動したときだけ、Classic リンク鍵と保存ホストを削除する。取込は残る。有線では実行できない。",
         )
         Tooltip(
             self._btn_color,
             "コントローラ本体の色を Pico に送る（プレイヤーLEDの色ではありません）。",
         )
         if embedded:
-            self._reflow_columns()
+            self._order_embedded_groups()
+        self._reflow_columns()
         self._bind_release_focus()
         self.set_visible(True)
 
@@ -865,6 +935,36 @@ class BconSetup:
                 # 入力後は Enter / FocusOut で確定する既存動作に任せる。
                 continue
 
+    def _order_embedded_groups(self) -> None:
+        """埋め込み1列の並びを固定する（状態→操作→折りたたみ）。"""
+        groups = [
+            getattr(self, "_grp_state", None),
+            getattr(self, "_grp_main", None),
+            getattr(self, "_grp_pair", None),
+            getattr(self, "_grp_diag", None),
+            getattr(self, "_grp_color", None),
+            getattr(self, "_grp_danger", None),
+        ]
+        for group in groups:
+            if group is not None:
+                group.pack_forget()
+        busy = getattr(self, "_busy_label", None)
+        if busy is not None:
+            busy.pack_forget()
+        result = getattr(self, "_result", None)
+        if result is not None:
+            result.pack_forget()
+        # 理由行は main の中。残りのグループを上から並べ直す。
+        first = True
+        for group in groups:
+            if group is None:
+                continue
+            pad = 0 if first else px(self.window, GAP_GROUP)
+            group.pack(fill=tk.X, pady=(pad, 0))
+            first = False
+            if group is getattr(self, "_grp_main", None) and result is not None:
+                result.pack(fill=tk.X, pady=(px(self.window, GAP_ITEM), 0))
+
     def _available_width(self) -> int:
         """タブの実際に見えている幅（Notebook の内側の全タブ共通幅ではない）。"""
         viewport = getattr(self, "_viewport", None)
@@ -873,6 +973,12 @@ class BconSetup:
             if canvas is not None:
                 width = int(canvas.winfo_width())
                 if width > 1:
+                    vbar = getattr(viewport, "vbar", None)
+                    if vbar is not None:
+                        try:
+                            width -= int(vbar.winfo_reqwidth())
+                        except Exception:
+                            pass
                     right = canvas.winfo_rootx() + width
                     avail = right - self.window.winfo_rootx() - 12
                     return max(160, min(width, avail))
@@ -895,6 +1001,29 @@ class BconSetup:
             return
         self._reflow_columns()
 
+    def _update_wrap(self, width: int) -> None:
+        """1列時のラベル折り返し幅。バー幅は常に引いた値を使う。"""
+        column_w = max(160, width - px(self.window, TAB_PAD_X) * 2)
+        for name in (
+            "_result",
+            "_summary",
+            "_imu_label",
+            "_vib_label",
+            "_reason_label",
+        ):
+            label = getattr(self, name, None)
+            if label is None:
+                continue
+            try:
+                current = int(float(label.cget("wraplength") or 0))
+            except (tk.TclError, ValueError, TypeError):
+                current = 0
+            if abs(current - column_w) > 2:
+                try:
+                    label.configure(wraplength=column_w)
+                except tk.TclError:
+                    pass
+
     def _reflow_columns(self) -> None:
         """見えている幅に合わせて、操作列と情報列を左右に並べるか縦に積むか決める。
 
@@ -904,6 +1033,7 @@ class BconSetup:
         """
         body, ops, info = self._body, self._col_ops, self._col_info
         if ops is info:
+            self._update_wrap(self._available_width())
             return
         try:
             gap = 16
@@ -1059,11 +1189,26 @@ class BconSetup:
             "_btn_e1",
             "_btn_e2",
             "_btn_bootsel",
-            "_btn_clear",
             "_btn_keys",
             "_btn_color",
         ):
             self._apply_state(getattr(self, name), tk.NORMAL if ready else tk.DISABLED)
+        serial_btn = getattr(self, "_btn_serial", None)
+        if serial_btn is not None:
+            self._apply_state(serial_btn, tk.NORMAL if ready else tk.DISABLED)
+        wired = bool(snapshot.status and (int(snapshot.status[0]) & STATUS_FLAG_WIRED))
+        self._apply_state(
+            self._btn_keys, tk.NORMAL if ready and not wired else tk.DISABLED
+        )
+        note = getattr(self, "_keys_note", None)
+        if note is not None:
+            try:
+                if wired:
+                    note.grid()
+                else:
+                    note.grid_remove()
+            except tk.TclError:
+                pass
         saved = len(snapshot.player_info) >= 2 and decode_player_save(
             snapshot.player_info[1]
         )
@@ -1092,10 +1237,67 @@ class BconSetup:
         for action in self._unsupported:
             for widget in optional.get(action, ()):
                 self._apply_state(widget, tk.DISABLED)
-        self._apply_text(
-            self._busy_label,
-            f"{snapshot.operation}…" if snapshot.operation else "",
-        )
+        self._update_reason(snapshot)
+
+    def _open_serial(self) -> None:
+        callback = getattr(self, "_show_serial", None)
+        if callable(callback):
+            callback()
+
+    def _update_reason(self, snapshot: ConnectionSnapshot) -> None:
+        """主要ボタンが押せない理由と、同じ行の復旧操作を更新する。"""
+        busy = bool(snapshot.operation) or self._command_busy()
+        if not snapshot.opened:
+            reason = "未接続"
+            show_serial = callable(getattr(self, "_show_serial", None))
+            show_recovery = False
+        elif self._command_busy():
+            reason = "コマンド実行中"
+            show_serial = False
+            show_recovery = False
+        elif snapshot.operation:
+            reason = f"{snapshot.operation}中"
+            show_serial = False
+            show_recovery = False
+        elif snapshot.phase == "failed":
+            reason = "HELLO 未確認"
+            show_serial = False
+            show_recovery = True
+        elif snapshot.phase != "ready":
+            reason = "接続処理中"
+            show_serial = False
+            show_recovery = False
+        else:
+            reason = ""
+            show_serial = False
+            show_recovery = False
+            busy = False
+        reason_text = getattr(self, "_reason_text", None)
+        if reason_text is not None:
+            reason_text.set(reason)
+        for name in ("_btn_retry_quick", "_btn_hunt_quick"):
+            btn = getattr(self, name, None)
+            if btn is None:
+                continue
+            if show_recovery:
+                if hasattr(btn, "grid"):
+                    btn.grid()
+                self._apply_state(btn, tk.NORMAL if not busy else tk.DISABLED)
+            else:
+                remover = getattr(btn, "grid_remove", None)
+                if callable(remover):
+                    remover()
+        open_btn = getattr(self, "_btn_open_serial", None)
+        if open_btn is not None:
+            if show_serial:
+                if hasattr(open_btn, "grid"):
+                    open_btn.grid()
+                self._apply_state(open_btn, tk.NORMAL)
+            else:
+                remover = getattr(open_btn, "grid_remove", None)
+                if callable(remover):
+                    remover()
+                self._apply_state(open_btn, tk.DISABLED)
 
     def _admit(self, *, recovery: bool = False) -> bool:
         if self._command_busy():
@@ -1148,7 +1350,9 @@ class BconSetup:
             except Exception:
                 pass
 
-    def _update_player_lamps(self, lamp: Any, flags: Any = None) -> None:
+    def _update_player_lamps(
+        self, lamp: Any, flags: Any = None, *, known: bool = True
+    ) -> None:
         """PLAYER_INFO のランプとIMU/振動を画面へ反映する。
 
         引数は復号前の生値でよい（lamp・flagsの2引数、または2byteの
@@ -1164,36 +1368,30 @@ class BconSetup:
             else:
                 lamp, flags = None, None
         try:
-            lamps = decode_player_lamp(lamp)
-            imu, vibration = decode_player_flags(flags)
+            lamps = decode_player_lamp(lamp) if known else None
         except (TypeError, ValueError):
-            # 読めない値は全消灯にする（前回の点灯を残すと紛らわしい）。
-            lamps = (False, False, False, False)
-            imu = vibration = False
+            # 読めない値は「分からない」扱いにする。
+            lamps = None
         items = getattr(self, "_lamp_items", None)
         canvas = getattr(self, "_lamp_canvas", None)
         # 同じ色を入れ直すと Canvas の再描画が積まれる。点灯が変わったときだけ。
         if items is not None and canvas is not None:
             if getattr(self, "_lamps_shown", None) != lamps:
                 try:
-                    for item, is_on in zip(items, lamps):
-                        color = PLAYER_LAMP_ON_COLOR if is_on else PLAYER_LAMP_OFF_COLOR
-                        canvas.itemconfigure(item, fill=color)
+                    for item, is_on in zip(
+                        items, lamps or (False, False, False, False)
+                    ):
+                        if lamps is None:
+                            canvas.itemconfigure(item, fill="", outline="#4D4D4D")
+                        else:
+                            color = (
+                                PLAYER_LAMP_ON_COLOR if is_on else PLAYER_LAMP_OFF_COLOR
+                            )
+                            canvas.itemconfigure(item, fill=color)
                     self._lamps_shown = lamps
                 except Exception:
                     # 閉じた後・stubなど、描けない時は色だけ諦める。
                     pass
-        for name, label, detected in (
-            ("_imu_label", "ジャイロ", imu),
-            ("_vib_label", "振動", vibration),
-        ):
-            widget = getattr(self, name, None)
-            if widget is None:
-                continue
-            try:
-                self._apply_text(widget, f"{label}: {'あり' if detected else 'なし'}")
-            except Exception:
-                continue
         # 保存証拠は表示と別に覚える。BEACONでは立てない。
         self._note_player_imu_range(flags)
 
@@ -1301,20 +1499,15 @@ class BconSetup:
             self._capture_saved_seen = False
             self._unsupported.clear()
         self._snapshot = snapshot
-        self._update_player_lamps(snapshot.player_info)
+        self._update_player_lamps(
+            snapshot.player_info,
+            known=bool(snapshot.opened and snapshot.player_info),
+        )
         if (
             snapshot.player_info != previous.player_info
             and len(snapshot.player_info) >= 2
         ):
             self._note_player_save(snapshot.player_info[1])
-        if snapshot.rumble:
-            try:
-                left, right = decode_rumble(snapshot.rumble)
-                self._apply_text(self._vib_label, f"振動: L={left} R={right}")
-            except (TypeError, ValueError):
-                self._apply_text(self._vib_label, "振動: 不明")
-        else:
-            self._apply_text(self._vib_label, "振動: 未受信")
         self._render_summary()
         self._set_busy()
         if (
@@ -1342,29 +1535,51 @@ class BconSetup:
 
     def _render_summary(self) -> None:
         snapshot = self._snapshot
-        hello = "未確認"
-        if snapshot.hello_ack is not None:
+        opened = bool(snapshot.opened)
+        mode = "—"
+        if opened:
+            mode = "未確認"
+            if snapshot.status is not None:
+                mode = "有線" if int(snapshot.status[0]) & STATUS_FLAG_WIRED else "無線"
+        self._apply_text(getattr(self, "_mode_label", None), mode)
+        imu = "—" if not opened else "未確認"
+        if opened and snapshot.player_info:
+            try:
+                _lamp, flags = snapshot.player_info[0], snapshot.player_info[1]
+                imu_ok, _vib = decode_player_flags(flags)
+                imu = "あり" if imu_ok else "なし"
+            except (TypeError, ValueError, IndexError):
+                imu = "未確認"
+        self._apply_text(getattr(self, "_imu_label", None), imu)
+        if not opened:
+            vibration = "—"
+        elif snapshot.rumble:
+            try:
+                left, right = decode_rumble(snapshot.rumble)
+                vibration = f"L={left} R={right}"
+            except (TypeError, ValueError):
+                vibration = "不明"
+        else:
+            vibration = "未受信"
+        self._apply_text(getattr(self, "_vib_label", None), vibration)
+        hello = "—" if not opened else "未確認"
+        if opened and snapshot.hello_ack is not None:
             adopted, major, minor, result = snapshot.hello_ack
             hello = f"採用 {adopted} / FW {major}.{minor} / 結果 {result}"
-        status = "未受信（不明）"
-        if snapshot.status_received_at is not None:
+        status = "—" if not opened else "未確認"
+        if opened and snapshot.status_received_at is not None:
             age = max(0.0, time.monotonic() - snapshot.status_received_at)
             status = f"{age:.0f}秒前" + ("（更新停止）" if age > 3 else "")
-        baud = f"{snapshot.baud}bps" if snapshot.baud is not None else "不明"
-        recovery = getattr(self, "_recovery_row", None)
-        if recovery is not None:
-            try:
-                if snapshot.phase == "failed":
-                    recovery.grid()
-                else:
-                    recovery.grid_remove()
-            except tk.TclError:
-                pass
+        baud = (
+            "—"
+            if not opened
+            else ("未確認" if snapshot.baud is None else f"{snapshot.baud}bps")
+        )
         # 同じ文を入れ直すと ttk ラベル（wraplength 付き）が折り返しを
         # 計算し直し、そのたびに画面全体の描画が積まれる。変わったときだけ。
         self._apply_text(
             self._summary,
-            f"ポート: {snapshot.port_name or '未選択'} / {baud}\n"
+            f"ポート: {snapshot.port_name or '—'} / {baud}\n"
             f"HELLO: {hello}\nSTATUS: {status}",
         )
         self._apply_text(self._actual_baud, f"実際の速度: {baud}")
@@ -1885,26 +2100,19 @@ class BconSetup:
             "Switch がコントローラを受け付ける状態で再接続を試します。続けますか？",
         )
 
-    def _on_clear(self) -> None:
-        if not self._admit():
-            return
-        if (
-            tkmsg.askquestion(
-                "確認",
-                "取込とClassic鍵を破棄します。取り消せません。Switch側の登録解除も必要です。続けますか？",
-                parent=self.window,
-            )
-            == "yes"
-        ):
-            self._send_config(T_KEY_DELETE, b"", "取込破棄中", "取込破棄")
-
     def _on_delete_keys(self) -> None:
         if not self._admit():
             return
+        snapshot = self._service.connection_snapshot()
+        if snapshot.status and (int(snapshot.status[0]) & STATUS_FLAG_WIRED):
+            self._queue.put(
+                ("log", "有線モードでは鍵を削除できません。無線で起動してください。")
+            )
+            return
         if (
             tkmsg.askquestion(
                 "確認",
-                "Pico のペア鍵をすべて削除します。取り消せません。Switch側の登録解除も必要です。続けますか？",
+                "Pico の Classic リンク鍵と保存ホストをすべて削除します。取込は残ります。取り消せません。Switch側の登録解除も必要です。続けますか？",
                 parent=self.window,
             )
             == "yes"

@@ -39,6 +39,10 @@ from core.xinput import (
     PadState,
 )
 
+# UI と設定が受け付けるスティック遊びの上限（生の軸値）。
+# 100% にするとスティックが反応しなくなるため 50% で止める。
+DEADZONE_MAX = 16383
+
 # XInput 側の名前 → Switch 側の Button 名。
 # Hat とスティックは別扱いのためここには載せない。
 # HOME/CAPTURE は XInput に無いが SDL（Pro コン）では読めるため、

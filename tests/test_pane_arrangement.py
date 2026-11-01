@@ -19,15 +19,16 @@ from core.pane_arrangement import (
 )
 
 
-def test_the_presets_are_log_right_side_and_stack_with_log_right_as_default() -> None:
+def test_the_presets_include_tabs_right_as_the_default() -> None:
     # Then: 既定は今までと同じ見た目（ログが右）。
     assert [key for key, _label in ARRANGEMENTS] == [
         "log_right",
         "log_bottom",
         "side",
         "stack",
+        "tabs_right",
     ]
-    assert DEFAULT_ARRANGEMENT == "log_right"
+    assert DEFAULT_ARRANGEMENT == "tabs_right"
 
 
 @pytest.mark.parametrize(

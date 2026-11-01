@@ -8,7 +8,13 @@ PC に接続したコントローラ（XInput 系）の入力が、Switch 側の
 from __future__ import annotations
 
 from core import gamepad_map
-from core.gamepad_map import MappedInput, diff_mapped, map_state, stick_to_xy
+from core.gamepad_map import (
+    DEADZONE_MAX,
+    MappedInput,
+    diff_mapped,
+    map_state,
+    stick_to_xy,
+)
 from core.xinput import (
     BTN_A,
     BTN_DPAD_DOWN,
@@ -45,12 +51,14 @@ def test_sdl_deadzone_is_zero() -> None:
 
 
 def test_gamepad_deadzone_clamped() -> None:
-    """範囲外の遊びは 0〜8192 に丸める。"""
+    """範囲外の遊びは 0〜DEADZONE_MAX（50%）に丸める。"""
     from Gamepad import SwitchGamepadController
     from test_gamepad import FakeSender
 
     assert SwitchGamepadController(FakeSender(), deadzone=-5).deadzone == 0  # type: ignore[arg-type]
-    assert SwitchGamepadController(FakeSender(), deadzone=99999).deadzone == 8192  # type: ignore[arg-type]
+    assert (
+        SwitchGamepadController(FakeSender(), deadzone=99999).deadzone == DEADZONE_MAX
+    )  # type: ignore[arg-type]
     assert SwitchGamepadController(FakeSender(), deadzone=1600).deadzone == 1600  # type: ignore[arg-type]
 
 

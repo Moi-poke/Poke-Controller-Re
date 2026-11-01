@@ -216,7 +216,6 @@ def test_busy_and_disconnected_handlers_never_submit_work() -> None:
             obj._on_ping,
             obj._on_capture,
             obj._on_beacon,
-            obj._on_clear,
             obj._on_delete_keys,
             obj._on_color,
             obj._on_bootsel,

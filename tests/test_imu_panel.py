@@ -147,7 +147,7 @@ def _make_panel(
 def test_imu_panel_builds_with_source_and_pad(tk_root: tk.Tk) -> None:
     panel, root, _transport, _settings, _root = _make_panel(tk_root)
     try:
-        assert isinstance(panel.frame, ttk.Labelframe)
+        assert isinstance(panel.frame, ttk.Frame)
         assert panel._source_var.get() == "SINE波形"
         assert panel._pad_var.get() == "1"
         assert panel._streaming is False

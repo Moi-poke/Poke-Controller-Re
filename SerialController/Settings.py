@@ -31,6 +31,7 @@ class GuiSettings:
         """
         self.profile = self.sanitize_profile(profile)
         self.setting_path = self._path_for(self.profile)
+        self._is_new = not os.path.exists(self.setting_path)
 
         # ini の値は書式（Input Log の strftime）やパスをそのまま持つ。
         # 既定の BasicInterpolation は生の % を弾くため無効化する。
@@ -315,7 +316,12 @@ class GuiSettings:
 
     def _complete_missing(self) -> None:
         """不足項目と不正値を既定値へ補正する。判断は config が持つ。"""
-        changed = config.complete_missing(self.setting)
+        # DEFAULT_ARRANGEMENT は新規=tabs_right。既存ファイルに
+        # arrangement キーが無い場合だけ legacy_arrangement で log_right を
+        # 補い、決定事項#7（既存は見た目を変えない）を守る。
+        changed = config.complete_missing(
+            self.setting, legacy_arrangement=not getattr(self, "_is_new", False)
+        )
         if changed:
             logger.info(f"設定を既定値で補正しました: {changed}")
             self._write_ini()

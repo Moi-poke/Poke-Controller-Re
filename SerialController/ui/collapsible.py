@@ -54,6 +54,14 @@ class SectionFrame(ttk.Frame):
         self.header: Any = None
         if self.title:
             self.header = ttk.Label(self, text=self.title)
+            try:
+                from tkinter import font as tkfont
+
+                bold = tkfont.nametofont("TkDefaultFont").copy()
+                bold.configure(weight="bold")
+                self.header.configure(font=bold)
+            except Exception:
+                pass
             self.header.pack(anchor="w")
         self.body = ttk.Frame(self)
         self.body.pack(fill="both", expand=True)
@@ -76,6 +84,7 @@ class CollapsibleSection(ttk.Frame):
         on_toggle: Callable[[], None] | None = None,
         padding: Any = 0,
         expand: bool = False,
+        bold: bool = False,
     ) -> None:
         super().__init__(master, padding=padding)
         self.title = str(title)
@@ -87,6 +96,15 @@ class CollapsibleSection(ttk.Frame):
         self.header = ttk.Button(
             self, style="Toolbutton", command=self.toggle, takefocus=True
         )
+        if bold:
+            try:
+                from tkinter import font as tkfont
+
+                header_font = tkfont.nametofont("TkDefaultFont").copy()
+                header_font.configure(weight="bold")
+                self.header.configure(font=header_font)  # type: ignore[call-overload]
+            except Exception:
+                pass
         self.header.pack(fill="x")
         self.body = ttk.Frame(self)
         self._apply()

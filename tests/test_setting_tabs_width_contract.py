@@ -254,17 +254,16 @@ def test_the_bcon_tab_uses_two_columns_only_when_there_is_room(bcon: Any) -> Non
     window.geometry("1400x700")
     window.update()
 
-    # Then: 操作列と情報列を左右に並べる（縦を節約する）。
+    # Then: 幅に関係なく1列（同じ親を使う）。2列には戻らない。
     ops, info = setup._col_ops, setup._col_info
-    assert info.winfo_x() > ops.winfo_x() + ops.winfo_width() - 1
-    assert abs(info.winfo_y() - ops.winfo_y()) < 5
+    assert ops is info
 
     # When: the tab area is narrow.
     window.geometry("420x900")
     window.update()
 
-    # Then: 縦 1 列に積む（横スクロールにしない）。
-    assert info.winfo_y() >= ops.winfo_y() + ops.winfo_height() - 1
+    # Then: 1列のまま。
+    assert setup._col_ops is setup._col_info
 
 
 def test_the_bcon_tab_asks_for_the_full_size_of_its_content(bcon: Any) -> None:
@@ -274,9 +273,9 @@ def test_the_bcon_tab_asks_for_the_full_size_of_its_content(bcon: Any) -> None:
 
     # Then: 縦に積んだ中身の大きさ全部を求める（小さく求めると下が欠け、
     #       縦スクロールの範囲も足りなくなる）。
-    ops, info = setup._col_ops, setup._col_info
-    assert tab.winfo_reqwidth() >= max(ops.winfo_reqwidth(), info.winfo_reqwidth())
-    assert tab.winfo_reqheight() >= ops.winfo_reqheight() + info.winfo_reqheight()
+    body = setup._body
+    assert tab.winfo_reqwidth() >= body.winfo_reqwidth()
+    assert tab.winfo_reqheight() >= body.winfo_reqheight()
 
 
 def test_a_bcon_tab_built_while_hidden_asks_for_its_full_size_once_shown(
@@ -304,14 +303,9 @@ def test_a_bcon_tab_built_while_hidden_asks_for_its_full_size_once_shown(
 
         # Then: 見えている幅へ配置し、1x1 のまま残らない。長い項目は
         #       折り返して収める（タブが狭ければ内容幅より小さくなる）。
-        ops, info = setup._col_ops, setup._col_info
         assert tab.winfo_reqwidth() >= 160
-        placed = int(float(setup._body.place_info()["width"]))
-        assert placed > 100
-        assert placed <= tab.winfo_reqwidth()
-        assert tab.winfo_reqheight() >= min(
-            ops.winfo_reqheight(), info.winfo_reqheight()
-        )
+        assert setup._body.winfo_width() > 100
+        assert tab.winfo_reqheight() >= setup._body.winfo_reqheight()
         assert tab.winfo_reqwidth() > 100
     finally:
         setup.close()
@@ -332,7 +326,7 @@ def test_the_bcon_tab_grows_when_its_content_grows(bcon: Any) -> None:
         time.sleep(0.02)
 
     # Then: 求める大きさも追従する（古い大きさのまま中身が欠けない）。
-    assert tab.winfo_reqwidth() >= setup._col_info.winfo_reqwidth()
+    assert tab.winfo_reqwidth() >= setup._body.winfo_reqwidth()
 
 
 @pytest.mark.parametrize("viewport_size", [(620, 285), (850, 350), (320, 285)])

@@ -175,7 +175,7 @@ class HistoryPanelMixin:
         )
         self.historyStopButton.grid(row=0, column=1, padx=2, pady=1, sticky="ew")
         self.historySelectButton = ttk.Button(
-            button_f, text="選択", command=self.select_history_selection
+            button_f, text="コマンドに設定", command=self.select_history_selection
         )
         self.historySelectButton.grid(row=0, column=2, padx=2, pady=1, sticky="ew")
         self.historyDeleteButton = ttk.Button(
@@ -185,9 +185,7 @@ class HistoryPanelMixin:
         self.historyClearButton = ttk.Button(
             button_f, text="全消去", command=self.clear_history
         )
-        self.historyClearButton.grid(
-            row=1, column=1, columnspan=2, padx=2, pady=1, sticky="ew"
-        )
+        self.historyClearButton.grid(row=1, column=2, padx=2, pady=1, sticky="ew")
 
         # 右クリックの一覧。ボタンと同じ手順に通す（二重に持たない）。
         self.history_menu = tk.Menu(self.root, tearoff=0)

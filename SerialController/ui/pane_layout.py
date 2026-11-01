@@ -75,6 +75,13 @@ class PaneArranger:
             pane.add(widget, weight=child.weight)
         return pane
 
+    def pane_for(self, key: str) -> ttk.PanedWindow | None:
+        """形の鍵（例: V[preview,log]）から、その仕切りを返す。"""
+        for pane in self._panes:
+            if self._keys.get(str(pane)) == key:
+                return pane
+        return None
+
     def _clear(self) -> None:
         """欄を仕切りから外し、古い仕切りを壊す。欄そのものは壊さない。"""
         self.remember_sashes()

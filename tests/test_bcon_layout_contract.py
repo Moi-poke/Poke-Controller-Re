@@ -19,7 +19,7 @@ from bcon_ui_support import Service
 from ui.collapsible import CollapsibleSection, SectionFrame
 
 # 取り消せない操作。押し間違えないよう普段の操作と別のまとまりに置く。
-_DESTRUCTIVE = ("_btn_keys", "_btn_clear", "_btn_bootsel")
+_DESTRUCTIVE = ("_btn_keys", "_btn_bootsel")
 
 
 def _buttons(setup: Any) -> dict[str, ttk.Button]:
@@ -62,9 +62,9 @@ def bcon(request: Any, tk_root: tk.Tk) -> Iterator[Any]:
     if request.param:
         tab = ttk.Frame(window)
         tab.pack(fill="both", expand=True)
-        setup = BconSetup(tab, Service(), embedded=True)
+        setup = BconSetup(tab, Service(), embedded=True, on_show_serial=lambda: None)
     else:
-        setup = BconSetup(window, Service())
+        setup = BconSetup(window, Service(), on_show_serial=lambda: None)
     try:
         window.update()
         yield setup
@@ -76,13 +76,15 @@ def bcon(request: Any, tk_root: tk.Tk) -> Iterator[Any]:
 def test_every_bcon_action_button_sits_inside_a_titled_group(bcon: Any) -> None:
     # Given: タブ（埋め込み）と別窓の両方で組み立てた Bcon 設定。
     buttons = _buttons(bcon)
-    assert len(buttons) >= 17
+    assert len(buttons) >= 16
 
     # Then: どのボタンも見出し付きのまとまりの中にある（何の操作か分かる）。
     for name, button in buttons.items():
         group = _group(button)
         assert group is not None, name
-        assert _title(group).strip(), name
+        # 主要操作は「操作」見出しを廃止したので、まとまりの見出しは空でよい。
+        if group is not bcon._grp_main:
+            assert _title(group).strip(), name
 
 
 def test_irreversible_bcon_actions_are_kept_apart_from_everyday_ones(
@@ -164,7 +166,7 @@ def test_a_mode_change_warns_about_the_restart_beforehand(bcon: Any) -> None:
     assert "再起動" in joined
     assert "COM ポートが外れ" in joined
     # 再起動後に入口へ戻れる（新しい自動再接続は作らない）。
-    assert "シリアルタブで接続し直す" in joined
+    assert "シリアルタブを開く（一覧更新）" in joined
 
 
 def test_controller_state_has_its_own_bcon_group(bcon: Any) -> None:
@@ -184,21 +186,27 @@ def test_a_failed_connection_shows_recovery_shortcuts(bcon: Any) -> None:
         opened=True,
         message="応答がありません",
     )
+    bcon._service.snapshot = bcon._snapshot
     bcon._render_summary()
+    bcon._set_busy()
     bcon._body.update()
 
-    # Then: 詳細を開かなくても、やり直しと速度探索へ届く。
+    # Then: 理由行は常にあり、ボタンだけが失敗時に出る。
     assert bcon._recovery_row.winfo_ismapped()
-    assert "HELLO" in str(bcon._btn_retry_quick.cget("text"))
+    assert bcon._reason_text.get() == "HELLO 未確認"
+    assert bcon._btn_retry_quick.winfo_ismapped()
     assert "速度を探す" == str(bcon._btn_hunt_quick.cget("text"))
 
     # When: 接続できた。
     bcon._snapshot = replace(bcon._snapshot, phase="ready", message="接続済み")
+    bcon._service.snapshot = bcon._snapshot
     bcon._render_summary()
+    bcon._set_busy()
     bcon._body.update()
 
-    # Then: 復旧の行は消える（日常の操作を増やさない）。
-    assert not bcon._recovery_row.winfo_ismapped()
+    # Then: 理由は空になり、復旧ボタンだけ消える。
+    assert bcon._reason_text.get() == ""
+    assert not bcon._btn_retry_quick.winfo_ismapped()
 
 
 def test_the_reconnect_button_is_disabled_while_another_action_runs(
@@ -217,6 +225,8 @@ def test_the_reconnect_button_is_disabled_while_another_action_runs(
     )
     bcon._set_busy()
     for name, button in _buttons(bcon).items():
+        if name == "_btn_open_serial":
+            continue
         assert str(button.cget("state")) == tk.NORMAL, name
 
 
@@ -230,3 +240,33 @@ def test_the_bcon_log_has_a_scrollbar(bcon: Any) -> None:
         if isinstance(child, ttk.Scrollbar)
     ]
     assert scrollbars
+
+
+def test_key_delete_is_disabled_in_wired_mode_with_a_reason(bcon: Any) -> None:
+    from dataclasses import replace
+
+    # Given: a wired-mode STATUS (bit5) and a ready snapshot.
+    wired = replace(
+        bcon._service.snapshot,
+        opened=True,
+        phase="ready",
+        status=(0x20, 0, 0, 0, 0),
+    )
+    bcon._service.snapshot = wired
+
+    # When: the busy/availability state is refreshed.
+    bcon._set_busy()
+    bcon.window.update_idletasks()
+
+    # Then: the key delete button is blocked and the reason is visible.
+    assert bcon._btn_keys.instate(["disabled"])
+    assert bcon._keys_note.winfo_manager() == "grid"
+
+    # When: the link is wireless.
+    bcon._service.snapshot = replace(wired, status=(0x00, 0, 0, 0, 0))
+    bcon._set_busy()
+    bcon.window.update_idletasks()
+
+    # Then: it becomes available and the note disappears.
+    assert bcon._btn_keys.instate(["!disabled"])
+    assert bcon._keys_note.winfo_manager() == ""

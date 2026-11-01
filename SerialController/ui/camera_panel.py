@@ -123,7 +123,11 @@ class CameraPanelMixin:
     _apply_layout: Any
 
     def _build_camera_frame(self) -> None:
-        self.camera_lf = CameraLabelframe(self.frame_1)
+        parent = getattr(self, "preview_area", None)
+        if not isinstance(parent, tk.Misc):
+            parent = self.frame_1
+        self.camera_lf = CameraLabelframe(parent)
+        self.camera_lf.grid(row=0, column=0, sticky="nsew")
 
         # プレビューの上は、見ながら何度も使う操作だけにする（プレビュー表示の
         # 入/切・キャプチャ・保存先）。カメラの選択と表示フィルタは滅多に
@@ -136,13 +140,20 @@ class CameraPanelMixin:
 
         # プレビュー描画の入/切（切ると描画の負荷が無くなる。取り込みは続く）。
         self.is_show_realtime = tk.BooleanVar()
+        # 表示専用のミラー。カメラ無効中はオフに見せ、保存値は変えない。
+        self.is_show_realtime_view = tk.BooleanVar(value=False)
+        self.is_show_realtime.trace_add("write", lambda *_a: self._sync_preview_view())
         self.cb_show_realtime = ttk.Checkbutton(self.camera_toolbar)
         self.cb_show_realtime.config(
             text="プレビュー表示",
-            variable=self.is_show_realtime,
-            command=self._on_setting_changed,
+            variable=self.is_show_realtime_view,
+            command=self._on_preview_toggled,
         )
         self.cb_show_realtime.pack(side="left")
+        self.filt_indicator = ttk.Label(
+            self.camera_toolbar, text="", foreground="#A0001C"
+        )
+        self.filt_indicator.pack(side="left", padx=(8, 0))
 
         # カメラを開けないときだけ出す知らせと、選び直す場所への近道。
         # ツールバーの中に置くので、コンパクト表示でツールバーごと隠れる。
@@ -204,6 +215,18 @@ class CameraPanelMixin:
         # 値だけ持ち、決めるのはダイアログ、反映は applyDisplaySettings。
         self.show_mode = tk.StringVar()
         self.show_size = tk.StringVar()
+
+        # カメラが無効なとき、黒いプレビューだけを残さず理由と入口を出す。
+        self.camera_empty = ttk.Frame(self.camera_lf)
+        self.camera_empty_title = ttk.Label(self.camera_empty, text="")
+        self.camera_empty_title.pack()
+        self.camera_empty_hint = ttk.Label(
+            self.camera_empty, text="", foreground="#6B6B6B"
+        )
+        self.camera_empty_button = ttk.Button(
+            self.camera_empty, text="", command=self.selectCameraTab
+        )
+        self.camera_empty_button.pack(pady=(6, 0))
 
         self.camera_lf.config(height=200, text="カメラ", width=200)
         # 置き場所は仕切り（ui/pane_layout.py）が決める。ここでは grid しない。
@@ -291,6 +314,109 @@ class CameraPanelMixin:
             logger.warning(f"カメラ一覧の取り直しで例外: {e}")
         self.openCamera()
 
+    def _sync_preview_view(self) -> None:
+        """チェック表示だけを、カメラ無効状態に合わせて切り替える。"""
+        view = getattr(self, "is_show_realtime_view", None)
+        actual = getattr(self, "is_show_realtime", None)
+        if view is None or actual is None:
+            return
+        try:
+            view.set(
+                False
+                if getattr(self, "_camera_disabled", False)
+                else bool(actual.get())
+            )
+        except tk.TclError:
+            pass
+
+    def _on_preview_toggled(self) -> None:
+        actual = getattr(self, "is_show_realtime", None)
+        view = getattr(self, "is_show_realtime_view", None)
+        if actual is not None and view is not None:
+            actual.set(bool(view.get()))
+        self._apply_camera_empty_state()
+        self._on_setting_changed()
+
+    def _apply_camera_empty_state(self) -> None:
+        """プレビューを隠す理由ごとに、中央の案内を切り替える。"""
+        preview = getattr(self, "preview", None)
+        if callable(preview):
+            preview = None
+        empty = getattr(self, "camera_empty", None)
+        if empty is None or callable(empty):
+            return
+        disabled = bool(getattr(self, "_camera_disabled", False))
+        failed = bool(getattr(self, "_camera_failed", False))
+        self._sync_preview_view()
+        preview_off = not bool(self.is_show_realtime.get())
+        try:
+            if disabled or failed or preview_off:
+                if disabled:
+                    title, hint, color = (
+                        "カメラ: 無効",
+                        "カメラタブで選び直してください",
+                        "#6B6B6B",
+                    )
+                    command = self.selectCameraTab
+                    button = "カメラタブを開く"
+                elif failed:
+                    title, hint, color = (
+                        "カメラ: 開けません",
+                        "カメラタブで選び直してください",
+                        "#A0001C",
+                    )
+                    command = self.selectCameraTab
+                    button = "カメラタブを開く"
+                else:
+                    title, hint, color = (
+                        "プレビュー: オフ",
+                        "プレビュー表示をオンにします",
+                        "#6B6B6B",
+                    )
+                    command = self._show_preview_from_empty
+                    button = "プレビューを表示"
+                self.camera_empty_title.config(text=title, foreground=color)
+                self.camera_empty_hint.config(text=hint)
+                self.camera_empty_button.config(text=button, command=command)
+                if preview is not None:
+                    preview.grid_remove()
+                empty.grid(
+                    row=2,
+                    column=0,
+                    columnspan=9,
+                    sticky="nsew",
+                    padx=5,
+                    pady=5,
+                )
+                empty.lift()
+            else:
+                empty.grid_remove()
+                if preview is not None:
+                    preview.grid()
+        except tk.TclError:
+            pass
+        capture = getattr(self, "captureButton", None)
+        if capture is not None and not callable(capture):
+            try:
+                capture.config(state="disabled" if disabled or failed else "normal")
+            except tk.TclError:
+                pass
+        toggle = getattr(self, "cb_show_realtime", None)
+        if toggle is not None and not callable(toggle):
+            try:
+                toggle.config(state="disabled" if disabled else "normal")
+            except tk.TclError:
+                pass
+
+    def _show_preview_from_empty(self) -> None:
+        self.is_show_realtime.set(True)
+        try:
+            self.is_show_realtime_view.set(True)
+        except tk.TclError:
+            pass
+        self._apply_camera_empty_state()
+        self._on_setting_changed()
+
     def _show_camera_state(
         self, ok: bool, cam_id: int, *, disabled: bool = False
     ) -> None:
@@ -301,6 +427,9 @@ class CameraPanelMixin:
         """
         notice = getattr(self, "camera_notice", None)
         status = getattr(self, "status_camera", None)
+        self._camera_disabled = bool(disabled)
+        self._camera_failed = bool(not ok and not disabled)
+        self._apply_camera_empty_state()
         if ok or disabled:
             if notice is not None:
                 notice.pack_forget()
@@ -548,6 +677,7 @@ class CameraPanelMixin:
 
         # 作った直後に配置を確定する（モードが fit ならここから伸びる）。
         self._apply_preview_layout()
+        self._apply_camera_empty_state()
 
     def _acquire_open_lock(self) -> bool:
         """カメラ open の錠を有限待ちで取る。取れなければ False。
@@ -906,6 +1036,14 @@ class CameraPanelMixin:
 
     def applyPreviewFilter(self) -> None:
         """表示専用フィルタのON/OFFをプレビューへ反映する。"""
+        indicator = getattr(self, "filt_indicator", None)
+        if indicator is not None:
+            try:
+                indicator.config(
+                    text="フィルタ ON" if bool(self.filt_enabled.get()) else ""
+                )
+            except (tk.TclError, AttributeError):
+                pass
         if self.preview is None:
             return
         if bool(self.filt_enabled.get()):

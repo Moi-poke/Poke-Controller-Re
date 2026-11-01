@@ -41,7 +41,7 @@ STATUS_ITEMS: tuple[tuple[str, str], ...] = (
     ("camera", "カメラ"),
     ("fps", "表示 fps"),
 )
-_DEFAULT_STATUS_ITEMS = "state,target,input,bcon,camera,fps"
+_DEFAULT_STATUS_ITEMS = "state,target,input,bcon,camera"
 # STATUS flags の bit5=有線（Switch-bcon の spec/protocol_v3.md）。
 _STATUS_FLAG_WIRED = 0x20
 
@@ -70,6 +70,7 @@ class LayoutPanelMixin:
     profile_color: Any
     startButton: Any
     pauseButton: Any
+    stopPlay: Any
     openCommandPalette: Any
     show_mode: Any
     show_size: Any
@@ -101,6 +102,12 @@ class LayoutPanelMixin:
     status_fps: Any
     status_camera: Any
     compact_pause: Any
+    compact_stop: Any
+    tabs_scroll: Any
+    log_area: Any
+    Command_nb: Any
+    py_cb: Any
+    mcu_cb: Any
 
     # ------------------------------------------------------------------
     # 組み立て
@@ -118,7 +125,7 @@ class LayoutPanelMixin:
         self.profile_band.pack_propagate(False)
 
         # コンパクトバー。1 行で「誰の・今どこ・操作」だけを示す。
-        self.compact_bar = ttk.Frame(self.camera_lf)
+        self.compact_bar = ttk.Frame(getattr(self, "preview_area", self.camera_lf))
 
         # 左から: 色チップ / プロファイル名 / 状態 / 操作。
         self.compact_chip = tk.Frame(self.compact_bar, width=_COMPACT_CHIP_WIDTH)
@@ -136,15 +143,20 @@ class LayoutPanelMixin:
 
         # Start / Pause は本体と同じ関数を invoke する。状態を二重に持たず、
         # 入口だけ並べて 1 画面で完結させる。
+        # 右から詰めるので、左→右の見た目は
+        # [選択...] [開始] [停止] [一時停止] になる。
+        self.compact_pause = ttk.Button(self.compact_bar, text="一時停止")
+        self.compact_pause.config(command=lambda: self.pauseButton.invoke())
+        self.compact_pause.pack(side="right", padx=(2, 0))
+        self.compact_stop = ttk.Button(self.compact_bar, text="停止")
+        self.compact_stop.config(command=lambda: self.stopPlay())
+        self.compact_stop.pack(side="right", padx=(2, 0))
+        self.compact_start = ttk.Button(self.compact_bar, text="開始")
+        self.compact_start.config(command=lambda: self.startButton.invoke())
+        self.compact_start.pack(side="right", padx=(2, 0))
         ttk.Button(
             self.compact_bar, text="選択...", command=self.openCommandPalette
         ).pack(side="right", padx=2)
-        self.compact_pause = ttk.Button(self.compact_bar, text="一時停止")
-        self.compact_pause.config(command=lambda: self.pauseButton.invoke())
-        self.compact_pause.pack(side="right")
-        self.compact_start = ttk.Button(self.compact_bar, text="開始")
-        self.compact_start.config(command=lambda: self.startButton.invoke())
-        self.compact_start.pack(side="right")
 
         # 標準レイアウトの下端の 1 行。状態・送信先・手動入力・表示 fps を
         # どのタブを開いていても見せる（タブの中だけの状態にしない）。
@@ -171,6 +183,7 @@ class LayoutPanelMixin:
         }
         self._status_labels: dict[str, Any] = {}
         self._status_seps: dict[str, Any] = {}
+        self._status_hidden: set[str] = set()
         for key, _label in STATUS_ITEMS:
             self._status_labels[key] = ttk.Label(
                 self.status_bar, textvariable=self._status_vars[key]
@@ -178,6 +191,54 @@ class LayoutPanelMixin:
             self._status_seps[key] = ttk.Separator(self.status_bar, orient="vertical")
         self._status_items_loaded = False
         self._repack_status_items()
+
+        try:
+            self.root.bind("<Configure>", self._on_root_configure, add="+")
+        except tk.TclError:
+            pass
+
+    def _dpi_factor(self) -> float:
+        """DPI倍率。端数で境界が揺れないよう、整数DPIから求める。"""
+        try:
+            return max(1.0, round(float(self.root.winfo_fpixels("1i"))) / 96.0)
+        except (tk.TclError, ValueError):
+            return 1.0
+
+    def _logical_width(self) -> float:
+        width = float(self.root.winfo_width())
+        factor = self._dpi_factor()
+        return width / factor if factor > 0 else 0.0
+
+    def _tabs_right_fallback_needed(self) -> bool:
+        """狭いときの tabs_right フォールバックを、幅の往復で暴れないよう決める。
+
+        800 論理px 未満で畳み、840 論理px 以上で戻す（40px のヒステリシス）。
+        """
+        if str(self.arrangement.get()) != "tabs_right":
+            self._tabs_right_fallback = False
+            return False
+        width = self._logical_width()
+        if width <= 0:
+            return bool(getattr(self, "_tabs_right_fallback", False))
+        state = getattr(self, "_tabs_right_fallback", None)
+        if state is None:
+            state = width < 800
+        elif state and width >= 840:
+            state = False
+        elif not state and width < 800:
+            state = True
+        self._tabs_right_fallback = state
+        return bool(state)
+
+    def _on_root_configure(self, event: Any = None) -> None:
+        if event is not None and getattr(event, "widget", None) is not self.root:
+            return
+        if str(self.arrangement.get()) != "tabs_right":
+            return
+        state = self._tabs_right_fallback_needed()
+        if state != getattr(self, "_auto_layout_state", None):
+            self._auto_layout_state = state
+            self.root.after_idle(self._apply_layout)
 
     def _repack_status_items(self) -> None:
         """選ばれている項目だけを、状態バーの左から順に並べ直す。"""
@@ -191,6 +252,8 @@ class LayoutPanelMixin:
                 if not self.status_item_vars[key].get():
                     continue
             except Exception:
+                continue
+            if key in self._status_hidden:
                 continue
             if not first:
                 try:
@@ -285,9 +348,13 @@ class LayoutPanelMixin:
         else:
             self.status_bar.pack_forget()
 
-        # コンパクトバー
-        if plan.show_compact_bar:
-            self.compact_bar.grid(column=0, columnspan=10, row=4, sticky="ew")
+        # コンパクトバー。tabs_right では標準でも実行バーとして出す。
+        show_exec_bar = bool(plan.show_compact_bar) or (
+            plan.show_tabs and str(self.arrangement.get()) == "tabs_right"
+        )
+        self._exec_bar_minimal = show_exec_bar and not plan.show_compact_bar
+        if show_exec_bar:
+            self.compact_bar.grid(column=0, row=1, sticky="ew")
         else:
             self.compact_bar.grid_remove()
 
@@ -297,13 +364,50 @@ class LayoutPanelMixin:
         # 3 つの欄（プレビュー・設定タブ・ログ）を仕切りに並べ直す。出すかどうかは
         # レイアウト（コンパクト等は隠す）と利用者の折りたたみの両方で決まる。
         # 伸びるプレビューにだけ余白を多めに配る（core.pane_arrangement）。
+        requested = str(self.arrangement.get())
+        effective = requested
+        auto_hide_log = False
+        if requested == "tabs_right" and self._tabs_right_fallback_needed():
+            # 右列の最小幅を割る。設定は変えず、この場だけ
+            # log_right + ログ非表示へ落とす。
+            effective = "log_right"
+            auto_hide_log = True
+        self._effective_arrangement = effective
+        set_pin_tab = getattr(self, "setLogPinTabMode", None)
+        if callable(set_pin_tab):
+            set_pin_tab(effective == "tabs_right")
+        # 右列の下限は論理 415px（125% で 519px）。パッドの縮小率 0.9 を
+        # 割らない幅。中身の要求がこれを超えるなら、そちらを優先する。
+        if effective == "tabs_right":
+            factor = self._dpi_factor()
+            self.tabs_scroll.configure(width=round(415 * max(factor, 1.0)))
+        else:
+            self.tabs_scroll.configure(width=0)
         tree = arrangement_tree(
-            str(self.arrangement.get()),
+            effective,
             show_tabs=plan.show_tabs and bool(self.show_tabs_pane.get()),
-            show_log=plan.show_log and bool(self.show_log_pane.get()),
+            show_log=plan.show_log
+            and bool(self.show_log_pane.get())
+            and not auto_hide_log,
             stretch=bool(plan.preview.stretch),
         )
         self._pane_arranger.apply(tree)
+        if effective == "tabs_right":
+            # 右列は論理 415px の固定幅。仕切りは割合で持つため、今の幅から
+            # 目標幅を引いた位置を入れる。左列の上下は、映像の 16:9 と
+            # ログ最小高から _apply_tabs_right_split が決める。
+            try:
+                total_w = int(self.frame_1.winfo_width())
+            except tk.TclError:
+                total_w = 0
+            factor = self._dpi_factor()
+            target = round(415 * max(factor, 1.0)) + 10
+            if total_w > target * 2:
+                ratio = (total_w - target) / total_w
+                self._pane_arranger.sash_ratios["H[V[preview,log],tabs]"] = [ratio]
+            self._pane_arranger._restore_sashes()
+            self.root.after_idle(self._apply_tabs_right_split)
+            self.root.after(120, self._apply_tabs_right_split)
 
         # 色も設定値なので、ここでまとめて反映する。起動時の 1 回目も
         # _apply_layout を通るため、色反映の経路が 1 つで済む。
@@ -334,6 +438,57 @@ class LayoutPanelMixin:
         self._apply_layout()
         self._apply_content_minsize()
         self._on_setting_changed()
+
+    def _apply_tabs_right_split(self) -> None:
+        """左列の上下を、映像の 16:9 とログ最小高から決める。
+
+        映像が高さで頭打ちになるときは、余りをログへ回さず、ログを最小高に
+        する（上段を映像に必要な高さで止める）。手で仕切りを動かした後は
+        その位置を優先する。
+        """
+        if str(getattr(self, "_effective_arrangement", "")) != "tabs_right":
+            return
+        if getattr(self, "_tabs_right_log_locked", False):
+            return
+        pane = self._pane_arranger.pane_for("V[preview,log]")
+        if pane is None or len(pane.panes()) < 2:
+            return
+        if not self.log_area.winfo_ismapped():
+            return
+        total = int(pane.winfo_height())
+        if total <= 1:
+            return
+        if not getattr(self, "_tabs_right_sash_bound", False):
+            try:
+                pane.bind("<ButtonRelease-1>", self._on_tabs_right_sash_drag, add="+")
+                self._tabs_right_sash_bound = True
+            except tk.TclError:
+                pass
+        chrome = max(0, self.camera_lf.winfo_height() - self.preview.winfo_height())
+        bar = (
+            self.compact_bar.winfo_height() if self.compact_bar.winfo_ismapped() else 0
+        )
+        factor = self._dpi_factor()
+        log_min = round(
+            (250 if getattr(self, "_tabs_right_pin_open", False) else 148)
+            * max(factor, 1.0)
+        )
+        width = max(1, self.preview.winfo_width())
+        video_h = min(width * 9 / 16, total - chrome - bar - log_min)
+        video_h = max(80, video_h)
+        desired_log = max(log_min, total - (chrome + video_h + bar))
+        # 上段＝左列の残り。sashpos は上段の高さ。
+        pane.sashpos(0, max(1, total - desired_log))
+
+    def _on_tabs_right_sash_drag(self, _event: Any = None) -> None:
+        self._tabs_right_log_locked = True
+
+    def _on_log_pin_visibility(self, opened: bool) -> None:
+        if str(getattr(self, "_effective_arrangement", "")) != "tabs_right":
+            return
+        self._tabs_right_pin_open = bool(opened)
+        self.root.after_idle(self._apply_tabs_right_split)
+        self.root.after(100, self._apply_tabs_right_split)
 
     def _layout_plan(self) -> Any:
         """今のレイアウト・表示モード・固定サイズから LayoutPlan を取る。"""
@@ -403,17 +558,63 @@ class LayoutPanelMixin:
                         f"Pico↔Switch: {mode}" + ("（更新停止）" if stale else "")
                     )
 
+            # 関係のない項目は幅を取らない。設定のチェックは変えず、
+            # このセッションの表示だけを切り替える。
+            hidden: set[str] = set()
+            transport = connection.transport_name
+            if not transport:
+                transport_var = getattr(self, "transport_name", None)
+                getter = getattr(transport_var, "get", None)
+                try:
+                    transport = str(getter()) if callable(getter) else ""
+                except tk.TclError:
+                    transport = ""
+            uses_bcon = getattr(self.serial, "uses_bcon", None)
+            if transport and callable(uses_bcon):
+                if not uses_bcon(transport):
+                    hidden.add("bcon")
+            if not connection.opened or connection.phase != "ready":
+                hidden.add("input")
+            fps_var = getattr(self, "status_fps", None)
+            if fps_var is not None and not str(fps_var.get()).strip():
+                hidden.add("fps")
+            if hidden != getattr(self, "_status_hidden", None):
+                self._status_hidden = hidden
+                repack = getattr(self, "_repack_status_items", None)
+                if callable(repack):
+                    repack()
+
         # コンパクトバーがあれば 1 行と操作ボタンの中身を写す。
         if getattr(self, "compact_status", None) is not None:
-            self.compact_status.set(bar_view.text)
-            self._mirror_button(self.compact_start, self.startButton)
+            # 実行バーは実行の状態だけを出す。接続は下端の状態バーが持つ。
+            if bar_view.kind in {"running", "paused", "stopping"}:
+                exec_text = bar_view.text
+            else:
+                name = ""
+                try:
+                    nb = self.Command_nb
+                    idx = int(nb.index(nb.select()))
+                    combo = self.py_cb if idx == 0 else self.mcu_cb
+                    getter = getattr(self, "_selectedName", None)
+                    if callable(getter):
+                        name = str(getter(combo) or "")
+                except (AttributeError, tk.TclError, TypeError, ValueError):
+                    name = ""
+                exec_text = "待機中" + (f" · {name}" if name else "")
+            self.compact_status.set(exec_text)
             self._mirror_button(self.compact_pause, self.pauseButton)
+            running = str(self.startButton["text"]) == "停止"
+            self.compact_start.configure(
+                text="開始",
+                state="disabled" if running else str(self.startButton["state"]),
+            )
+            self.compact_stop.configure(state="normal" if running else "disabled")
 
         # プロファイル名のラベル。無名なら隠す（空欄のラベルが幅を取る）。
         profile_label = getattr(self, "compact_profile_label", None)
         if profile_label is not None:
             profile_label.config(text=profile)
-            if profile:
+            if profile and not getattr(self, "_exec_bar_minimal", False):
                 # 隠した後に pack し直すと左詰めの最後へ回るので、状態文より
                 # 前（色チップの直後）へ明示して戻す。
                 profile_label.pack(side="left", before=self._compact_status_label)
@@ -433,6 +634,10 @@ class LayoutPanelMixin:
         """表示 fps の実測を下端の 1 行へ出す（log_panel の集計から呼ぶ）。"""
         if getattr(self, "status_fps", None) is not None:
             self.status_fps.set(f"表示 {shown_fps:.1f} fps")
+            hidden = getattr(self, "_status_hidden", None)
+            if hidden is not None and "fps" in hidden:
+                hidden.discard("fps")
+                self._repack_status_items()
 
     @staticmethod
     def _mirror_button(target: Any, source: Any) -> None:
@@ -482,7 +687,7 @@ class LayoutPanelMixin:
 
         chip = getattr(self, "compact_chip", None)
         if chip is not None:
-            if color:
+            if color and not getattr(self, "_exec_bar_minimal", False):
                 chip.config(background=color)
                 # pack し直すと左詰めの最後（状態文の後ろ）へ回るため、
                 # バーの先頭へ明示して戻す。無名プロファイルでは名前ラベルが

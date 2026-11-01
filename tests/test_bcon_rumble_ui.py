@@ -24,4 +24,4 @@ def test_missing_rumble_is_unknown_and_no_stale_payload_survives_disconnect() ->
     obj.set_visible(True)
     service.publish(generation=1, phase="disconnected", opened=False, rumble=b"")
     obj.inbox.drain()
-    assert obj._vib_label.values["text"] == "振動: 未受信"
+    assert obj._vib_label.values["text"] == "—"

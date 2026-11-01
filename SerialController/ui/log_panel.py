@@ -53,10 +53,7 @@ from ui.log_view import LogView, level_tag
 from ui.tooltip import Tooltip
 
 _STREAM_HINT = "コマンドの出力がここに流れます。"
-_PIN_HINT = (
-    "print2 の出力・エラー・警告・ピン留めした行がここに残ります。\n"
-    "行をクリックすると、上の欄のその時点へ移動します。"
-)
+_PIN_HINT = "エラー・警告・ピン留めした行がここに残ります"
 _INPUT_HINT = "コントローラーへ送った操作がここに出ます。"
 _INPUT_OFF_HINT = "入力ログの記録は止まっています。\n「表示」メニューから再開できます。"
 #: 下の欄の見出しに出す知らせを消すまでの時間。
@@ -144,7 +141,7 @@ class LogPanelMixin:
         # weight を付けておくと、ウィンドウを広げた分が両方へ配分される
         self.log_pane.add(self.logView, weight=3)
 
-        pin_frame = ttk.Frame(self.log_pane)
+        pin_frame = ttk.Frame(self.log_pane, width=320, height=120)
         pin_frame.rowconfigure(1, weight=1)
         pin_frame.columnconfigure(0, weight=1)
         head = ttk.Frame(pin_frame)
@@ -163,9 +160,33 @@ class LogPanelMixin:
         self.pinView = LogView(
             pin_frame, empty_hint=_PIN_HINT, on_activate=self._on_pin_activated
         )
-        self.pinView.text.configure(cursor="hand2")
+        self.pinView.text.configure(cursor="hand2", height=4)
+        Tooltip(
+            self.pinView.text,
+            "行をクリックすると、上のログのその時点へ移動します",
+        )
         self.pinView.grid(row=1, column=0, sticky="nsew")
-        self.log_pane.add(pin_frame, weight=2)
+        # tabs_right では結果を「ログ | 入力 | 結果とエラー」の3番目のタブに
+        # 出す。pinView と同じ内容を写す別ビュー（親を付け替えられないため）。
+        self.pin_tab_frame = ttk.Frame(self.log_nb)
+        self.pin_tab_frame.rowconfigure(0, weight=1)
+        self.pin_tab_frame.columnconfigure(0, weight=1)
+        self.pinTabView = LogView(
+            self.pin_tab_frame, empty_hint=_PIN_HINT, on_activate=self._on_pin_activated
+        )
+        self.pinTabView.text.configure(cursor="hand2")
+        self.pinTabView.grid(row=0, column=0, sticky="nsew")
+        Tooltip(
+            self.pinTabView.text,
+            "行をクリックすると、ログのその時点へ移動します",
+        )
+        self.log_nb.add(self.pin_tab_frame, text="結果とエラー")
+        self.log_nb.hide(self.pin_tab_frame)
+        self._log_pin_tab_mode = False
+        # 既定は畳む。件数（✖/⚠）を押したときだけ出す。狭いログ欄で
+        # 上下 2 段に分けると、どちらも読めない高さになるため。
+        self._pin_frame = pin_frame
+        self._pin_visible = False
         self.log_nb.add(self.log_pane, text="ログ")
 
         # 入力ログは書式（InputLogConfig）が時刻を持つので、ここでは出さない。
@@ -174,6 +195,14 @@ class LogPanelMixin:
             self.log_nb, empty_hint=_INPUT_HINT, show_time=False, group_similar=False
         )
         self.log_nb.add(self.inputView, text="入力")
+        # タブ順は ログ → 入力 → 結果とエラー。作成順の都合で先頭に
+        # 入っている結果タブを、入力の後ろへ移す。
+        try:
+            self.log_nb.forget(self.pin_tab_frame)
+            self.log_nb.add(self.pin_tab_frame, text="結果とエラー")
+            self.log_nb.hide(self.pin_tab_frame)
+        except tk.TclError:
+            pass
         self.log_nb.grid(column=0, padx="5", pady=(5, 2), row=0, sticky="nsew")
 
         # 従来の名前（Window・E2E が参照）。実体は各欄の Text。
@@ -181,7 +210,7 @@ class LogPanelMixin:
         self.subLogArea = self.pinView.text
         self.inputLogArea = self.inputView.text
         self._log_target = self.logView
-        for view in (self.logView, self.pinView, self.inputView):
+        for view in (self.logView, self.pinView, self.inputView, self.pinTabView):
             view.text.bind(
                 "<FocusIn>", lambda _e, v=view: self._set_log_target(v), add="+"
             )
@@ -221,8 +250,9 @@ class LogPanelMixin:
         # 何の欄か分かるよう、空のときだけ薄く書いておく（ttk.Entry には
         # placeholder が無いので、ラベルを重ねて出し入れする）。
         hint = ttk.Label(
-            entry, text="検索（Ctrl+F）", foreground="#767676", background="#FFFFFF"
+            entry, text="ログを検索", foreground="#767676", background="#FFFFFF"
         )
+        self._log_search_hint = hint
         hint.bind("<Button-1>", lambda _e: entry.focus_set())
 
         def _sync_hint(*_args: Any) -> None:
@@ -262,10 +292,10 @@ class LogPanelMixin:
                 text=f"{mark} 0",
                 width=5,
                 style=f"Log{level.capitalize()}.TButton",
-                command=functools.partial(self._log_next_problem, level),
+                command=functools.partial(self._on_problem_button, level),
             )
             btn.grid(row=0, column=col, padx=(2, 0))
-            Tooltip(btn, f"{name}の件数。押すとログの次の{name}へ移動します")
+            Tooltip(btn, f"{name}の件数。押すと下の欄を開き、次の{name}へ移動します")
             self.log_problem_buttons[level] = btn
 
         menu_btn = ttk.Menubutton(bar, text="表示", width=5)
@@ -334,10 +364,10 @@ class LogPanelMixin:
         show_time = bool(self.log_show_time.get())
         wrap = bool(self.log_wrap.get())
         group = bool(self.log_group_similar.get())
-        for view in (self.logView, self.pinView):
+        for view in (self.logView, self.pinView, self.pinTabView):
             view.set_show_time(show_time)
             view.group_similar = group
-        for view in (self.logView, self.pinView, self.inputView):
+        for view in (self.logView, self.pinView, self.inputView, self.pinTabView):
             view.set_wrap(wrap)
         self.inputView.set_empty_hint(
             _INPUT_HINT if self.show_input_log.get() else _INPUT_OFF_HINT
@@ -391,10 +421,24 @@ class LogPanelMixin:
 
     def _on_log_tab_changed(self, _event: Any = None) -> None:
         try:
-            on_input = self.log_nb.index("current") == 1
+            idx = self.log_nb.index("current")
         except tk.TclError:
             return
-        self._set_log_target(self.inputView if on_input else self.logView)
+        if idx == 1:
+            self._set_log_target(self.inputView)
+            placeholder = "入力を検索"
+        elif idx == 2:
+            self._set_log_target(self.pinTabView)
+            placeholder = "結果を検索"
+        else:
+            self._set_log_target(self.logView)
+            placeholder = "ログを検索"
+        hint = getattr(self, "_log_search_hint", None)
+        if hint is not None:
+            try:
+                hint.configure(text=placeholder)
+            except tk.TclError:
+                pass
 
     # -- 検索 ----------------------------------------------------------------
 
@@ -451,18 +495,87 @@ class LogPanelMixin:
         if var is not None and not var.get():
             var.set(True)
             self._apply_log_filters()
-        self.log_nb.select(0)
+        if not self._log_pin_tab_mode:
+            self.log_nb.select(0)
         if self.logView.next_tagged(level_tag(level)) is None:
             self._log_status(f"{'エラー' if level == 'error' else '警告'}はありません")
+
+    def _on_problem_button(self, level: str) -> None:
+        """件数から下の欄を開き、その水準の次の行へ移る。"""
+        if self._log_problem_counts.get(level, 0):
+            if self._log_pin_tab_mode:
+                self.log_nb.select(self.pin_tab_frame)
+            else:
+                self._show_pin()
+        self._log_next_problem(level)
+
+    def _show_pin(self) -> None:
+        """結果とエラーの欄を開く（既定は畳んだ状態）。"""
+        if self._log_pin_tab_mode:
+            self.log_nb.select(self.pin_tab_frame)
+            return
+        if self._pin_visible:
+            return
+        self.log_pane.add(self._pin_frame, weight=2)
+        self._pin_visible = True
+        callback = getattr(self, "_on_log_pin_visibility", None)
+        if callable(callback):
+            callback(True)
+        self.root.after_idle(self._place_pin_sash)
+        # 追加直後はまだ前の高さで計算されることがある。配置後に一度直す。
+        self.root.after(150, self._place_pin_sash)
+
+    def _place_pin_sash(self) -> None:
+        if self._log_pin_tab_mode or not self._pin_visible:
+            return
+        try:
+            height = self.log_pane.winfo_height()
+            if height > 1:
+                # 下段はログ欄の半分まで。ただし上段に 3〜4 行を残す。
+                pin_h = min(height // 2, max(24, height - 60))
+                self.log_pane.sashpos(0, height - pin_h)
+        except tk.TclError:
+            pass
+
+    def setLogPinTabMode(self, enabled: bool) -> None:
+        """tabs_right では結果を3番目のタブ、それ以外は従来の下段にする。"""
+        enabled = bool(enabled)
+        if enabled == getattr(self, "_log_pin_tab_mode", False):
+            return
+        self._log_pin_tab_mode = enabled
+        if enabled:
+            if self._pin_visible:
+                try:
+                    self.log_pane.forget(self._pin_frame)
+                except tk.TclError:
+                    pass
+                self._pin_visible = False
+            try:
+                self.log_nb.tab(self.pin_tab_frame, state="normal")
+            except tk.TclError:
+                pass
+        else:
+            try:
+                self.log_nb.hide(self.pin_tab_frame)
+            except tk.TclError:
+                pass
+            try:
+                if self.log_nb.index("current") == 2:
+                    self.log_nb.select(0)
+            except tk.TclError:
+                pass
 
     def _update_problem_buttons(self) -> None:
         marks = {"error": "✖", "warning": "⚠"}
         for level, btn in self.log_problem_buttons.items():
             btn.configure(text=f"{marks[level]} {self._log_problem_counts[level]}")
         count = self.pinView.line_count()
-        self._pin_title.configure(
-            text=f"結果とエラー（{count}）" if count else "結果とエラー"
-        )
+        title = f"結果とエラー（{count}）" if count else "結果とエラー"
+        self._pin_title.configure(text=title)
+        try:
+            self.log_nb.tab(self.pin_tab_frame, text=title)
+        except tk.TclError:
+            pass
 
     # -- 下の欄から上の欄へ --------------------------------------------------
 
@@ -503,7 +616,10 @@ class LogPanelMixin:
         tags = view.text.tag_names(f"{line}.0 lineend")
         level = next((t[3:] for t in tags if t.startswith("lv_")), "info")
         entry = LogEntry(view.line_text(line), level)
-        self.pinView.append([entry], anchors=[view.abs_of(line)])
+        entry_list = [entry]
+        anchor_list = [view.abs_of(line)]
+        self.pinView.append(entry_list, anchors=anchor_list)
+        self.pinTabView.append(entry_list, anchors=anchor_list)
         self._update_problem_buttons()
 
     # -- 右クリック ----------------------------------------------------------
@@ -521,7 +637,7 @@ class LogPanelMixin:
                 state="normal" if has_line else "disabled",
             )
             menu.add_separator()
-        if view is self.pinView:
+        if view is self.pinView or view is self.pinTabView:
             menu.add_command(
                 label="上の欄のこの位置へ移動",
                 command=lambda: self._on_pin_activated(view.abs_of(line)),
@@ -582,6 +698,10 @@ class LogPanelMixin:
         if view is self.logView:
             self._log_classifier = LineClassifier()
         if view is self.pinView:
+            self.pinTabView.clear()
+            self._log_problem_counts = {level: 0 for level in PROBLEM_LEVELS}
+        elif view is self.pinTabView:
+            self.pinView.clear()
             self._log_problem_counts = {level: 0 for level in PROBLEM_LEVELS}
         self._update_problem_buttons()
 
@@ -599,8 +719,13 @@ class LogPanelMixin:
 
     def _active_log_views(self) -> list[LogView]:
         try:
-            if self.log_nb.index("current") == 1:
+            idx = self.log_nb.index("current")
+            if idx == 1:
                 return [self.inputView]
+            if idx == 2:
+                return [self.pinTabView]
+            if self._log_pin_tab_mode:
+                return [self.logView]
         except tk.TclError:
             pass
         return [self.logView, self.pinView]
@@ -693,7 +818,7 @@ class LogPanelMixin:
     # -- 仕切り位置 ---------------------------------------------------------
 
     def _restore_sash(self) -> None:
-        if self._closing:
+        if self._closing or getattr(self, "_log_pin_tab_mode", False):
             return
         self._sash_after_id = None
         self._sash_restore_attempts += 1
@@ -709,6 +834,8 @@ class LogPanelMixin:
         self.log_pane.bind("<ButtonRelease-1>", self._remember_sash, add="+")
 
     def _remember_sash(self, *event: Any) -> None:
+        if self._log_pin_tab_mode or not self._pin_visible:
+            return
         if WindowGeometry.rememberSash(self.log_pane, self.settings):
             self._on_setting_changed()
 
@@ -771,6 +898,7 @@ class LogPanelMixin:
                 anchors.append(abs_line)
             if pins:
                 self.pinView.append(pins, anchors=anchors)
+                self.pinTabView.append(pins, anchors=anchors)
             self._update_problem_buttons()
         if self.show_input_log.get():
             if self.serial.is_open():

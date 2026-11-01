@@ -20,9 +20,12 @@ ARRANGEMENTS: Final[tuple[tuple[str, str], ...]] = (
     ("log_bottom", "ログを下"),
     ("side", "右にタブとログ"),
     ("stack", "縦一列"),
+    ("tabs_right", "タブを右（全高）"),
 )
-# 既定は今までと同じ見た目。
-DEFAULT_ARRANGEMENT: Final[str] = "log_right"
+# 新規設定の既定は tabs_right。既存の settings.ini に arrangement が
+# 無い場合は Settings 側が legacy_arrangement=True で log_right を補う。
+# この2つは意図的に違う（新規だけ切り替え、既存の見た目を保つ）。
+DEFAULT_ARRANGEMENT: Final[str] = "tabs_right"
 
 # 窓を広げた分の配り方。プレビューが窓に合わせて伸びるときは主にプレビューへ。
 # 伸びない（固定サイズ）ときに渡すと空白が増えるだけなので 0 にする。
@@ -84,6 +87,9 @@ def arrangement_tree(
         tree = _split(VERTICAL, [_split(HORIZONTAL, [preview, tabs]), log])
     elif key == "side":
         tree = _split(HORIZONTAL, [preview, _split(VERTICAL, [tabs, log])])
+    elif key == "tabs_right":
+        # タブを右列の上から下まで使い、左列は映像 + ログ。
+        tree = _split(HORIZONTAL, [_split(VERTICAL, [preview, log]), Leaf("tabs", 0)])
     elif key == "stack":
         tree = _split(VERTICAL, [preview, tabs, log])
     else:

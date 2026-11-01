@@ -313,10 +313,8 @@ def test_late_status_notification_renders_failed_service_truth(
         detail.inbox.drain()
         assert host._connection_view == current == detail._snapshot
         assert detail._snapshot.phase == "failed"
-        # LED は BCON タブが持つ（シリアル側は要約だけ）。全消灯を保つ。
-        from BconSetup import PLAYER_LAMP_OFF_COLOR
-
-        assert set(detail._lamp_canvas.colors.values()) == {PLAYER_LAMP_OFF_COLOR}
+        # LED は BCON タブが持つ（シリアル側は要約だけ）。未取得は枠線のみ。
+        assert set(detail._lamp_canvas.colors.values()) == set()
         assert detail._btn_connect["state"] == "normal"
         assert detail._btn_hunt["state"] == "normal"
         assert "STATUS:" in detail._summary["text"]

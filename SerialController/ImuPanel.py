@@ -20,7 +20,7 @@ import threading
 import time
 import tkinter as tk
 from collections.abc import Callable
-from tkinter import ttk
+from tkinter import font as tkfont, ttk
 from typing import Any
 
 from ui.collapsible import CollapsibleSection
@@ -134,20 +134,26 @@ class ImuPanel:
         self._last_sent: int | None = None
         self._last_sent_t: float | None = None
 
-        frame = ttk.LabelFrame(master, text="ジャイロ", padding=8)
+        frame = ttk.Frame(master)
         frame.columnconfigure(1, weight=1)
         self.frame = frame
 
-        # 状態と開始/停止は常時見せる。入力源・反転・調整・手動入力は
-        # 「ジャイロ設定」へまとめ、初回は閉じる（T01: 状態→主要操作→詳細）。
-        ttk.Label(frame, text="状態").grid(row=0, column=0, sticky=tk.W, padx=2)
+        # 見出しと状態と開始/停止を 1 行にまとめる。枠線は使わない。
+        heading = ttk.Label(frame, text="ジャイロ")
+        try:
+            bold = tkfont.nametofont("TkDefaultFont").copy()
+            bold.configure(weight="bold")
+            heading.configure(font=bold)
+        except Exception:
+            pass
+        heading.grid(row=0, column=0, sticky=tk.W, padx=(0, 6))
         self._stats_var = tk.StringVar(value="停止中")
         self._stats_label = ttk.Label(
             frame, textvariable=self._stats_var, wraplength=180, justify=tk.LEFT
         )
         self._stats_label.grid(row=0, column=1, sticky=tk.W, padx=2)
         self._btn_toggle = ttk.Button(frame, text="開始", command=self._on_toggle)
-        self._btn_toggle.grid(row=0, column=2, sticky=tk.EW, padx=2)
+        self._btn_toggle.grid(row=0, column=2, sticky=tk.EW, padx=0)
 
         self._settings = CollapsibleSection(frame, "ジャイロ設定")
         self._settings.grid(row=1, column=0, columnspan=3, sticky=tk.EW, pady=(4, 0))

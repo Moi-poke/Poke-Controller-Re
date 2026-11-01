@@ -24,10 +24,7 @@ def test_old_generation_never_reseeds_lamps() -> None:
     )
     obj.inbox.drain()
     assert obj._snapshot.generation == 3
-    assert all(
-        value["fill"] == PLAYER_LAMP_OFF_COLOR
-        for value in obj._lamp_canvas.values.values()
-    )
+    assert all(value["fill"] == "" for value in obj._lamp_canvas.values.values())
 
 
 def test_disconnected_snapshot_clears_visible_lamps() -> None:
@@ -38,7 +35,4 @@ def test_disconnected_snapshot_clears_visible_lamps() -> None:
         generation=1, opened=False, phase="disconnected", player_info=b"", rumble=b""
     )
     obj.inbox.drain()
-    assert all(
-        value["fill"] == PLAYER_LAMP_OFF_COLOR
-        for value in obj._lamp_canvas.values.values()
-    )
+    assert all(value["fill"] == "" for value in obj._lamp_canvas.values.values())

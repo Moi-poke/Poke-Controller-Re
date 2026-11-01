@@ -292,27 +292,34 @@ def test_live_min_dwell_backfill_and_clamp() -> None:
     assert config.complete_missing(parser) == []
 
 
+def test_legacy_settings_without_arrangement_keep_log_right() -> None:
+    """既存ファイルに arrangement が無い場合は旧既定を保つ。"""
+    parser = make_parser()
+    config.complete_missing(parser, legacy_arrangement=True)
+    assert parser["Window"]["arrangement"] == "log_right"
+
+
 def test_pane_arrangement_defaults_and_sanitize() -> None:
     """欄の並べ方と折りたたみの既定値、壊れた並べ方を既定へ戻す動きの検証。
 
-    既存の settings.ini にはキーが無いので、補完で足されて従来どおりの見た目
-    （ログを右、全部表示）になること。
+    既存の settings.ini にキーが無い場合は、新しい既定（タブを右）で
+    補完されること。
     """
     from core.pane_arrangement import DEFAULT_ARRANGEMENT
 
     defaults = config.default_sections()["Window"]
-    assert defaults["arrangement"] == DEFAULT_ARRANGEMENT == "log_right"
+    assert defaults["arrangement"] == DEFAULT_ARRANGEMENT == "tabs_right"
     assert defaults["show_tabs"] is True
     assert defaults["show_log"] is True
     parser = make_parser()
     config.complete_missing(parser)
     window = parser["Window"]
-    assert window["arrangement"] == "log_right"
+    assert window["arrangement"] == "tabs_right"
     assert window.getboolean("show_tabs") is True
     assert window.getboolean("show_log") is True
     window["arrangement"] = "diagonal"
     changed = config.complete_missing(parser)
-    assert window["arrangement"] == "log_right"
+    assert window["arrangement"] == "tabs_right"
     assert "Window.arrangement" in changed
     window["arrangement"] = "stack"
     assert config.complete_missing(parser) == []

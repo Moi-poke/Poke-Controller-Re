@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import tkinter as tk
+import tkinter.font as tkfont
 import tkinter.ttk as ttk
 from collections.abc import Callable
 from typing import Any
@@ -54,16 +55,19 @@ class ControllerDock:
         self.floating: ControllerGUI | None = None
         self.embedded_companion: Any = None
         self.floating_companion: Any = None
-        self.frame = ttk.Labelframe(holder)
+        self.frame = ttk.Frame(holder)
         # タブの残りの高さまで伸ばし、操作盤をそこいっぱいに描く。
         self.frame.pack(fill="both", expand=True)
-        # 出し入れのボタンは枠の見出しの横に置く。専用の行を作らず、
+        # 枠線は使わず、見出しと出し入れボタンを 1 行に置く。
         # 同じボタンが「開く」と「戻す」を兼ねる（今どちらか文字で分かる）。
-        title = ttk.Frame(self.frame)
-        ttk.Label(title, text=TITLE).pack(side="left")
-        self.pop_button = ttk.Button(title, text=POP_TEXT, command=self.toggle)
-        self.pop_button.pack(side="left", padx=(8, 0))
-        self.frame.config(labelwidget=title)
+        self._header = ttk.Frame(self.frame)
+        self._header.pack(side="top", fill="x", padx=0, pady=(2, 0))
+        title_font = tkfont.nametofont("TkDefaultFont", root=self.root).copy()
+        title_font.configure(weight="bold")
+        self._title_font = title_font
+        ttk.Label(self._header, text=TITLE, font=title_font).pack(side="left")
+        self.pop_button = ttk.Button(self._header, text=POP_TEXT, command=self.toggle)
+        self.pop_button.pack(side="right")
         # 別窓で出している間だけ見せる 1 行の案内。操作盤の場所は畳む。
         self._away = ttk.Label(
             self.frame, text="別ウィンドウで表示中", foreground="#5f6670"
@@ -85,7 +89,7 @@ class ControllerDock:
             part = factory(master)
             pack = getattr(part, "pack", None)
             if callable(pack):
-                options = {"fill": "x", "padx": 4, "pady": (0, 4)}
+                options = {"fill": "x", "padx": 0, "pady": (0, 4)}
                 if before is not None:
                     options["before"] = before
                 pack(**options)
@@ -113,7 +117,9 @@ class ControllerDock:
 
     def _embed(self) -> None:
         self._away.pack_forget()
-        self._pad_area.pack(fill="both", expand=True, padx=4, pady=4)
+        # 他の見出し（control_lf 直下）と同じ左右端に揃える。ここに
+        # padx を足すと、ジャイロ行だけ右へずれる。
+        self._pad_area.pack(fill="both", expand=True, padx=0, pady=4)
         self.pop_button.config(text=POP_TEXT)
         # 送り先は関数のまま渡す。埋め込みは起動時から置きっぱなしなので、
         # 組み立て時の送り先（まだ無い／作り直し前）を掴まないようにする。

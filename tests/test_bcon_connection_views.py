@@ -152,7 +152,6 @@ DETAIL_BUTTONS = (
     "_btn_e1",
     "_btn_e2",
     "_btn_bootsel",
-    "_btn_clear",
     "_btn_keys",
     "_btn_color",
     "_btn_connect",
@@ -259,7 +258,7 @@ def test_switch_details_live_in_the_bcon_tab_and_the_serial_tab_keeps_a_summary(
     detail = detail_view(service)
     host._apply_connection_snapshot(service.snapshot)
     detail._apply_snapshot(service.snapshot)
-    from BconSetup import PLAYER_LAMP_OFF_COLOR, PLAYER_LAMP_ON_COLOR
+    from BconSetup import PLAYER_LAMP_ON_COLOR
 
     assert set(detail._lamp_canvas.colors.values()) == {PLAYER_LAMP_ON_COLOR}
     assert "L=255 R=255" in detail._vib_label["text"]
@@ -267,12 +266,12 @@ def test_switch_details_live_in_the_bcon_tab_and_the_serial_tab_keeps_a_summary(
     service.snapshot = ConnectionSnapshot(generation=2, transport_name="switch-bcon")
     host._apply_connection_snapshot(service.snapshot)
     detail._apply_snapshot(service.snapshot)
-    assert set(detail._lamp_canvas.colors.values()) == {PLAYER_LAMP_OFF_COLOR}
+    assert set(detail._lamp_canvas.colors.values()) == {""}
     host._apply_connection_snapshot(old)
     detail._apply_snapshot(old)
     assert host._connection_view == service.snapshot
     assert detail._snapshot == service.snapshot
-    assert set(detail._lamp_canvas.colors.values()) == {PLAYER_LAMP_OFF_COLOR}
+    assert set(detail._lamp_canvas.colors.values()) == {""}
 
 
 @pytest.mark.parametrize("flags,mode", [(0x20, "有線"), (0, "無線")])
@@ -375,7 +374,7 @@ def test_worker_snapshot_delivery_waits_for_gui_drain_and_drops_after_close() ->
     host.inbox.drain()
     detail.inbox.drain()
     assert host._connection_view.phase == "ready"
-    assert detail._lamp_canvas.colors
+    assert not detail._lamp_canvas.colors  # 未取得は枠線のみ
     host.inbox.close()
     detail.inbox.close()
     service.snapshot = replace(service.snapshot, phase="disconnected", opened=False)
@@ -508,5 +507,5 @@ def test_repeated_busy_refresh_does_not_rewrite_unchanged_widgets() -> None:
 
     # Then: 変わる部品だけ書き換える。
     assert widgets["_btn_ping"].writes == after_first["_btn_ping"] + 1
-    assert widgets["_busy_label"].writes == 1
+    assert widgets["_busy_label"].writes == 0
     assert detail._btn_ping["state"] == "disabled"

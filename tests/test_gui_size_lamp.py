@@ -126,7 +126,7 @@ def test_window_puts_the_three_areas_on_draggable_panes() -> None:
     src = Path("SerialController/Window.py").read_text(encoding="utf-8")
     assert "PaneArranger(" in src
     for area in (
-        '"preview": self.camera_lf',
+        '"preview": self.preview_area',
         '"tabs": self.tabs_scroll',
         '"log": self.log_area',
     ):

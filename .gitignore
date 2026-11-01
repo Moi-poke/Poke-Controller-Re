@@ -168,3 +168,5 @@ SerialController/records/
 /pytest-of-*/
 .agents/
 .claude/
+# ローカルの検証用スクリーンショット・一時プローブ
+.tmp/

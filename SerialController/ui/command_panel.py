@@ -118,6 +118,30 @@ class CommandPanelMixin:
         self.search_name = tk.StringVar()
         self.search_entry = ttk.Entry(self.filter_f, textvariable=self.search_name)
         self.search_entry.pack(side="top", fill="x", padx="2")
+        # プレースホルダ。ttk.Entry に標準の placeholder が無いため、
+        # 空のときだけ薄いラベルを重ねる（ログ検索と同じ方式）。
+        field_bg = ttk.Style(self.root).lookup("TEntry", "fieldbackground")
+        self.search_hint = tk.Label(
+            self.search_entry,
+            text="コマンドを検索",
+            foreground="#767676",
+            background=field_bg or "#FFFFFF",
+            borderwidth=0,
+            highlightthickness=0,
+            relief="flat",
+            padx=0,
+            cursor="xterm",
+        )
+        self.search_hint.bind("<Button-1>", lambda _e: self.search_entry.focus_set())
+        self.search_entry.bind(
+            "<FocusIn>", lambda _e: self._sync_search_hint(), add="+"
+        )
+        self.search_entry.bind(
+            "<FocusOut>", lambda _e: self._sync_search_hint(), add="+"
+        )
+        self.search_name.trace_add("write", lambda *_a: self._sync_search_hint())
+        self.root.bind("<<ThemeChanged>>", lambda _e: self._sync_search_hint(), add="+")
+        self._sync_search_hint()
         # 打つそばから絞る。確定を待つと、目当てが出るまで見えない。
         self.search_entry.bind("<KeyRelease>", self.onCommandFilterChanged, add="")
         # Enter で入力を終えて検索欄から抜ける。フォーカスが残ったままだと
@@ -141,7 +165,7 @@ class CommandPanelMixin:
         # タグの編集。選択中のコマンドに対して開く。タグは絞り込みの
         # すぐ隣にあるほうが「絞れない→付ける」の流れが切れない。
         self.tagEditButton = ttk.Button(filter_row)
-        self.tagEditButton.config(text="タグ", width=5, command=self.openTagEditor)
+        self.tagEditButton.config(text="タグ編集", width=7, command=self.openTagEditor)
         self.tagEditButton.grid(row=0, column=1, padx="2", sticky="e")
 
         # コマンドフォルダを開くボタン。Notebook を縦積みにしたので、
@@ -153,9 +177,9 @@ class CommandPanelMixin:
         self.OpenCommandDirButton.grid(row=0, column=2, padx="2", sticky="e")
 
         # Notebook より先に pack して、絞り込みを上の段に置く。
-        self.filter_f.pack(fill="x", expand=False, padx="5", pady="2", side="top")
+        self.filter_f.pack(fill="x", expand=False, padx="2", pady="2", side="top")
         # 中身は 1 行なので縦には伸ばさない（伸ばすと下に空白の箱ができる）。
-        self.Command_nb.pack(fill="x", padx="5", pady="5", side="top")
+        self.Command_nb.pack(fill="x", padx="2", pady="5", side="top")
 
         # タブを切り替えたら、そのタブ側の一覧へ絞り込みをかけ直す。
         self.Command_nb.bind(
@@ -181,8 +205,8 @@ class CommandPanelMixin:
         self.pauseButton.grid(column=2, padx="2", pady="4", row=1, sticky="ew")
 
         # 選ぶ→開始 が上から下へ続くよう、ボタンは選択欄のすぐ下の右端へ。
-        self.Commands_f.pack(fill="x", padx="5", pady=(5, 0), side="top")
-        self.Commands_2_f.pack(padx=5, pady=(0, 5), anchor=tk.E, side="top")
+        self.Commands_f.pack(fill="x", padx="2", pady=(5, 0), side="top")
+        self.Commands_2_f.pack(padx=2, pady=(0, 5), anchor=tk.E, side="top")
         self._command_tab_fit = TabFit(
             self.tab_command, self.command_lf, getattr(self, "tabs_scroll", None)
         )
@@ -323,6 +347,23 @@ class CommandPanelMixin:
                 combo.set("")
 
         self.assignCommand()
+
+    def _sync_search_hint(self) -> None:
+        """検索欄が空のときだけプレースホルダを出す。"""
+        hint = getattr(self, "search_hint", None)
+        entry = getattr(self, "search_entry", None)
+        if hint is None or entry is None:
+            return
+        try:
+            bg = ttk.Style(self.root).lookup("TEntry", "fieldbackground") or "#FFFFFF"
+            if str(hint.cget("background")) != str(bg):
+                hint.config(background=bg)
+            if str(self.search_name.get()) or entry.focus_get() is entry:
+                hint.place_forget()
+            else:
+                hint.place(x=4, rely=0.5, anchor="w")
+        except (tk.TclError, AttributeError):
+            pass
 
     def onCommandFilterChanged(self, *event: Any) -> None:
         """検索欄・タグ・タブの切り替えから呼ばれる。"""

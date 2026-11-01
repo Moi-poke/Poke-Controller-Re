@@ -46,6 +46,7 @@ from typing import Any
 from Commands.Keys import Button, Hat
 from core.gamepad_map import (
     CENTER,
+    DEADZONE_MAX,
     MappedInput,
     diff_mapped,
     map_state,
@@ -112,7 +113,7 @@ class SwitchGamepadController:
         on_display は読むたびに呼ぶ表示口（仮想パッドの鏡用）。
         読取スレッドから呼ぶため、Tk を触る処理は呼び出し側で
         root.after 経由にすること。
-        deadzone は SDL 経路のスティック遊び（0〜8192、既定1638=最大値の5%）。
+        deadzone は SDL 経路のスティック遊び（0〜16383、既定1638=最大値の5%）。
         XInput 経路は既定のまま変えない。
         """
         if sender is None:
@@ -124,8 +125,8 @@ class SwitchGamepadController:
         self.poll_interval = max(0.001, float(poll_interval))
         self.is_active = is_active
         self.on_display = on_display
-        # SDL 経路の遊び。範囲外は 0〜8192 に丸める。
-        self.deadzone = max(0, min(8192, int(deadzone)))
+        # SDL 経路の遊び。範囲外は 0〜16383 に丸める。
+        self.deadzone = max(0, min(DEADZONE_MAX, int(deadzone)))
         self.reader = reader if reader is not None else PadSource()
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None

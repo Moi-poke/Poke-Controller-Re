@@ -199,3 +199,16 @@ def test_saved_positions_are_restored_once_the_window_gets_its_size(
         assert areas.arranger.sash_ratios["H[V[preview,tabs],log]"] == [0.3]
     finally:
         window.destroy()
+
+
+def test_tabs_right_puts_tabs_full_height_on_the_right(areas: _Areas) -> None:
+    areas.apply("tabs_right")
+    px, py, pw, ph = areas.box("preview")
+    lx, ly, _lw, lh = areas.box("log")
+    tx, ty, tw, th = areas.box("tabs")
+
+    # Then: 左列は映像 + ログ、右列はタブが上から下まで。
+    assert lx == px and ly >= py + ph
+    assert tx >= px + pw
+    assert th >= areas.parent.winfo_height() - 2
+    assert tw > 0

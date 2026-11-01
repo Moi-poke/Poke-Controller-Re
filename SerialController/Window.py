@@ -105,6 +105,24 @@ MIN_COMPACT_HEIGHT = 200
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
+def _enable_system_dpi_awareness() -> None:
+    """Tk を作る前に Windows の DPI 対応を固定する。
+
+    Tk は起動時の画面 DPI から scaling を決める。GDI surface のように
+    ウィンドウ作成後に SetProcessDPIAware を呼ぶと、Tk は 96dpi のまま
+    なのに OS は 120dpi として扱い、UI が小さくなる。プロセス開始前に
+    一度だけ setting しておく（システム DPI 対応。per-monitor ではない）。
+    """
+    if os.name != "nt":
+        return
+    try:
+        import ctypes
+
+        ctypes.windll.user32.SetProcessDPIAware()
+    except Exception as exc:  # pragma: no cover - OS 差
+        logger.debug(f"DPI awareness を設定できませんでした: {exc}")
+
+
 class PokeControllerApp(
     CameraPanelMixin,
     AudioPanelMixin,
@@ -132,6 +150,7 @@ class PokeControllerApp(
           試したいときに、設定を書き換えずに済ませるため）。
         """
         if master is None:
+            _enable_system_dpi_awareness()
             master = Tk()
         self.root = master
         # 起動引数で指定された通信方式。設定より優先する
@@ -372,6 +391,11 @@ class PokeControllerApp(
         # 合わせる（ログは折り返し、プレビューは縮む）。収まらない設定タブだけ
         # 欄の中でスクロールする（_build_setting_tabs）。
         self.frame_1 = ttk.Frame(self.root)
+        # カメラ枠と実行バーを縦に並べる入れ物。実行バーをカメラの
+        # Labelframe の外へ出し、カメラの操作に見えないようにする。
+        self.preview_area = ttk.Frame(self.frame_1)
+        self.preview_area.rowconfigure(0, weight=1)
+        self.preview_area.columnconfigure(0, weight=1)
         self._build_camera_frame()
         self._build_setting_tabs()
         # カメラの選択と表示フィルタはカメラタブ（タブ枠ができてから組む）。
@@ -385,7 +409,11 @@ class PokeControllerApp(
         # 3 つの欄を仕切りに載せる道具。並べ方は _apply_layout が決める。
         self._pane_arranger = PaneArranger(
             self.frame_1,
-            {"preview": self.camera_lf, "tabs": self.tabs_scroll, "log": self.log_area},
+            {
+                "preview": self.preview_area,
+                "tabs": self.tabs_scroll,
+                "log": self.log_area,
+            },
         )
         # レイアウト切替の部品（色の帯とコンパクトバー）。他の欄が
         # 揃った後に作る（コンパクトバーはカメラ欄の子として載せる）。
