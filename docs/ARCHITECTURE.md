@@ -90,6 +90,19 @@ SDL を第一候補にし、組み立てられない・接続できない場合�
   未送出の中立は異状態への遷移で落とす（レガシー同等）。
   200ms watchdog は 24ms 再送で十分賄う
 
+## 仮想コントローラの操作盤
+
+- ボタンの並び・当たり判定・論理サイズは [`core/pad_layout.py`](../SerialController/core/pad_layout.py)
+  が持つ（`procon` / `joycon_l` / `joycon_r`）。描画は
+  [`ui/controller_pad.py`](../SerialController/ui/controller_pad.py) が倍率を掛けるだけ。
+- コントローラタブの「操作盤」で `auto` / プロコン / Joy-Con (L) / Joy-Con (R) を選ぶ。
+  `auto` は選んでいるゲームパッドの表示名（例: `Joy-Con (L)`）から左右を決め、
+  判別できなければプロコンにする。BCON の種別切替が成功したときは、その
+  種別（ProCon / Joy-Con L / R）へ明示的に合わせる。設定は
+  `[General Setting] controller_layout`。
+- 種類を変えるときは押しっぱなしをすべて解除してから描き直す（消えたボタンの
+  解放が届かず Switch 側に残るのを防ぐ）。埋め込みと別窓は同じ種類を共有する。
+
 ## コマンドの発見と実行
 
 `CommandLoader` が `PythonCommands/`・`McuCommands/` 配下を import し、

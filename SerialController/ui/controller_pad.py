@@ -20,14 +20,15 @@ from Commands.Keys import Button, Hat
 from GuiAssets import live_sender
 from core.pad_layout import (
     FLOATING_MAX_ZOOM,
-    PAD_H,
-    PAD_W,
-    SHAPES,
+    PROCON,
     STICK_SIDES,
     STICK_TAP_SLOP,
     PadShape,
     fit_scale,
     hit_test,
+    layout_shapes,
+    layout_size,
+    normalize_layout,
     stick_value,
 )
 from loguru import logger
@@ -97,10 +98,13 @@ class ControllerGUI:
         ser: Any,
         container: Any = None,
         height_limit: Callable[[], int | None] | None = None,
+        layout: str = PROCON,
     ) -> None:
         """container を渡すとその枠の中に組み立てる（メイン画面への埋め込み）。
 
-        渡さなければ別ウィンドウ（Toplevel）を開く。
+        渡さなければ別ウィンドウ（Toplevel）を開く。layout は操作盤の
+        種類（core.pad_layout の PROCON / JOYCON_L / JOYCON_R）。auto は
+        呼び出し側で resolve_layout により決めてから渡す。
 
         ser には送り先そのものか、今の送り先を返す関数を渡す。送り先は起動時の
         組み立てより後に作られ、通信方式を変えると作り直されるので、埋め込みで
@@ -112,6 +116,10 @@ class ControllerGUI:
         """
         self._ser_source = ser
         self._height_limit = height_limit
+        # 描く操作盤の種類と、その的・論理サイズ。set_layout で差し替える。
+        self._layout = normalize_layout(layout)
+        self._shapes = layout_shapes(self._layout)
+        self._pad_w, self._pad_h = layout_size(self._layout)
         # ボタンの押しっぱなしに対応するための保持。
         #   押下と解放を別々に受け取り、送信側の姿勢へ差分申告する。
         #     触っていない項目は保たれるので、他のボタンを消さない。
@@ -165,8 +173,8 @@ class ControllerGUI:
         root_x = int(pos.group(1)) if pos else 0
         root_y = int(pos.group(2)) if pos else 0
         base = self._dpi_scale(self.window)
-        width = round(PAD_W * base) + 16
-        height = round(PAD_H * base) + 16
+        width = round(self._pad_w * base) + 16
+        height = round(self._pad_h * base) + 16
         self.window.geometry(
             "%dx%d%+d%+d" % (width, height, 250 + root_x, 125 + root_y)
         )
@@ -194,8 +202,8 @@ class ControllerGUI:
             bg = ttk.Style(self.window).lookup("TFrame", "background") or None
         except tk.TclError:
             bg = None
-        width = round(PAD_W * self._base)
-        height = round(PAD_H * self._base)
+        width = round(self._pad_w * self._base)
+        height = round(self._pad_h * self._base)
         # フォーカスを取らない。キーボード操作中に Space などで
         # 意図しない入力が飛ぶのを防ぐ（マウス専用の操作盤）。
         self.canvas = tk.Canvas(
@@ -231,28 +239,43 @@ class ControllerGUI:
 
     def _redraw(self, width: int, height: int) -> None:
         """置き場所の広さに合わせて描き直す。縦横比を保ち、横は中央に寄せる。"""
+        pad_w, pad_h = self._pad_w, self._pad_h
         if self._embedded:
             # 求める高さは幅に合わせた等倍以下の分だけにする。狭い幅では
             # 下に空白を求めず、広い所ではタブ全体の高さを押し広げない。
             # 求める高さを今の高さから決めると、一度縮めた後に戻らない。
-            need = fit_scale(width, PAD_H * self._base, base=self._base, max_zoom=1.0)
-            fitted = math.ceil(PAD_H * need)
+            need = fit_scale(
+                width,
+                pad_h * self._base,
+                base=self._base,
+                max_zoom=1.0,
+                pad_w=pad_w,
+                pad_h=pad_h,
+            )
+            fitted = math.ceil(pad_h * need)
             if int(str(self.canvas.cget("height"))) != fitted:
                 self.canvas.config(height=fitted)
             # 見える高さまでに抑える。ただし等倍より小さくはしない
             # （見える所が狭すぎるときは、これまでどおりスクロールで見る）。
             height = min(height, max(fitted, self._visibleHeight(height)))
-        s = fit_scale(width, height, base=self._base, max_zoom=FLOATING_MAX_ZOOM)
-        oy = max(0.0, (height - PAD_H * s) / 2)
+        s = fit_scale(
+            width,
+            height,
+            base=self._base,
+            max_zoom=FLOATING_MAX_ZOOM,
+            pad_w=pad_w,
+            pad_h=pad_h,
+        )
+        oy = max(0.0, (height - pad_h * s) / 2)
         self._scale = s
-        self._ox = max(0.0, (width - PAD_W * s) / 2)
+        self._ox = max(0.0, (width - pad_w * s) / 2)
         self._oy = oy
         self.canvas.delete("all")
         # 総描き直しでは項目を作り直すので、差分描画のキャッシュも捨てる。
         self._painted: dict[str, bool] = {}
         self._knob_shown: dict[str, tuple[float, float, bool, float]] = {}
-        self._round_rect(0, 0, PAD_W, PAD_H, 30, fill=self.BODY, outline=self.BODY_EDGE)
-        for shape in SHAPES:
+        self._round_rect(0, 0, pad_w, pad_h, 30, fill=self.BODY, outline=self.BODY_EDGE)
+        for shape in self._shapes:
             self._draw_shape(shape)
         # 描き直しで色が戻らないよう、押しているものを塗り直す。
         for name in self._held_btn:
@@ -275,6 +298,38 @@ class ControllerGUI:
         """見える高さが変わったとき（欄の大きさが変わった）に描き直す。"""
         try:
             self._redraw(self.canvas.winfo_width(), self.canvas.winfo_height())
+        except tk.TclError:
+            pass
+
+    @property
+    def layout(self) -> str:
+        """いま描いている操作盤の種類（PROCON / JOYCON_L / JOYCON_R）。"""
+        return self._layout
+
+    def set_layout(self, layout: str) -> None:
+        """操作盤の種類を差し替える。押しっぱなしは必ず離してから描き直す。
+
+        種類を変えると無くなるボタン（例: Joy-Con R の十字キー）を押した
+        ままにすると、解放が届かず Switch 側で押されたままになる。先に
+        現在の押下をすべて解除し、外部表示の写しも捨ててから作り直す。
+        """
+        new_layout = normalize_layout(layout)
+        if new_layout == self._layout:
+            return
+        self.releaseAllHeld()
+        self._pointer = None
+        self._grab = None
+        self._held_click = None
+        self._ext_click = set()
+        self._ext_stick_xy = {"L": None, "R": None}
+        self._layout = new_layout
+        self._shapes = layout_shapes(new_layout)
+        self._pad_w, self._pad_h = layout_size(new_layout)
+        width = round(self._pad_w * self._base)
+        height = round(self._pad_h * self._base)
+        try:
+            self.canvas.config(width=width, height=height)
+            self._redraw(width, height)
         except tk.TclError:
             pass
 
@@ -438,7 +493,11 @@ class ControllerGUI:
     #   押した瞬間と離した瞬間の 2 回だけ送るので sleep もスレッドも要らない。
 
     def _hit(self, x: float, y: float) -> str | None:
-        return hit_test((x - self._ox) / self._scale, (y - self._oy) / self._scale)
+        return hit_test(
+            (x - self._ox) / self._scale,
+            (y - self._oy) / self._scale,
+            self._layout,
+        )
 
     def _pointerDown(self, event: Any) -> None:
         name = self._hit(event.x, event.y)
@@ -518,7 +577,7 @@ class ControllerGUI:
         if self._stick_xy[side] == xy and not final:
             return
         self._stick_xy[side] = xy
-        shape = next(s for s in SHAPES if s.name == name)
+        shape = next(s for s in self._shapes if s.name == name)
         try:
             self._draw_knob(shape)
         except tk.TclError:
@@ -772,25 +831,13 @@ class ControllerGUI:
         """
         try:
             wanted = set(buttons or ())
-            for name in (
-                "A",
-                "B",
-                "X",
-                "Y",
-                "L",
-                "R",
-                "ZL",
-                "ZR",
-                "MINUS",
-                "PLUS",
-                "HOME",
-                "CAPTURE",
-                "LCLICK",
-                "RCLICK",
-            ):
-                if name in ("LCLICK", "RCLICK"):
+            # この操作盤に無いボタン（Joy-Con の反対側など）は描かない。
+            for shape in self._shapes:
+                if shape.kind in ("stick", "dpad"):
                     continue
-                self._paint(name, name in wanted)
+                if shape.name in self.HAT_NAME2DIRS:
+                    continue
+                self._paint(shape.name, shape.name in wanted)
             # 押し込みはスティックの頭の光で見せる（_draw_knob と同じ規則）。
             self._ext_click = wanted
             hat = set(hat_dirs or ())
@@ -800,7 +847,7 @@ class ControllerGUI:
                 self._ext_stick_xy["L"] = (int(stick_l[0]), int(stick_l[1]))
             if stick_r is not None:
                 self._ext_stick_xy["R"] = (int(stick_r[0]), int(stick_r[1]))
-            for shape in SHAPES:
+            for shape in self._shapes:
                 if shape.name in STICK_SIDES:
                     try:
                         self._draw_knob(shape)
@@ -812,25 +859,16 @@ class ControllerGUI:
     def clearExternal(self) -> None:
         """外部表示を消し、マウス操作の表示に戻す。送信はしない。"""
         try:
-            for name in (
-                "A",
-                "B",
-                "X",
-                "Y",
-                "L",
-                "R",
-                "ZL",
-                "ZR",
-                "MINUS",
-                "PLUS",
-                "HOME",
-                "CAPTURE",
-            ):
-                self._paint(name, name in self._held_btn)
+            for shape in self._shapes:
+                if shape.kind in ("stick", "dpad"):
+                    continue
+                if shape.name in self.HAT_NAME2DIRS:
+                    continue
+                self._paint(shape.name, shape.name in self._held_btn)
             self._ext_click = set()
             self._ext_stick_xy = {"L": None, "R": None}
             self._paintHat()
-            for shape in SHAPES:
+            for shape in self._shapes:
                 if shape.name in STICK_SIDES:
                     try:
                         self._draw_knob(shape)

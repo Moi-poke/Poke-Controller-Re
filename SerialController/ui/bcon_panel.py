@@ -17,6 +17,7 @@ import tkinter.ttk as ttk
 from typing import Any
 
 from BconSetup import BconSetup
+from core.pad_layout import JOYCON_L, JOYCON_R, PROCON
 from loguru import logger
 from services.serial_service import SerialService
 
@@ -75,6 +76,8 @@ class BconPanelMixin:
                     embedded=True,
                     command_busy=lambda: self.runner.is_busy(),
                     on_show_serial=self._show_serial_for_recovery,
+                    on_emulate_role=self._on_bcon_emulate_role,
+                    success_dispatch=self._queue_bcon_success,
                     viewport=getattr(self, "tabs_scroll", None),
                 )
             else:
@@ -103,6 +106,34 @@ class BconPanelMixin:
         setup = getattr(self, "_bcon_setup", None)
         if setup is not None:
             setup._set_busy()
+
+    def _queue_bcon_success(self, callback: Any) -> None:
+        """BCON 操作の成功後処理をアプリの inbox へ積む（ワーカーから呼ばれる）。
+
+        タブを隠していても届くよう、BCON タブ自身の _poll ではなく、
+        全体で回り続けるアプリの inbox を使う。UiInbox.post は Tk を触らない。
+        """
+        inbox = getattr(self, "inbox", None)
+        if inbox is None:
+            return
+        try:
+            inbox.post(callback)
+        except Exception:
+            logger.exception("BCON操作の成功後処理を inbox へ積めませんでした")
+
+    def _on_bcon_emulate_role(self, role: int) -> None:
+        """BCON の種別切替が成功したら、操作盤も同じ形へ合わせる。
+
+        Switch 側が Joy-Con (L)/(R) になったのに操作盤がプロコンのままだと、
+        送れないボタンを押す導線になる。auto のままではなく、選んだ種別を
+        明示値として保存する（パッド名より優先させる）。
+        """
+        layout = {0: PROCON, 1: JOYCON_L, 2: JOYCON_R}.get(role)
+        if layout is None:
+            return
+        setter = getattr(self, "_set_controller_layout_choice", None)
+        if callable(setter):
+            setter(layout)
 
     def _show_serial_for_recovery(self) -> None:
         """モード変更でポートが外れたあとの導線。シリアルタブへ移して一覧を更新する。"""

@@ -335,12 +335,22 @@ class BconSetup:
         embedded: bool = False,
         command_busy: Callable[[], bool] | None = None,
         on_show_serial: Callable[[], None] | None = None,
+        on_emulate_role: Callable[[int], None] | None = None,
+        success_dispatch: Callable[[Callable[[], None]], None] | None = None,
         viewport: Any = None,
     ) -> None:
-        """接続と会話の所有者はサービス。画面は写しと操作要求だけを扱う。"""
+        """接続と会話の所有者はサービス。画面は写しと操作要求だけを扱う。
+
+        on_emulate_role は種別切替（ProCon / Joy-Con L / R）が成功した
+        あとに GUI スレッドで呼ぶ。仮想コントローラの形を合わせるために使う。
+        success_dispatch は成功後の処理を GUI スレッドへ渡す口（スレッド安全
+        であること）。渡さないときは自分の _poll で実行する。
+        """
         self._service = service
         self._command_busy = command_busy or (lambda: False)
         self._show_serial = on_show_serial
+        self._on_emulate_role = on_emulate_role
+        self._success_dispatch = success_dispatch
         self._viewport = viewport
         self._snapshot = service.connection_snapshot()
         self._unsupported: set[str] = set()
@@ -1778,6 +1788,12 @@ class BconSetup:
                         for index, var in enumerate(self._colors):
                             var.set(bytes(payload[index * 3 : index * 3 + 3]).hex())
                         self._refresh_color_preview()
+            elif kind == "success":
+                # 操作が成功したあとの後始末。GUI スレッドなので Tk を触れる。
+                try:
+                    value()
+                except Exception:
+                    _LOGGER.exception("BCON操作の成功後処理に失敗しました")
             elif kind == "log":
                 self._append(str(value))
             elif kind == "capture_cancel":
@@ -2034,6 +2050,7 @@ class BconSetup:
         *,
         restarts_device: bool = False,
         bootloader: bool = False,
+        on_success: Callable[[], None] | None = None,
     ) -> None:
         if not self._admit():
             return
@@ -2049,6 +2066,9 @@ class BconSetup:
             ok = method(*args, timeout=1.0) is True
             if not ok:
                 log("Pico から応答がありません。ポート・通信速度を確認してください。")
+            elif on_success is not None:
+                # ワーカーから Tk を触らない。GUI スレッドへ渡す。
+                self._dispatch_success(on_success)
             return ok
 
         self._run(work, label, restarts_device=restarts_device, bootloader=bootloader)
@@ -2081,7 +2101,35 @@ class BconSetup:
             "種別切替中",
             f"{names[role]}に切り替えます。保存後、約0.5秒で再起動します。続けますか？",
             restarts_device=True,
+            on_success=lambda: self._notify_emulate_role(role),
         )
+
+    def _dispatch_success(self, callback: Callable[[], None]) -> None:
+        """成功後の処理を GUI スレッドへ渡す。
+
+        success_dispatch があればそれを使う（タブが見えていない間も届く）。
+        無ければ自分の _poll の queue へ積む（テスト・単体利用の退避）。
+        """
+        dispatch = getattr(self, "_success_dispatch", None)
+        if callable(dispatch):
+            try:
+                dispatch(callback)
+                return
+            except Exception:
+                _LOGGER.exception("BCON操作の成功後処理を渡せませんでした")
+        self._post_result("success", callback)
+
+    def _notify_emulate_role(self, role: int) -> None:
+        """種別切替の成功を画面へ伝える（GUI スレッド専用）。"""
+        if self._closed:
+            return
+        callback = getattr(self, "_on_emulate_role", None)
+        if not callable(callback):
+            return
+        try:
+            callback(int(role))
+        except Exception:
+            _LOGGER.exception("種別切替の成功後処理に失敗しました")
 
     def _on_bootsel(self) -> None:
         self._confirmed_method(

@@ -339,3 +339,22 @@ def test_pane_sashes_default_empty_and_broken_text_is_cleared() -> None:
     assert "Window.pane_sashes" in changed
     window["pane_sashes"] = '{"V[preview,tabs]": [0.5]}'
     assert config.complete_missing(parser) == []
+
+
+def test_controller_layout_defaults_to_auto_and_resets_unknown_values() -> None:
+    from core.pad_layout import AUTO, LAYOUTS
+
+    defaults = config.default_sections()["General Setting"]
+    assert defaults["controller_layout"] == AUTO
+    parser = make_parser()
+    config.complete_missing(parser)
+    general = parser["General Setting"]
+    assert general["controller_layout"] == AUTO
+    for candidate in LAYOUTS:
+        general["controller_layout"] = candidate
+        assert config.complete_missing(parser) == []
+
+    general["controller_layout"] = "joycon_x"
+    changed = config.complete_missing(parser)
+    assert general["controller_layout"] == AUTO
+    assert "General Setting.controller_layout" in changed

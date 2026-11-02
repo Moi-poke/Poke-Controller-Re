@@ -27,6 +27,7 @@ from core.display_mode import (
     normalize_profile_color,
 )
 from core.gamepad_map import DEADZONE_MAX
+from core.pad_layout import AUTO as PAD_AUTO, LAYOUTS as PAD_LAYOUTS
 from core.pane_arrangement import (
     DEFAULT_ARRANGEMENT,
     format_sash_ratios,
@@ -91,6 +92,9 @@ def default_sections() -> dict[str, dict[str, Any]]:
             # ゲームパッドのスティック遊び（0〜16383、既定1638=最大値の5%）。
             # XInput 既定 7849・約24% より浅く、Pro コン実測ブレ（1600前後）を抑える。
             "gamepad_deadzone": 1638,
+            # 仮想コントローラの形。auto は接続中のパッド名に合わせる。
+            # 候補は core.pad_layout.LAYOUTS が正。
+            "controller_layout": PAD_AUTO,
             "is_use_left_stick_mouse": False,
             "is_use_right_stick_mouse": False,
             "is_take_stick_log": False,
@@ -408,6 +412,10 @@ def complete_missing(
         if value is None or not valid(value):
             general[key] = str(default)
             changed.append(f"General Setting.{key}")
+    # 操作盤の形。候補は core.pad_layout が正で、未知の値は auto へ戻す。
+    if general.get("controller_layout", "") not in PAD_LAYOUTS:
+        general["controller_layout"] = PAD_AUTO
+        changed.append("General Setting.controller_layout")
     # 真偽値。configparser の getboolean は "maybe" のような値を読む側で
     # ValueError にするため、先に正規形（True / False）へ揃えておく。
     # 読めない値は既定へ戻す。表記は configparser と同じものを受ける。

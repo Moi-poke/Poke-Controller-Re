@@ -15,6 +15,7 @@ import tkinter.ttk as ttk
 from collections.abc import Callable
 from typing import Any
 
+from core.pad_layout import PROCON, normalize_layout
 from ui.controller_pad import ControllerGUI
 
 TITLE = "仮想コントローラ"
@@ -40,10 +41,12 @@ class ControllerDock:
         sender: Callable[[], Any],
         viewport: Any = None,
         companion_factory: Callable[[Any], Any] | None = None,
+        layout: str = PROCON,
     ) -> None:
         """viewport は holder を収めたスクロールする欄（ui.scroll_host.ScrollHost）。
 
-        渡すと、操作盤はその欄で見えている高さに収めて描く。
+        渡すと、操作盤はその欄で見えている高さに収めて描く。layout は
+        操作盤の種類（core.pad_layout の PROCON / JOYCON_L / JOYCON_R）。
         """
         self.root = root
         self.holder = holder
@@ -51,6 +54,8 @@ class ControllerDock:
         # 送り先は押すたびに引く（再接続で差し替わっても古い物を掴まない）。
         self._sender = sender
         self._companion_factory = companion_factory
+        # いま描いている操作盤の種類。別窓・埋め込みの作り直しにも引き継ぐ。
+        self._layout = normalize_layout(layout)
         self.embedded: ControllerGUI | None = None
         self.floating: ControllerGUI | None = None
         self.embedded_companion: Any = None
@@ -130,8 +135,33 @@ class ControllerDock:
             # 埋め込み先はスクロールする。見えている高さで描き縮めず、
             # 要求した大きさで描いて、はみ出た分をスクロールで見せる。
             height_limit=None,
+            layout=self._layout,
         )
         self.embedded_companion = self._make_companion(self._pad_area)
+
+    @property
+    def layout(self) -> str:
+        """いま置いている操作盤の種類。"""
+        return self._layout
+
+    def set_layout(self, layout: str) -> None:
+        """操作盤の種類を変える。埋め込み・別窓の両方へ同じ種類を渡す。
+
+        同じ種類なら何もしない（押下や描画を無駄に作り直さない）。
+        """
+        new_layout = normalize_layout(layout)
+        if new_layout == self._layout:
+            return
+        self._layout = new_layout
+        for pad in (self.embedded, self.floating):
+            if pad is None:
+                continue
+            try:
+                pad.set_layout(new_layout)
+            except tk.TclError:
+                pass
+        # 縦横比が変わったので、埋め込みは見えている高さへ測り直す。
+        self._refit_embedded()
 
     def _visible_height(self) -> int | None:
         """操作盤の上端から、スクロールする欄の見えている下端までの高さ。
@@ -176,7 +206,7 @@ class ControllerDock:
         self._pad_area.pack_forget()
         self._away.pack(anchor="w", padx=8, pady=4)
         self.pop_button.config(text=BACK_TEXT)
-        self.floating = ControllerGUI(self.root, self._sender)
+        self.floating = ControllerGUI(self.root, self._sender, layout=self._layout)
         self.floating.protocol("WM_DELETE_WINDOW", self.close_floating)
         floating_window = getattr(self.floating, "window", None)
         if floating_window is None:

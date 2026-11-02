@@ -508,6 +508,9 @@ class PokeControllerApp(
         self.is_show_serial.set(self.settings.is_show_serial.get())
         self.is_use_keyboard.set(self.settings.is_use_keyboard.get())
         self.is_use_gamepad.set(self.settings.is_use_gamepad.get())
+        # 操作盤の種類（自動 / プロコン / Joy-Con L/R）。パッド一覧の
+        # 列挙より先に読むが、auto は名前が分かった時点で切り替わる。
+        self._load_controller_layout_setting()
         # HidHide 未設定なら、設定に True が残っていても選べない状態へ戻す
         # （判定は _build_control_frame の起動時1回）。
         self._apply_hidhide_gamepad_gate()
@@ -830,6 +833,7 @@ class PokeControllerApp(
         self.settings.is_show_serial.set(self.is_show_serial.get())
         self.settings.is_use_keyboard.set(self.is_use_keyboard.get())
         self.settings.is_use_gamepad.set(self.is_use_gamepad.get())
+        self._save_controller_layout_setting()
         try:
             self.settings.gamepad_deadzone.set(int(str(self.gamepad_dz.get())))
         except Exception:

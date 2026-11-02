@@ -82,6 +82,11 @@ class GuiSettings:
         self.gamepad_deadzone = tk.IntVar(
             value=general.getint("gamepad_deadzone", fallback=1638)
         )
+        # 仮想コントローラの形（auto/procon/joycon_l/joycon_r）。
+        # 補完（config.complete_missing）が候補外を auto へ直している前提。
+        self.controller_layout = tk.StringVar(
+            value=general.get("controller_layout", fallback="auto")
+        )
         # マウスでのスティック操作。GUI のチェックボックスと1対1で対応する
         self.is_use_left_stick_mouse = tk.BooleanVar(
             value=general.getboolean("is_use_left_stick_mouse")
@@ -380,6 +385,7 @@ class GuiSettings:
                 "is_use_gamepad": self.is_use_gamepad.get(),
                 "gamepad_index": self.gamepad_index.get(),
                 "gamepad_deadzone": self.gamepad_deadzone.get(),
+                "controller_layout": self.controller_layout.get(),
                 "is_use_left_stick_mouse": self.is_use_left_stick_mouse.get(),
                 "is_use_right_stick_mouse": self.is_use_right_stick_mouse.get(),
                 "is_take_stick_log": self.is_take_stick_log.get(),
