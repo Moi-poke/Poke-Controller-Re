@@ -19,6 +19,12 @@ from typing import Any
 import WindowUtils
 from core.connection_state import ConnectionSnapshot
 from core.gamepad_map import DEADZONE_MAX
+from core.pad_layout import (
+    AUTO,
+    LAYOUTS,
+    LAYOUT_LABELS,
+    resolve_layout,
+)
 from core.transport.bcon_baud import (
     BAUD_DEFAULT_INDEX,
     baud_bps_for_index,
@@ -139,6 +145,10 @@ class SerialPanelMixin:
     _gamepad_reconnect_thread: threading.Thread | None
     _gamepad_skip_auto_restart: bool
     gamepad_dz_spin: Any
+    layout_label: Any
+    layout_cb: Any
+    controller_layout_choice: Any
+    _controller_layout_labels: dict[str, str]
     cb_left_stick_mouse: Any
     cb_right_stick_mouse: Any
     simpleConButton: Any
@@ -692,6 +702,30 @@ class SerialPanelMixin:
                 pass
             return imu
 
+        # 操作盤の種類。既定は接続中のパッド名に合わせ（自動）、必要なら
+        # プロコン / Joy-Con L / Joy-Con R へ固定できる。仮想コントローラの
+        # 直前に置き、どの形で操作するかを見てから触れるようにする。
+        self.layout_label = ttk.Label(self.control_lf, text="操作盤")
+        self.layout_label.grid(row=6, column=0, sticky="w", pady=(6, 0))
+        self.controller_layout_choice = tk.StringVar(value=LAYOUT_LABELS[AUTO])
+        self._controller_layout_labels = {LAYOUT_LABELS[key]: key for key in LAYOUTS}
+        self.layout_cb = ttk.Combobox(
+            self.control_lf,
+            textvariable=self.controller_layout_choice,
+            state="readonly",
+            width=18,
+        )
+        self.layout_cb["values"] = [LAYOUT_LABELS[key] for key in LAYOUTS]
+        self.layout_cb.grid(row=6, column=1, sticky="e", pady=(6, 0))
+        self.layout_cb.bind(
+            "<<ComboboxSelected>>", self._on_controller_layout_selected, add=""
+        )
+        Tooltip(
+            self.layout_cb,
+            "接続したパッドに合わせる（自動）、または操作盤をプロコン / "
+            "Joy-Con (L) / Joy-Con (R) に固定する",
+        )
+
         # 仮想コントローラ。タブの中に常に置き、別ウィンドウへも出せる
         # （ui/controller_dock.py）。送り先は開くたびに今の物を引く。
         # タブの内側は全タブ共通の幅なので、見えている幅へ体を合わせる
@@ -724,6 +758,94 @@ class SerialPanelMixin:
             )
         self.simpleConButton = self.controller_dock.pop_button
         self._bind_release_focus(self.tab_controller, self.tab_controller)
+        self._apply_controller_layout()
+
+    # ------------------------------------------------------------------
+    # 操作盤の種類（プロコン / Joy-Con L / R）
+    # ------------------------------------------------------------------
+
+    def _selected_controller_layout(self) -> str:
+        """画面で選んでいる種類（内部キー）。読めなければ auto。"""
+        try:
+            raw = str(self.controller_layout_choice.get()).strip()
+        except Exception:
+            return AUTO
+        return self._controller_layout_labels.get(raw, AUTO)
+
+    def _on_controller_layout_selected(self, event: Any = None) -> None:
+        """操作盤の種類を選び直した。設定へ保存し、すぐ描き直す。"""
+        self._set_controller_layout_choice(self._selected_controller_layout())
+
+    def _set_controller_layout_choice(self, mode: str) -> None:
+        """種類を選び直す（画面・設定・操作盤を一度に合わせる）。
+
+        BCON の種別切替が成功したときにも呼ぶ。auto はパッド名から決める。
+        """
+        if mode not in LAYOUT_LABELS:
+            mode = AUTO
+        try:
+            self.controller_layout_choice.set(LAYOUT_LABELS[mode])
+        except Exception:
+            pass
+        try:
+            self.settings.controller_layout.set(mode)
+        except Exception as e:
+            logger.debug(f"操作盤の種類を設定へ書けませんでした: {e}")
+        self._apply_controller_layout()
+        try:
+            self._on_setting_changed()
+        except Exception:
+            pass
+
+    def _load_controller_layout_setting(self) -> None:
+        """設定ファイルの値を選択欄へ流し、操作盤へ反映する。
+
+        Window._apply_settings_to_widgets から呼ぶ（組み立て時には設定を
+        まだ読んでいないため、欄の初期値は auto で作る）。
+        """
+        try:
+            mode = str(self.settings.controller_layout.get())
+        except Exception:
+            mode = AUTO
+        if mode not in LAYOUT_LABELS:
+            mode = AUTO
+        try:
+            self.controller_layout_choice.set(LAYOUT_LABELS[mode])
+        except Exception:
+            pass
+        self._apply_controller_layout()
+
+    def _save_controller_layout_setting(self) -> None:
+        """選択欄の値を設定オブジェクトへ戻す（Window._save_settings から）。"""
+        try:
+            self.settings.controller_layout.set(self._selected_controller_layout())
+        except Exception as e:
+            logger.debug(f"操作盤の種類を保存できませんでした: {e}")
+
+    def _apply_controller_layout(self) -> None:
+        """選択値と接続中のパッド名から、実際に描く種類を決めて渡す。
+
+        auto は選んでいるパッドの表示名が Joy-Con (L)/(R) のときだけ
+        その形にする。名前が読めない・ProCon のときは従来の ProCon。
+        """
+        dock = getattr(self, "controller_dock", None)
+        if dock is None:
+            return
+        names = getattr(self, "_gamepad_names", {})
+        try:
+            index = self._gamepad_index()
+        except Exception:
+            index = 0
+        pad_name = ""
+        try:
+            pad_name = str(names.get(index, "") or "")
+        except Exception:
+            pad_name = ""
+        resolved = resolve_layout(self._selected_controller_layout(), pad_name)
+        try:
+            dock.set_layout(resolved)
+        except Exception as e:
+            logger.warning(f"操作盤の種類を切り替えられませんでした: {e}")
 
     def _on_control_section_toggled(self) -> None:
         """詳細の開閉で高さが変わるので、配置と操作盤の高さを測り直す。"""
@@ -2221,6 +2343,10 @@ class SerialPanelMixin:
                         self.gamepad_choice.set(label)
                         break
             self._refresh_gamepad_deadzone_field()
+            # auto のときは、選んでいるパッドの名前が変わったら操作盤も変える。
+            apply_layout = getattr(self, "_apply_controller_layout", None)
+            if callable(apply_layout):
+                apply_layout()
             return current
         except Exception as e:
             logger.warning(f"パッド一覧の更新で例外: {e}")
@@ -2532,6 +2658,9 @@ class SerialPanelMixin:
         except Exception:
             self._gamepad_identity = ""
             self._gamepad_name = ""
+        apply_layout = getattr(self, "_apply_controller_layout", None)
+        if callable(apply_layout):
+            apply_layout()
         if self.is_use_gamepad.get():
             # stop_gamepad は読取スレッドの join（最大1秒）を待つ。
             # Tk スレッドで止めると選択のたびに画面が固まるため、
