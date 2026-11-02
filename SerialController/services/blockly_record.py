@@ -45,6 +45,10 @@ CHORD_WAIT_MAX = 60.0
 #: 延長後のクリップ長の警告閾値（秒）。長押しの吸収で記録全体が1クリップに
 #: 膨らんだとき、編集しにくくなるため warnings へ1件だけ知らせる。仮値。
 CLIP_WARN_S = 10.0
+#: 軌跡記録の許容誤差（u8 の XY 距離）。表示用の DEFAULT_EPS=2.5 より詰め、
+#: 再生軌跡のずれを小さくする。点は増えるが、圧縮は 8ms 格子で行うため
+#: 通常の操作ならブロック数は実用範囲に収まる。
+RECORD_EPS = 1.5
 
 
 def _round_step(value: float) -> float:
@@ -60,6 +64,39 @@ def _round_step(value: float) -> float:
     if stepped > STEP_MAX:
         return STEP_MAX
     return stepped
+
+
+def _trailing_wait(since: float, stop_at: float | None) -> float:
+    """最後の操作から記録停止までの待ちを返す。
+
+    stop_at は記録を止めた perf_counter。無ければ従来どおり LAST_WAIT。
+    0.1秒未満は既定へ寄せ、0.05秒単位・上限60秒で丸める。停止時刻が
+    分かるときだけ、記録の末尾に残った無操作時間を再現できる。
+    """
+    if stop_at is None:
+        return LAST_WAIT
+    try:
+        gap = float(stop_at) - float(since)
+    except (TypeError, ValueError):
+        return LAST_WAIT
+    if gap <= LAST_WAIT:
+        return LAST_WAIT
+    return _round_step(gap)
+
+
+def _wait_steps(total: float) -> list[dict[str, Any]]:
+    """無操作の秒数を kind:wait の並びへ直す。
+
+    0.05秒未満は捨てる（再生しても分からないため）。60秒を超える分は
+    pokecon_wait の秒数へ割って残す。
+    """
+    try:
+        seconds = float(total)
+    except (TypeError, ValueError):
+        return []
+    if seconds < STEP_MIN:
+        return []
+    return [{"kind": "wait", "wait": chunk} for chunk in _split_chord_wait(seconds)]
 
 
 def _step_target(ev: InputLog.InputEvent) -> str:
@@ -88,15 +125,19 @@ def _step_target(ev: InputLog.InputEvent) -> str:
     return f"Direction.{prefix}{label}"
 
 
-def events_to_steps(events: list[InputLog.InputEvent]) -> list[dict[str, Any]]:
+def events_to_steps(
+    events: list[InputLog.InputEvent],
+    stop_at: float | None = None,
+) -> list[dict[str, Any]]:
     """イベント列を手順（押す・待つの並び）へ変換する。純関数。
 
     各 RELEASE ごとに `{"target": 値, "duration": 秒, "wait": 秒}` を作る。
     `duration` は押していた時間（RELEASE の `duration`）、`wait` は離して
-    から次の PRESS までの時間（最後の手順は 0.1）。どちらも 0.05秒単位に
-    丸め、最小 0.05、上限 60。PRESS が無い RELEASE（記録開始前から
-    押しっぱなしだったもの）は捨てる。同時押し（重なり）は、重なった
-    区間を無視して離した順に並べるだけで、同時押しの再現はしない。
+    から次の PRESS までの時間。次の PRESS が無い最後の手順は、stop_at
+    （記録停止時刻）があれば停止までの無操作時間、無ければ 0.1 秒にする。
+    どちらも 0.05秒単位に丸め、最小 0.05、上限 60。PRESS が無い RELEASE
+    （記録開始前から押しっぱなしだったもの）は捨てる。同時押し（重なり）は、
+    重なった区間を無視して離した順に並べるだけで、同時押しの再現はしない。
     """
     releases = [ev for ev in events if ev.action == "RELEASE"]
     presses = sorted(
@@ -104,7 +145,8 @@ def events_to_steps(events: list[InputLog.InputEvent]) -> list[dict[str, Any]]:
         key=lambda ev: ev.at,
     )
     steps: list[dict[str, Any]] = []
-    for i, rel in enumerate(releases):
+    trailing_from: float | None = None
+    for rel in releases:
         if rel.duration is None:
             # PRESS が無い RELEASE。開始前から押していたものなので捨てる。
             continue
@@ -115,14 +157,22 @@ def events_to_steps(events: list[InputLog.InputEvent]) -> list[dict[str, Any]]:
         # 次の PRESS（この RELEASE より後の最初のもの）までの時間。
         # 重なりの区間は無視し、離した順に並べるだけにする。
         wait: float = LAST_WAIT
+        found_next = False
         for pr in presses:
             if pr.at > rel.at:
                 wait = _round_step(pr.at - rel.at)
+                found_next = True
                 break
+        if not found_next:
+            trailing_from = float(rel.at)
         steps.append({"target": target, "duration": duration, "wait": wait})
-    # 最後の手順の待ちは次が無いため、丸め直さず既定にする。
     if steps:
-        steps[-1]["wait"] = LAST_WAIT
+        # 次が無い最後の手順だけ、記録停止までの無操作を待ちへ載せる。
+        # stop_at が無い（記録以外の呼び出し）ときは従来どおり既定の待ち。
+        if stop_at is not None and trailing_from is not None:
+            steps[-1]["wait"] = _trailing_wait(trailing_from, stop_at)
+        elif stop_at is None:
+            steps[-1]["wait"] = LAST_WAIT
     return steps
 
 
@@ -216,11 +266,13 @@ def events_to_chord_steps(
     間隔と連鎖末尾の間隔は kind:wait（pokecon_wait 相当）で出す。
     開始前の RELEASE は捨てる。停止時に押下中は、孤立なら press
     （duration＝停止−押下）、連鎖内なら holdEnd で閉じる。
+    stop_at を渡したときは、最後のエッジから停止までの無操作も待ちへ残す。
     同一 target の未解放 hold が重なったら ValueError（Keys.hold は重複を
     黙って捨てるため、変換の出口で検出する）。
     """
     if not events:
         return []
+    explicit_stop = stop_at is not None
     if stop_at is None:
         stop_at = max(float(ev.at) for ev in events)
     event_seq = {id(ev): index for index, ev in enumerate(events)}
@@ -322,10 +374,14 @@ def events_to_chord_steps(
             span = spans[idxs[0]]
             duration = _round_step(span["end"] - span["start"])
             wait = LAST_WAIT
+            found_next = False
             for moment in press_times:
                 if moment > span["end"]:
                     wait = _round_step(moment - span["end"])
+                    found_next = True
                     break
+            if not found_next and explicit_stop:
+                wait = _trailing_wait(span["end"], stop_at)
             steps.append(
                 {
                     "kind": "press",
@@ -427,11 +483,15 @@ def events_to_chord_steps(
             if group_has_release and following is not None:
                 for chunk in _split_chord_wait(gap):
                     steps.append({"kind": "wait", "wait": chunk})
-        # 連鎖末尾の間隔（次の成分まで。無ければ既定の待ち）。
+        # 連鎖末尾の間隔（次の成分まで）。次の成分が無いときは、記録停止
+        # 時刻が分かっていれば停止までの無操作を残し、無ければ既定の待ち。
         if next_start is not None:
             tail = max(0.0, round(grid_next - grid[times[-1]], 2))
             for chunk in _split_chord_wait(tail):
                 steps.append({"kind": "wait", "wait": chunk})
+        elif explicit_stop:
+            last_edge = max(edge[0] for edge in edges)
+            steps.extend(_wait_steps(_trailing_wait(last_edge, stop_at)))
         else:
             steps.append({"kind": "wait", "wait": LAST_WAIT})
     return steps
@@ -511,6 +571,9 @@ class Recorder:
         #: 調停の棄却件数の土台（human, auto）。初回の見回りで覚え、
         #: 増えたら混ざったとみなす。開始ごとに捨てる。
         self._arb_base: tuple[int, int] | None = None
+        #: 最後に記録を止めた perf_counter。停止後の無操作時間を手順と
+        #: ジャイロの終端へ含めるために持つ（記録中・開始直後は None）。
+        self._stopped_at: float | None = None
 
     @property
     def recording(self) -> bool:
@@ -652,6 +715,7 @@ class Recorder:
                 except Exception:
                     self._motion_transport = None
             self.started_at = time.time()
+            self._stopped_at = None
             # ジャイロも同じ記録に残す。IMU を送っている間だけ届く
             # （送っていなければ 0 件で、ボタンだけの記録になる）。
             self._gyro_transport = None
@@ -709,7 +773,14 @@ class Recorder:
         return min(ats) if ats else None
 
     def timeline_end(self) -> float | None:
-        """記録した操作のうち最も遅い perf_counter。無ければ None。"""
+        """記録した操作の終端の perf_counter。無ければ None。
+
+        停止済みなら停止時刻を返す（最後の操作から停止までの無操作も
+        マクロの再生時間に含める。ジャイロの終端も同じ時刻へ揃える）。
+        記録中は最も遅い操作の時刻。
+        """
+        if self._stopped_at is not None:
+            return self._stopped_at
         ats = [ev.at for ev in self._logger.snapshot()]
         ats.extend(ev.at for ev in self._motion_logger.snapshot())
         return max(ats) if ats else None
@@ -800,12 +871,16 @@ class Recorder:
                         remove_imu(self._on_imu_sample)
                 except Exception:
                     pass
+            # 聞き手を外した後の時刻を記録の終端にする。最後の操作から
+            # ここまでの無操作を手順・ジャイロの長さへ含める。
+            stop_at = time.perf_counter()
+            self._stopped_at = stop_at
             # 同時押しは motion より先に試す。stick 無し＋重なり有り（hold系が
             # 出る）のときだけ chord 手順を返す。stick 有りは従来どおり motion へ。
             try:
                 chord_events = self._logger.snapshot()
                 if not any(ev.kind == "stick" for ev in chord_events):
-                    chord_steps = events_to_chord_steps(chord_events)
+                    chord_steps = events_to_chord_steps(chord_events, stop_at=stop_at)
                     if any(
                         step.get("kind") in ("hold", "hold_end") for step in chord_steps
                     ):
@@ -815,7 +890,10 @@ class Recorder:
             if motion_transport is not None:
                 try:
                     motion_steps = build_motion_steps(
-                        self._motion_logger.snapshot(), warnings=warnings
+                        self._motion_logger.snapshot(),
+                        eps=RECORD_EPS,
+                        warnings=warnings,
+                        stop_at=stop_at,
                     )
                     if any(
                         step.get("kind") in ("stick", "stick2", "hold", "hold_end")
@@ -824,7 +902,7 @@ class Recorder:
                         return motion_steps
                 except Exception:
                     pass
-            return events_to_steps(self._logger.snapshot())
+            return events_to_steps(self._logger.snapshot(), stop_at=stop_at)
         except Exception:
             return []
 
@@ -847,10 +925,18 @@ class _MotionLogger(InputLog.InputLogger):
     CHANGE にはその瞬間の座標・角度・倒し量が入る。親の集約・流量制限は
     通さない（記録は表示ではないため）。ただしスティックの CHANGE は
     log_stick_change=False だと生成されないため、記録用は True で作る。
+    さらに CHANGE の間引き（15度・倒し量0.25）を 0 にして、送信行ごとの
+    変化を残す。表示ログ用の間引きだと、小さな往復や浅い倒し込みが
+    1点も残らず、軌跡が直線になる。
     """
 
     def __init__(self) -> None:
-        super().__init__(emit=lambda _line: None, log_stick_change=True)
+        super().__init__(
+            emit=lambda _line: None,
+            log_stick_change=True,
+            change_min_deg=0.0,
+            change_min_mag=0.0,
+        )
         self._events_lock = threading.Lock()
         self._events: list[InputLog.InputEvent] = []
 
@@ -935,16 +1021,18 @@ def build_motion_steps(
     events: list[InputLog.InputEvent],
     eps: float = _motion.DEFAULT_EPS,
     warnings: list[dict[str, Any]] | None = None,
+    stop_at: float | None = None,
 ) -> list[dict[str, Any]]:
     """イベント列を motion ブロックの材料へ変換する。純関数。
 
     返すのは [{kind, ...}] の並び。kind は "stick"（単独）/"stick2"（L+R 同時）/
-    "hold" / "hold_end" / "release_stick" / "press"（クリップ外の従来手順）。
-    時刻はすべて ms（整数）。T（移行時間）には 0.05 秒丸めを適用しない。
+    "hold" / "hold_end" / "release_stick" / "press" / "wait"（クリップ外の手順と
+    無操作）。時刻はすべて ms（整数）。T（移行時間）には 0.05 秒丸めを適用しない。
 
     クリップの切り方: 開始はどちらかのスティックが r >= 8、終了は両スティック
-    中立かつボタン保持なしが 150ms 継続。押下区間がクリップにかかるボタンは
-    クリップに含める（境界をまたぐ場合はクリップを広げる）。
+    中立かつボタン保持なしが 150ms 継続。倒したまま CHANGE が出ない保持時間は
+    その側の RELEASE（無ければ stop_at）まで含める。押下区間がクリップに
+    かかるボタンはクリップに含める（境界をまたぐ場合はクリップを広げる）。
     クリップ外は events_to_steps と同じ press 変換へ回す。
     クリップと交差する押下区間は、開始・終了とも延長して吸収する（延長で
     新たに交差するものも取り込む。不動点まで繰り返す）。開始側の延長は
@@ -953,19 +1041,25 @@ def build_motion_steps(
     warnings（渡したときだけ）へ {"code": "clip_long", "seconds": 長さ} を
     1件足す（分割はしない）。hold/hold_end には at_ms（クリップ先頭からの
     ms。挿入側の WAIT 引継ぎ用）を付ける。
+
+    クリップの前後（次の操作まで・停止まで）の無操作は wait として残す。
+    停止時刻 stop_at を渡すと、最後の操作から停止までの無操作も残す。
     """
     if not events:
         return []
     sticks = _stick_xy_at(events)
     if not sticks:
-        # スティック操作なし。従来の press 変換そのまま。
-        return [{"kind": "press", **step} for step in events_to_steps(events)]
+        # スティック操作なし。従来の press 変換そのまま（停止までの無操作も含む）。
+        return [
+            {"kind": "press", **step}
+            for step in events_to_steps(events, stop_at=stop_at)
+        ]
     t0 = min(ev.at for ev in events)
     buttons = _motion_buttons(events, t0)
     # クリップ区間を求める（スティックが動いている範囲＋跨ぎ区間の吸収）。
     intervals = _press_intervals(events)
     releases = _stick_releases(events)
-    clips, absorbed = _split_clips(sticks, intervals, releases)
+    clips, absorbed = _split_clips(sticks, intervals, releases, stop_at)
     if warnings is not None:
         for clip_start, clip_end in clips:
             if clip_end - clip_start > CLIP_WARN_S:
@@ -974,13 +1068,17 @@ def build_motion_steps(
                 )
                 break
     if not clips:
-        return [{"kind": "press", **step} for step in events_to_steps(events)]
+        return [
+            {"kind": "press", **step}
+            for step in events_to_steps(events, stop_at=stop_at)
+        ]
     steps: list[dict[str, Any]] = []
     # クリップ外の press 変換用に、イベントをクリップ区間で区切る。吸収済みは除く。
     # stick の RELEASE はクリップ側が引き受ける（press 側へ出すと中立へ戻す
     # press が余計に1個増え、方向が化けることがある）。
     for index, (clip_start, clip_end) in enumerate(clips):
-        # クリップ前の press 区間。
+        # クリップ前の press 区間。最後の press の wait はクリップ開始まで
+        # 延ばす（クリップ前の無操作を落とさない）。
         prev_end = clips[index - 1][1] if index > 0 else None
         before = [
             ev
@@ -990,10 +1088,17 @@ def build_motion_steps(
             and id(ev) not in absorbed
             and not (ev.kind == "stick" and ev.action == "RELEASE")
         ]
-        for step in events_to_steps(before):
+        before_steps = events_to_steps(before, stop_at=clip_start)
+        if not before_steps and index > 0:
+            # 前のクリップ終了からこのクリップ開始まで操作が無い。
+            steps.extend(_wait_steps(clip_start - clips[index - 1][1]))
+        for step in before_steps:
             steps.append({"kind": "press", **step})
-        steps.extend(_clip_to_steps(sticks, buttons, t0, clip_start, clip_end, eps))
-    # 最後のクリップ後の press 区間。
+        steps.extend(
+            _clip_to_steps(sticks, buttons, t0, clip_start, clip_end, eps, releases)
+        )
+    # 最後のクリップ後の press 区間。クリップ終了から次の操作（無ければ
+    # 停止）までの無操作を wait として残す。
     after = [
         ev
         for ev in events
@@ -1001,7 +1106,15 @@ def build_motion_steps(
         and id(ev) not in absorbed
         and not (ev.kind == "stick" and ev.action == "RELEASE")
     ]
-    for step in events_to_steps(after):
+    after_events = [ev for ev in after if ev.action in ("PRESS", "RELEASE")]
+    boundary: float | None
+    if after_events:
+        boundary = min(float(ev.at) for ev in after_events)
+    else:
+        boundary = stop_at
+    if boundary is not None:
+        steps.extend(_wait_steps(boundary - clips[-1][1]))
+    for step in events_to_steps(after, stop_at=stop_at):
         steps.append({"kind": "press", **step})
     return steps
 
@@ -1010,19 +1123,21 @@ def _split_clips(
     sticks: list[tuple[str, float, float, float]],
     intervals: list[_PressSpan],
     releases: list[tuple[str, float]] | None = None,
+    stop_at: float | None = None,
 ) -> tuple[list[tuple[float, float]], set[int]]:
     """クリップ区間 [(開始 at, 終了 at)] と吸収した押下イベントの id 集合を返す。
 
     at は perf_counter 値。クリップと交差する押下区間（端点タッチを含む）は
     開始・終了とも延長して吸収し、延長で新たに交差するものも取り込む
-    （不動点まで）。開始側の延長は押下開始まで。RELEASE の無い押下中は
-    終了を延ばさない。吸収した区間の PRESS/RELEASE はクリップ外へ出さない
-    （二重化防止）。
+    （不動点まで）。開始側の延長は押下開始まで。吸収した区間の PRESS/RELEASE
+    はクリップ外へ出さない（二重化防止）。
 
-    スティックの RELEASE 時刻では区間を分割する。離した瞬間の座標は
-    中立のため座標列に出ず、分けなければ「離して置いた静止」が
-    「倒し続け」に潰れ、再生で中立へ戻らなくなる（残留）。RELEASE が
-    無い側の延長吸収は従来どおり行う。
+    スティックを倒したまま CHANGE が出ない時間（保持）は、その側の RELEASE
+    までクリップへ含める。RELEASE も無いまま停止したときは stop_at まで
+    含める（含めないと保持していた時間が記録から消える）。RELEASE で区間は
+    分けない（分けると次の区間の先頭で姿勢を送り直す必要があり、直前の
+    release_stick と衝突する）。離している間は _clip_to_steps が中立サンプル
+    で埋めるため、「離して置いた静止」は倒し続けにならない。
     """
     # スティックが動いている時刻の範囲を求める。
     active = [
@@ -1032,21 +1147,40 @@ def _split_clips(
     ]
     if not active:
         return [], set()
+    release_list = list(releases or [])
     all_start = min(active)
-    all_end = max(active) + CLIP_IDLE_S
-    # 分割点: RELEASE 時刻（側不問）。ただし直後に押し直しがある
-    # RELEASE では切らない（倒し直しを別クリップに割ると、単発の倒しが
-    # 座標を持たない press へ落ち、方向が化ける）。切るのは「離した後に
-    # active が無い」RELEASE＝その側の操作が本当に終わったものだけにする。
-    press_ats = sorted(at for _, at, _, _ in sticks)
-    cuts = sorted(
-        {
-            at
-            for _, at in (releases or [])
-            if all_start < at < all_end and not any(p > at for p in press_ats)
-        }
-    )
-    bounds = [all_start, *cuts, all_end]
+    idle_end = max(active) + CLIP_IDLE_S
+    # 側ごとの最後の active と、その後の RELEASE。RELEASE までを保持時間と
+    # みなし、クリップの終了を延ばす。
+    last_active: dict[str, float] = {}
+    for side, at, x, y in sticks:
+        if math.hypot(x - 128.0, y - 128.0) >= MOTION_DEADZONE_XY:
+            last_active[side] = max(last_active.get(side, float(at)), float(at))
+    released_after = [
+        float(at)
+        for side, at in release_list
+        if side in last_active and float(at) >= last_active[side]
+    ]
+    held = [
+        side
+        for side, at in last_active.items()
+        if not any(
+            r_side == side and float(r_at) >= at for r_side, r_at in release_list
+        )
+    ]
+    all_end = idle_end
+    if released_after:
+        # 全側が離されているなら、最後の RELEASE が操作の終わり。
+        # 最後の CHANGE から 150ms を足すと、離した後も倒したままになる。
+        release_end = max(released_after)
+        all_end = max(idle_end, release_end) if held else release_end
+    if held and stop_at is not None:
+        # 倒したまま停止した側は、停止時刻まで保持していたとみなす。
+        all_end = max(all_end, float(stop_at))
+    # RELEASE で区間は分けない。分けると次の区間の先頭で姿勢を送り直す
+    # 必要があり、直前の release_stick と衝突する。離している間は
+    # _clip_to_steps が中立サンプルで埋める。
+    bounds = [all_start, all_end]
     clips: list[tuple[float, float]] = []
     absorbed: set[int] = set()
     for seg_start, seg_end in zip(bounds, bounds[1:]):
@@ -1093,14 +1227,39 @@ def _clip_to_steps(
     clip_start: float,
     clip_end: float,
     eps: float,
+    releases: list[tuple[str, float]] | None = None,
 ) -> list[dict[str, Any]]:
-    """1 クリップを stick/hold 系の材料へ変換する。"""
+    """1 クリップを stick/hold 系の材料へ変換する。
+
+    スティックの RELEASE 時刻には中立 (128, 128) のサンプルを足してから
+    圧縮する。足さないと、離して置いた区間を前後の座標が直線で結び、
+    離している間も倒したまま（またはゆっくり戻る）軌跡になる。
+    """
     # チャンネルごとに圧縮する。
+    release_list = list(releases or [])
     tracks: dict[str, list[_motion.Waypoint]] = {}
     for side in ("L", "R"):
         samples = [(at, x, y) for s, at, x, y in sticks if s == side]
         # クリップ範囲内のサンプルだけ使う。
         samples = [s for s in samples if clip_start - 0.05 <= s[0] <= clip_end]
+        if len(samples) >= 2 and samples[0][0] > clip_start:
+            # ボタン保持などでクリップがスティック操作より前に始まったとき、
+            # 最初のサンプルより前は中立。足さないと最初の値を倒したまま
+            # 引き延ばし、操作前から倒れている軌跡になる。
+            samples.append((clip_start, 128.0, 128.0))
+        # 離した瞬間は中立。RELEASE は座標を持たないため、ここで補う。
+        # 次の押下までの格子は中立で埋まり、離している間の姿勢が残らない。
+        # ただし実サンプルが1点だけの単発押しは、press 変換（押す・離す）に
+        # 任せる。motion にすると開始姿勢を送る手順が無く、倒し切る前に
+        # 戻る軌跡になる。
+        if len(samples) >= 2:
+            for r_side, r_at in release_list:
+                if r_side != side:
+                    continue
+                at = float(r_at)
+                if clip_start <= at <= clip_end:
+                    samples.append((at, 128.0, 128.0))
+        samples.sort(key=lambda s: s[0])
         tracks[side] = _motion.compress_track(samples, clip_start, eps)
     base_ms = 0.0
     # 分割時刻: L/R の waypoint ∪ クリップ内のボタン/Hat イベント時刻。

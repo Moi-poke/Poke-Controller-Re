@@ -121,6 +121,45 @@ def test_events_to_steps_ignores_change_events() -> None:
     assert steps[0]["target"] == "Direction.UP"
 
 
+def test_events_to_steps_keeps_idle_until_stop() -> None:
+    """Given: 最後の操作の後に無操作 / When: 停止時刻つきで変換 / Then: 停止までの待ちが最後の手順に入ること。"""
+    # Given: A を押して離した後、記録停止まで何もしない
+    events = [
+        _event("PRESS", "button", "Button.A", 1.0),
+        _event("RELEASE", "button", "Button.A", 1.1, 0.1),
+    ]
+    # When: 停止時刻 6.0 で変換する
+    steps = blockly_record.events_to_steps(events, stop_at=6.0)
+    # Then: 離してから停止までの 4.9 秒が待ちになる
+    assert steps[0]["wait"] == 4.9
+    # Then: 停止時刻が無い呼び出しは従来どおり 0.1 秒のまま
+    assert blockly_record.events_to_steps(events)[0]["wait"] == 0.1
+
+
+def test_record_keeps_idle_after_the_last_input() -> None:
+    """Given: 最後の操作の後も記録を続ける / When: 停止 / Then: 停止までの無操作が待ちとジャイロ終端へ入ること。"""
+    transport = FakeTransport()
+    sender = Sender.Sender(is_show_serial=False, transport=transport)
+    keys = KeyPress(sender)
+    rec = blockly_record.Recorder()
+    assert rec.start(transport) is True
+    keys.input(Button.A)
+    time.sleep(0.05)
+    keys.inputEnd(Button.A)
+    # Given: 最後の操作から 0.3 秒待ってから停止する
+    time.sleep(0.3)
+    before = time.perf_counter()
+    steps = rec.stop()
+    after = time.perf_counter()
+    # Then: 停止までの無操作が最後の手順の待ちになる
+    assert [s["target"] for s in steps] == ["Button.A"]
+    assert 0.25 <= float(steps[0]["wait"]) <= 0.6
+    # Then: ジャイロの終端も停止時刻まで伸びる
+    end = rec.timeline_end()
+    assert end is not None
+    assert before <= end <= after
+
+
 def test_recorder_refuses_double_start() -> None:
     """Given: 記録中 / When: もう一度開始する / Then: 断られること。"""
     # Given: 記録中
@@ -691,3 +730,36 @@ def test_recording_moves_gyro_listener_with_transport() -> None:
     _t0, events = take
     values = [sample[3] for _at, sample in events]
     assert values == [1, 2]
+
+
+def test_display_logger_still_thins_small_stick_changes() -> None:
+    """Given: 表示ログ用の CHANGE 間引き / When: 15度未満の変化 / Then: 従来どおり出さないこと。"""
+    logger = InputLog.InputLogger(emit=lambda _line: None, log_stick_change=True)
+    # r=30・角度0度から、±8度だけ動かす（15度未満・倒し量の差も0.25未満）。
+    assert [ev.action for ev in logger._diff("0x0002 8 9E 80")] == ["PRESS"]
+    assert logger._diff("0x0002 8 9E 7C") == []
+
+
+def test_motion_record_keeps_small_stick_changes() -> None:
+    """Given: 15度未満の小さな往復 / When: 記録 / Then: 複数の軌跡区間として残ること。"""
+    transport = FakeTransport()
+    rec = blockly_record.Recorder()
+    assert rec.start(transport) is True
+    try:
+        # 右へ浅く倒し（r=30）、角度を ±8度だけ往復させる。
+        transport.send_row("0x0002 8 9E 80")
+        for y in (0x7C, 0x84, 0x7C, 0x84, 0x7C):
+            time.sleep(0.01)
+            transport.send_row(f"0x0002 8 9E {y:02X}")
+        time.sleep(0.01)
+        transport.send_row("0x0002 8 80 80")
+        steps = rec.stop()
+    finally:
+        rec.stop()
+    sticks = [s for s in steps if s["kind"] in ("stick", "stick2")]
+    # 表示ログの間引き（15度・0.25）なら1点も残らず press に落ちる。
+    assert len(sticks) >= 3
+    dirs = {
+        (round(s["from"][1]), round(s["to"][1])) for s in sticks if s["kind"] == "stick"
+    }
+    assert len(dirs) >= 2

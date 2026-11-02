@@ -65,7 +65,9 @@ FLAG_R_STICK = 0x1
 FLAG_L_STICK = 0x2
 
 STICK_DEADZONE = 0.05  # これ以下の倒し量は中立とみなす（0.0〜1.0）
-CHANGE_MIN_DEG = 15.0  # 傾けたままの向き変更をイベントにする最小角度
+#: 傾けたままの向き変更をイベントにする最小角度（表示ログの既定）。
+#: 軌跡記録用の InputLogger は 0 を指定し、送信行ごとの変化を残す。
+CHANGE_MIN_DEG = 15.0
 
 # 向きが同じでも倒し量がこれだけ変われば記録する（0.0〜1.0）。
 # 角度だけを見ていると「真上に浅く倒す→深く倒す」が1行も出ない。
@@ -672,12 +674,18 @@ class InputLogger:
         log_stick_change: bool = False,
         deadzone: float = STICK_DEADZONE,
         actions: Any = None,
+        change_min_deg: float = CHANGE_MIN_DEG,
+        change_min_mag: float = CHANGE_MIN_MAG,
     ) -> None:
         self.formatter = LogFormatter(template)
         self.emit = emit if emit is not None else print
         self.enabled = enabled
         self.log_stick_change = log_stick_change
         self.deadzone = deadzone
+        # CHANGE を出す最小の変化量。表示ログは既定（15度・倒し量0.25）で
+        # 間引くが、軌跡記録は 0 にして送信行ごとの変化を残せる。
+        self.change_min_deg = max(0.0, float(change_min_deg))
+        self.change_min_mag = max(0.0, float(change_min_mag))
         self.actions: tuple[str, ...] | None = None
         # 状態を守るロック。再入不可(Lock)なので、
         # 「ロックを持ったまま _emit_limited / _write を呼ばない」
@@ -1224,8 +1232,8 @@ class InputLogger:
             # 倒し量だけが変わる操作（真上に浅く→深く）も拾う。
             # 角度だけを見ていると、この間ずっと1行も出なかった。
             mag_gap = abs(mag - last_mag)
-            turned = gap >= CHANGE_MIN_DEG
-            pushed = CHANGE_MIN_MAG > 0 and mag_gap >= CHANGE_MIN_MAG
+            turned = gap >= self.change_min_deg
+            pushed = self.change_min_mag > 0 and mag_gap >= self.change_min_mag
             if turned or pushed:
                 if track is not None:
                     track["emit_deg"] = deg

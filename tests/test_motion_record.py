@@ -671,3 +671,168 @@ def test_down_motion_roundtrip() -> None:
             if r >= 8:
                 x, y = _motion.restore_xy([_motion.Waypoint(0, r, th)], 0.0)
                 assert y > 128.0, f"{key}={s[key]} が下にならない"
+
+
+def test_idle_before_stick_clip_is_kept() -> None:
+    """Given: ボタンの後に無操作してスティック操作 / When: 変換 / Then: クリップ前の待ちが残ること。"""
+    t0 = 15000.0
+    wall = datetime.datetime.now()
+    evs = [
+        InputLog.InputEvent("PRESS", "button", "Button.A", t0, wall),
+        InputLog.InputEvent(
+            "RELEASE", "button", "Button.A", t0 + 0.1, wall, duration=0.1
+        ),
+    ]
+    evs += _stick_events(
+        t0 + 2.0, _circle_points(n=25, r=100.0, period=0.2), release_at=0.21
+    )
+    steps = br.build_motion_steps(sorted(evs, key=lambda e: e.at))
+    assert steps[0]["kind"] == "press"
+    # 離してからクリップ開始までの 1.9 秒が待ちになる。
+    assert abs(float(steps[0]["wait"]) - 1.9) <= 0.06
+
+
+def test_idle_after_stick_clip_is_kept() -> None:
+    """Given: スティック操作の後に無操作してボタン / When: 変換 / Then: クリップ後の待ちが残ること。"""
+    t0 = 16000.0
+    wall = datetime.datetime.now()
+    evs = _stick_events(t0, _circle_points(n=25, r=100.0, period=0.2), release_at=0.21)
+    evs += [
+        InputLog.InputEvent("PRESS", "button", "Button.B", t0 + 2.2, wall),
+        InputLog.InputEvent(
+            "RELEASE", "button", "Button.B", t0 + 2.3, wall, duration=0.1
+        ),
+    ]
+    steps = br.build_motion_steps(sorted(evs, key=lambda e: e.at))
+    kinds = [s["kind"] for s in steps]
+    release = kinds.index("release_stick")
+    # クリップ終了（離した時刻）から次の操作までの無操作が wait になる。
+    assert steps[release + 1]["kind"] == "wait"
+    assert abs(float(steps[release + 1]["wait"]) - 1.99) <= 0.06
+    assert steps[release + 2]["kind"] == "press"
+    assert steps[release + 2]["target"] == "Button.B"
+
+
+def test_stick_hold_until_release_keeps_time() -> None:
+    """Given: スティックを倒したまま CHANGE 無しで保持 / When: 変換 / Then: 解放までの時間が stick 区間へ残ること。"""
+    t0 = 17000.0
+    evs = _stick_events(t0, _circle_points(n=25, r=100.0, period=0.2), release_at=3.2)
+    steps = br.build_motion_steps(sorted(evs, key=lambda e: e.at))
+    total = sum(s.get("t_ms", 0) for s in steps if s["kind"] in ("stick", "stick2"))
+    # 最後の CHANGE は 0.2 秒。解放の 3.2 秒まで保持していた時間を落とさない。
+    assert 3100 <= total <= 3250
+
+
+def test_stick_held_at_stop_keeps_time() -> None:
+    """Given: スティックを倒したまま停止 / When: 停止時刻つきで変換 / Then: 停止までの保持時間が残ること。"""
+    t0 = 18000.0
+    evs = _stick_events(t0, _circle_points(n=25, r=100.0, period=0.2))
+    steps = br.build_motion_steps(sorted(evs, key=lambda e: e.at), stop_at=t0 + 3.0)
+    total = sum(s.get("t_ms", 0) for s in steps if s["kind"] in ("stick", "stick2"))
+    assert 2900 <= total <= 3100
+    assert steps[-1]["kind"] == "release_stick"
+
+
+def test_release_gap_between_stick_operations_is_neutral() -> None:
+    """Given: スティックを離して置き、後で押し直す / When: 変換 / Then: 離している間が中立で残ること。"""
+    t0 = 19000.0
+    pts = _circle_points(n=25, r=100.0, period=0.2)
+    evs = _stick_events(t0, pts, release_at=0.31)
+    evs += _stick_events(t0 + 2.0, pts, release_at=0.31)
+    steps = br.build_motion_steps(sorted(evs, key=lambda e: e.at), stop_at=t0 + 3.0)
+
+    def radii(step: dict) -> tuple[float, float] | None:
+        if step["kind"] == "stick2":
+            return step["l_from"][0], step["l_to"][0]
+        if step["kind"] == "stick":
+            return step["from"][0], step["to"][0]
+        return None
+
+    # 離している間は中立（r=0）の区間になる（θ は r=0 では意味を持たない）。
+    neutral = [s for s in steps if (r := radii(s)) is not None and r == (0.0, 0.0)]
+    assert any(s["t_ms"] >= 1000 for s in neutral)
+    # 倒したまま（r>=8）の長い区間が残らない。
+    assert not any(
+        (r := radii(s)) is not None and r[0] >= 8 and r[1] >= 8 and s["t_ms"] >= 500
+        for s in steps
+    )
+
+
+def test_released_side_returns_to_neutral_while_other_side_moves() -> None:
+    """Given: 左だけ先に離し、右は動き続ける / When: 変換 / Then: 左が中立へ戻ること。"""
+    t0 = 20000.0
+    evs = _stick_events(t0, _circle_points(n=25, r=100.0, period=0.2), release_at=0.31)
+    evs += _stick_events_right(
+        t0, _circle_points(n=25, r=100.0, period=1.0), release_at=1.1
+    )
+    steps = br.build_motion_steps(sorted(evs, key=lambda e: e.at), stop_at=t0 + 1.5)
+
+    def l_radii(step: dict) -> tuple[float, float] | None:
+        if step["kind"] == "stick2":
+            return step["l_from"][0], step["l_to"][0]
+        if step["kind"] == "stick":
+            return step["from"][0], step["to"][0]
+        return None
+
+    # 左の解放後、左は中立（r=0）へ戻っている。
+    assert any((r := l_radii(s)) is not None and r == (0.0, 0.0) for s in steps)
+    # 左が倒れたまま長く残る区間がない。
+    assert not any(
+        (r := l_radii(s)) is not None and r[0] >= 8 and r[1] >= 8 and s["t_ms"] >= 500
+        for s in steps
+    )
+
+
+def test_release_ends_stick_clip_at_release_time() -> None:
+    """Given: スティックを離した後にボタン / When: 変換 / Then: クリップが解放時刻で終わり、待ちが実時間になること。"""
+    t0 = 21000.0
+    wall = datetime.datetime.now()
+    evs = _stick_events(t0, _circle_points(n=25, r=100.0, period=0.2), release_at=0.31)
+    evs += [
+        InputLog.InputEvent("PRESS", "button", "Button.A", t0 + 1.0, wall),
+        InputLog.InputEvent(
+            "RELEASE", "button", "Button.A", t0 + 1.1, wall, duration=0.1
+        ),
+    ]
+    steps = br.build_motion_steps(sorted(evs, key=lambda e: e.at), stop_at=t0 + 1.5)
+    kinds = [s["kind"] for s in steps]
+    release = kinds.index("release_stick")
+    gap = steps[release + 1]
+    assert gap["kind"] == "wait"
+    # 最後の CHANGE（0.2秒）から150ms足した0.35秒ではなく、解放の0.31秒から
+    # ボタン（1.0秒）までの0.69秒になる。
+    assert abs(float(gap["wait"]) - 0.69) <= 0.03
+
+
+def test_button_hold_before_stick_keeps_stick_neutral_until_move() -> None:
+    """Given: ボタンを先に押し、遅れてスティックを倒す / When: 変換 / Then: 倒す前の区間が中立であること。"""
+    t0 = 22000.0
+    wall = datetime.datetime.now()
+    evs = [
+        InputLog.InputEvent("PRESS", "button", "Button.ZL", t0, wall),
+        InputLog.InputEvent(
+            "RELEASE", "button", "Button.ZL", t0 + 2.0, wall, duration=2.0
+        ),
+    ]
+    evs += _stick_events(
+        t0 + 1.0, _circle_points(n=25, r=100.0, period=0.2), release_at=0.21
+    )
+    steps = br.build_motion_steps(sorted(evs, key=lambda e: e.at), stop_at=t0 + 2.2)
+
+    def radii(step: dict) -> tuple[float, float] | None:
+        if step["kind"] == "stick2":
+            return step["l_from"][0], step["l_to"][0]
+        if step["kind"] == "stick":
+            return step["from"][0], step["to"][0]
+        return None
+
+    # スティック操作（1.0秒）より前は中立の区間になる。
+    assert any(
+        (r := radii(s)) is not None and r == (0.0, 0.0) and s["t_ms"] >= 500
+        for s in steps
+    )
+    # 操作前から倒したままの区間が残らない。
+    assert not any(
+        (r := radii(s)) is not None and r[0] >= 8 and r[1] >= 8 and s["t_ms"] >= 500
+        for s in steps
+    )
