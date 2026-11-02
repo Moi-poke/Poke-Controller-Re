@@ -1,12 +1,12 @@
 """Commands/Transport.py - 後方互換の再公開口.
 
-実体は core/Transport.py へ移った。既存のコードは
+実体は pokecon/domain/transport/ へ移った。既存のコードは
     from Commands import Transport
     from Commands.Transport import TextSerialTransport
 と書いたまま変えずに使える。新規のコードは core 側から読むこと。
 """
 
-from core.Transport import (
+from pokecon.domain.transport import (
     BITS_PER_BYTE as BITS_PER_BYTE,
     DEFAULT_TRANSPORT as DEFAULT_TRANSPORT,
     LEGACY_ROW as LEGACY_ROW,
@@ -25,7 +25,6 @@ from core.Transport import (
     describe_transports as describe_transports,
     get_transport_info as get_transport_info,
     list_transports as list_transports,
-    load_transport_plugins as load_transport_plugins,
     register_transport as register_transport,
     resolve_transport_name as resolve_transport_name,
     unregister_transport as unregister_transport,

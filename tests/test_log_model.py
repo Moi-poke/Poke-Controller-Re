@@ -1,8 +1,8 @@
-"""core.log_model（ログ1行の型と水準の推定）の検証。Tk を使わない。"""
+"""pokecon.domain.log_model（ログ1行の型と水準の推定）の検証。Tk を使わない。"""
 
 from __future__ import annotations
 
-from core.log_model import (
+from pokecon.domain.log_model import (
     LineClassifier,
     entries_for,
     split_lines,

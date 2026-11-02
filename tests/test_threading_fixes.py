@@ -9,7 +9,7 @@ from typing import Any
 
 def _make_runner() -> Any:
     from fakes import FakeScheduler
-    from services.command_runner import CommandRunner
+    from pokecon.runtime.command_runner import CommandRunner
 
     clock = FakeScheduler()
     runner = CommandRunner(
@@ -25,14 +25,14 @@ def _make_runner() -> Any:
 
 def test_tick_is_20ms() -> None:
     """停止遅延は最大20msにする。"""
-    from core.CommandOperate import OperateMixin
+    from pokecon.domain.CommandOperate import OperateMixin
 
     assert OperateMixin._TICK == 0.02
 
 
 def test_watch_interval_is_200ms() -> None:
     """停止見張りの間隔は200msにする。"""
-    from services import command_runner
+    from pokecon.runtime import command_runner
 
     assert command_runner.STOP_WATCH_MS == 200
 
@@ -40,7 +40,7 @@ def test_watch_interval_is_200ms() -> None:
 def test_stop_waited_updates_every_tick() -> None:
     """待ち時間の表示は通知周期でなく毎回進める。"""
     from fakes import FakeCommand, FakeSer, FakeThread
-    from services.command_runner import STOP_WATCH_MS
+    from pokecon.runtime.command_runner import STOP_WATCH_MS
 
     runner, clock = _make_runner()
     runner.request_start(FakeCommand(thread=FakeThread(alive=True)), FakeSer())
@@ -53,7 +53,7 @@ def test_stop_waited_updates_every_tick() -> None:
 def test_watch_escalates_after_30s() -> None:
     """止まらない作業は30秒で画面を戻し線を塞ぐ。二重駆動にしない。"""
     from fakes import FakeCommand, FakeSer, StuckThread
-    from services import command_runner
+    from pokecon.runtime import command_runner
 
     assert hasattr(command_runner, "STOP_ESCALATE_MS")
     escalate = int(command_runner.STOP_ESCALATE_MS)
@@ -129,7 +129,7 @@ def test_shutdown_fences_before_join_and_slices() -> None:
     """終了時は線を先に塞ぎ短く区切って待つ。閉じた線へ書かない。"""
 
     from fakes import FakeCommand, FakeSer
-    from services.command_runner import CommandRunner
+    from pokecon.runtime.command_runner import CommandRunner
 
     order: list[str] = []
 
@@ -200,7 +200,7 @@ def test_dialog_mainloop_dead_aborts_as_cancel() -> None:
 
         def checkIfAlive(self) -> bool:
             if self._stop_event.is_set():
-                from core.CommandOperate import StopThread
+                from pokecon.domain.CommandOperate import StopThread
 
                 raise StopThread("stop")
             return True
@@ -247,7 +247,7 @@ def test_dialog_mainloop_dead_aborts_as_cancel_dict_shape() -> None:
 
         def checkIfAlive(self) -> bool:
             if self._stop_event.is_set():
-                from core.CommandOperate import StopThread
+                from pokecon.domain.CommandOperate import StopThread
 
                 raise StopThread("stop")
             return True
@@ -308,7 +308,7 @@ def test_cui_dialog_polls_stop(monkeypatch: Any) -> None:
 
     import Commands.CommandDialog as _dlg
     from Commands.CommandDialog import DialogMixin
-    from core.CommandOperate import StopThread
+    from pokecon.domain.CommandOperate import StopThread
 
     class Cmd(DialogMixin):
         def __init__(self) -> None:
@@ -367,7 +367,7 @@ def test_wakesetup_close_drains_and_clears_busy() -> None:
     """閉じるとき溜まりを捨て使用中を戻す。閉じた後の届けは無視する。"""
     import queue as _q
 
-    from WakeSetup import WakeSetup
+    from pokecon.ui.WakeSetup import WakeSetup
 
     obj = WakeSetup.__new__(WakeSetup)
     obj._sender = object()
@@ -443,7 +443,7 @@ def test_stress_stop_during_dialog_many(monkeypatch: Any) -> None:
     import threading as _th
 
     from Commands.CommandDialog import DialogMixin
-    from core.CommandOperate import StopThread
+    from pokecon.domain.CommandOperate import StopThread
 
     class Cmd(DialogMixin):
         def __init__(self) -> None:
@@ -530,7 +530,7 @@ def test_stop_latency_p99_under_tick() -> None:
     """停止要求→抜けのp99は刻み＋余裕に収まる。"""
     import threading as _th
 
-    from core.CommandOperate import OperateMixin, StopThread
+    from pokecon.domain.CommandOperate import OperateMixin, StopThread
 
     class Cmd(OperateMixin):
         def __init__(self) -> None:

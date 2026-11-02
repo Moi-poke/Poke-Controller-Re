@@ -76,7 +76,7 @@ def test_freshly_loaded_workspace_still_matches_its_baseline_after_events_flush(
 @NEEDS_NODE
 def test_stray_statement_block_is_disabled_and_left_out_of_generated_code() -> None:
     """プログラム外に置いたブロックは無効化され、生成コードに出ないこと。"""
-    from core import blockly_validate
+    from pokecon.domain import blockly_validate
 
     # Given: 浮きブロック対策を付けたワークスペースに、外れたpressがある
     res = run_blockly(
@@ -157,7 +157,7 @@ def test_undo_reconnects_a_block_that_was_pulled_out_of_the_program() -> None:
 @NEEDS_NODE
 def test_new_workspace_starts_with_one_program_block_that_saves_cleanly() -> None:
     """新規の初期形はプログラム1個で、そのまま保存検査を通ること。"""
-    from core import blockly_validate
+    from pokecon.domain import blockly_validate
 
     # Given: 新規の初期形
     res = run_blockly(

@@ -13,9 +13,9 @@ from datetime import datetime
 from typing import Any
 
 import pytest
-from core import CommandHistory
-from ui.command_panel import CommandPanelMixin
-from ui.history_panel import HistoryPanelMixin
+from pokecon.domain import CommandHistory
+from pokecon.ui.command_panel import CommandPanelMixin
+from pokecon.ui.history_panel import HistoryPanelMixin
 
 
 class _PyCmd:

@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import ScriptPackTool
+from pokecon.app import ScriptPackTool
 
 
 def make_src(base: Path) -> Path:

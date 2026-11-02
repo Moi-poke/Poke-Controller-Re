@@ -5,9 +5,9 @@ import wave
 import numpy as np
 import pytest
 
-# 計画書は `import audio_dsp` と書くが、実体は SerialController/core/audio_dsp.py
+# 計画書は `import audio_dsp` と書くが、実体は SerialController/pokecon/domain/audio_dsp.py
 # のため既存規約（`from core import X`）で読む。Task 7 のテストも同形。
-from core import audio_dsp
+from pokecon.domain import audio_dsp
 
 
 def sine(freq: float, seconds: float, rate: int = 44100) -> np.ndarray:

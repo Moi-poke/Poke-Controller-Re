@@ -2,7 +2,11 @@
 
 
 def test_bcon_registers_and_opens_gracefully():
-    from core.transport import create_transport, list_transports, resolve_transport_name
+    from pokecon.domain.transport import (
+        create_transport,
+        list_transports,
+        resolve_transport_name,
+    )
 
     assert "switch-bcon" in list_transports()
     assert "pico_uart" not in list_transports()
@@ -15,7 +19,7 @@ def test_bcon_registers_and_opens_gracefully():
 
 
 def test_bcon_send_row_builds_single_binary_frame():
-    from core.transport import create_transport
+    from pokecon.domain.transport import create_transport
 
     made = create_transport("bcon")
     written: list[bytes] = []
@@ -40,7 +44,7 @@ def test_bcon_send_row_builds_single_binary_frame():
 
 def test_bcon_open_closes_previous_port_and_resets_parser(monkeypatch):
     import serial as pyserial
-    from core.transport import create_transport
+    from pokecon.domain.transport import create_transport
 
     made = create_transport("bcon")
 
@@ -82,8 +86,8 @@ def test_bcon_open_closes_previous_port_and_resets_parser(monkeypatch):
 
 
 def test_bcon_get_raw_serial_is_none_and_wakelink_falls_back():
-    from core import WakeLink
-    from core.transport import create_transport
+    from pokecon.domain import WakeLink
+    from pokecon.domain.transport import create_transport
 
     made = create_transport("bcon")
     written: list[bytes] = []
@@ -111,7 +115,7 @@ def test_bcon_get_raw_serial_is_none_and_wakelink_falls_back():
 
 
 def test_bcon_set_hooks_fire_on_send_row():
-    from core.transport import create_transport
+    from pokecon.domain.transport import create_transport
 
     made = create_transport("bcon")
     calls: list[tuple[str, str]] = []
@@ -136,7 +140,7 @@ def test_bcon_set_hooks_fire_on_send_row():
 
 def test_bcon_fallback_port_matches_legacy(monkeypatch):
     import serial as pyserial
-    from core.transport import TextSerialTransport, create_transport
+    from pokecon.domain.transport import TextSerialTransport, create_transport
 
     made = create_transport("bcon")
     seen: dict[str, object] = {}
@@ -164,7 +168,7 @@ def test_bcon_fallback_port_matches_legacy(monkeypatch):
 
 
 def test_bcon_use_len12_sends_len12_frame_while_default_stays_len8():
-    from core.transport import BconTransport, create_transport
+    from pokecon.domain.transport import BconTransport, create_transport
 
     def _send_once(made, row="end"):
         written: list[bytes] = []
@@ -208,8 +212,8 @@ def test_bcon_use_len12_sends_len12_frame_while_default_stays_len8():
 
 
 def test_input_gate_requires_adopted_hello_and_discards_held_pose(monkeypatch):
-    from core.transport.bcon import BconTransport
-    from core.transport.bcon_protocol import PROTO_VER, T_HELLO_ACK, T_STATE
+    from pokecon.domain.transport.bcon import BconTransport
+    from pokecon.domain.transport.bcon_protocol import PROTO_VER, T_HELLO_ACK, T_STATE
 
     class Wire:
         is_open = True

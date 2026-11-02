@@ -29,8 +29,8 @@ from contextlib import contextmanager
 from typing import Any
 
 import pytest
-from core.Camera import CAPTURE_SIZE
 from gdi_present_doubles import PointerEvent, bare_capture_area, stick_drag, stick_press
+from pokecon.domain.Camera import CAPTURE_SIZE
 
 #: The width and height in capture pixels, spelled out because the assertions
 #: below quote the shape of a buffer and the index of a pixel.

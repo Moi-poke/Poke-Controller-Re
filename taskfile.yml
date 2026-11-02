@@ -32,17 +32,22 @@ tasks:
   bounds:
     desc: core/ の境界検査（GUI・アプリ層依存の混入防止）
     cmds:
-      - uv run --frozen python tools/check_core.py
+      - uv run --frozen python tools/gates/check_core.py
 
   userapi:
     desc: 利用者スクリプトの公開API面検査（凍結経路外のimport防止）
     cmds:
-      - uv run --frozen python tools/check_user_api.py
+      - uv run --frozen python tools/gates/check_user_api.py
+
+  api:
+    desc: 公開済み版で約束した名前が残っているかの検査（凍結面の一覧と突き合わせ）
+    cmds:
+      - uv run --frozen python tools/gates/check_api_surface.py
 
   docs:
     desc: 指示書・設定の参照切れ検査（共通エージェント文書 / Claude import / task名 / opencode.json）
     cmds:
-      - uv run --frozen python tools/check_docs.py
+      - uv run --frozen python tools/gates/check_docs.py
 
   test:
     desc: pytestによる単体検査（実機不要分、絞り込みは `task test -- -k <expr> -q`）
@@ -72,6 +77,7 @@ tasks:
       - typecheck
       - bounds
       - userapi
+      - api
       - docs
       - test
 

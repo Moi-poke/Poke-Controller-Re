@@ -1,6 +1,6 @@
 """LiveScheduler の検証。仮想時刻を通すため実スレッドも実線も要らない。"""
 
-from core.serial.live_scheduler import LiveScheduler
+from pokecon.domain.serial.live_scheduler import LiveScheduler
 
 
 def _snap(btn: int = 0, rev: int = 0) -> dict:

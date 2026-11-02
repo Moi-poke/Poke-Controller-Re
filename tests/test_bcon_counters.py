@@ -43,8 +43,8 @@ def test_latest_snapshot_is_coalesced_before_gui_drain() -> None:
 
 def test_serial_summary_renders_memory_without_transport_access() -> None:
     from bcon_ui_support import Widget
-    from core.connection_state import ConnectionSnapshot
-    from ui.serial_panel import SerialPanelMixin
+    from pokecon.domain.connection_state import ConnectionSnapshot
+    from pokecon.ui.serial_panel import SerialPanelMixin
 
     class Serial:
         @property
@@ -87,8 +87,8 @@ def test_serial_summary_renders_memory_without_transport_access() -> None:
 
 def test_proc_call_latency_and_fanout(monkeypatch) -> None:
     """別過程RPCの往復msとrx配達数を残す（H1切り分け用）。"""
-    import core.transport.bcon as _bcon
-    from core.transport import bcon_proc
+    import pokecon.domain.transport.bcon as _bcon
+    from pokecon.domain.transport import bcon_proc
 
     class _FakeWorkerHandle:
         def __init__(self, entry: Any, cmd_q: Any, evt_q: Any, cfg: dict) -> None:
@@ -189,7 +189,7 @@ class _CountingSer:
 
 def test_bcon_sent_counts_only_successful_writes() -> None:
     """失敗writeでsentを増やさない（run-journalのsent差分を過大にしない）。"""
-    from core.transport import create_transport
+    from pokecon.domain.transport import create_transport
 
     made = create_transport("bcon")
     ser = _CountingSer(result=0)
@@ -206,7 +206,7 @@ def test_bcon_sent_counts_only_successful_writes() -> None:
 
 def test_bcon_live_loop_sent_counts_only_successful_writes() -> None:
     """120Hz loopも同じ。書けなかった刻みはsentに載せない。"""
-    from core.transport import create_transport
+    from pokecon.domain.transport import create_transport
 
     made = create_transport("bcon")
     ser = _CountingSer(result=0)
@@ -226,7 +226,7 @@ def test_bcon_live_loop_sent_counts_only_successful_writes() -> None:
 
 def test_bcon_open_resets_rx_seq_gap_accounting(monkeypatch: Any) -> None:
     """開き直しは新しい握手。再開後の最初のSEQを欠番に数えない。"""
-    import core.transport.bcon as _bcon
+    import pokecon.domain.transport.bcon as _bcon
 
     class _FakeSerial:
         is_open = True

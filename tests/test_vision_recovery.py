@@ -8,8 +8,12 @@ from typing import Any
 import cv2
 import numpy as np
 import pytest
-from core.CommandVision import VisionMixin
-from core.recovery import CameraUnavailableError, RecoveryAborted, TemplateImageError
+from pokecon.domain.CommandVision import VisionMixin
+from pokecon.domain.recovery import (
+    CameraUnavailableError,
+    RecoveryAborted,
+    TemplateImageError,
+)
 
 
 class Probe(VisionMixin):

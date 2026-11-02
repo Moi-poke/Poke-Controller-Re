@@ -12,7 +12,7 @@ from typing import Any
 
 import preview_fps_support as support
 import pytest
-from ui import preview_clock
+from pokecon.ui import preview_clock
 
 _PREVIEW_TEST_ID = "test_native_production_60hz_meets_hard_contract"
 
@@ -312,7 +312,7 @@ def test_real_harness_instruments_clock_created_by_start_capture(
     # Given: a CaptureArea lifecycle that creates its clock inside startCapture.
     import tkinter as tk
 
-    import GuiAssets
+    from pokecon.ui import GuiAssets
 
     class FakeVariable:
         def __init__(self, *, master: Any, value: bool) -> None:
@@ -503,9 +503,13 @@ def test_preview_clock_source_pin_matches_repository_precondition() -> None:
     # Given/When: the source set is pinned against the current repository state.
     rows = _source_pin_payload()
     preview_clock = next(
-        row for row in rows if row["path"] == "SerialController/ui/preview_clock.py"
+        row
+        for row in rows
+        if row["path"] == "SerialController/pokecon/ui/preview_clock.py"
     )
-    preview_clock_path = support.REPO_ROOT / "SerialController/ui/preview_clock.py"
+    preview_clock_path = (
+        support.REPO_ROOT / "SerialController/pokecon/ui/preview_clock.py"
+    )
 
     # Then: absence is incomplete before Task 4; a later real file is complete.
     if preview_clock_path.is_file():

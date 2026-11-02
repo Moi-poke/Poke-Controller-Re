@@ -34,8 +34,8 @@ import traceback
 from collections.abc import Callable
 from typing import Any, cast
 
-from core.recovery import RecoveryAdvice
 from loguru import logger
+from pokecon.domain.recovery import RecoveryAdvice
 
 # 作業側→GUI側の委譲待ち行列。作業スレッドはTkを触らず積むだけにし、
 # GUI側がafterで取り出して走らせる（LogPane/WakeSetup式）。root.afterを

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 def test_no_dead_compat_imports() -> None:
     """os / platform / serial を直に束ねない。"""
-    import core.serial.sender as sender_mod
+    import pokecon.domain.serial.sender as sender_mod
 
     assert not hasattr(sender_mod, "os")
     assert not hasattr(sender_mod, "platform")
@@ -17,8 +17,9 @@ def test_no_dead_compat_imports() -> None:
 
 def test_sender_still_works_with_fake() -> None:
     """束ねを外しても姿勢→線の受け渡しは変わらない。"""
-    from core import Sender, Transport
     from fakes import FakeTransport
+    from pokecon.domain import transport as Transport
+    from pokecon.domain.serial import sender as Sender
 
     sender = Sender.Sender(is_show_serial=False, transport=FakeTransport())
     assert sender.openSerial(0, "", 9600) is True

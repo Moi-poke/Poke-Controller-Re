@@ -10,7 +10,8 @@ import math
 import threading
 import time
 
-from core import InputLog, Sender, Transport
+from pokecon.domain import InputLog as InputLog, transport as Transport
+from pokecon.domain.serial import sender as Sender
 
 
 class _FastSer:

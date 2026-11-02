@@ -38,7 +38,7 @@
 - 結果は「完了」（最後まで・「正常終了する」ブロック）／「停止」（編集画面・本体の停止ボタン・Esc のどれでも）／「エラー」。本体と通信できない状態が約6秒続くと、編集画面は表示をやめて知らせる（走っていれば本体側で止める）。別の画面で新しい試し実行が始まった場合も表示をやめる。
 - 試し実行は使用回数・実行履歴に残さない（一覧に無く再実行できないため）。表示名は `[試し] <プログラム名>`。
 - 走らせる前に保存と同じ検査（import の公開面・NAME と do・サブルーチン・テンプレ参照）を通し、目印の引数が素の文字列であることも確かめる（手で書き換えたIDからの差し込みを防ぐ）。走らせる分に画像未選択の画像認識ブロックがあれば送らない。
-- 仕組み：試し実行用の生成では各ブロックの手前に `_pokecon_step(self, '<ブロックID>')` を差す（保存用のコードには入らない）。本体（[`services/blockly_run.py`](../SerialController/services/blockly_run.py)）がその呼び先で「いまどのブロックか」を記録し、区切り・1つ進むはコマンド自身の一時停止で止める。ブロックごとに停止・一時停止の関所（`_gate`）を通すため、待ちを含まない無限ループでも止められる。受け口は `POST /run`・`GET /run/state`・`POST /run/control`（開始・停止は待ち行列でGUIスレッドへ渡す）。
+- 仕組み：試し実行用の生成では各ブロックの手前に `_pokecon_step(self, '<ブロックID>')` を差す（保存用のコードには入らない）。本体（[`pokecon/runtime/blockly_run.py`](../SerialController/pokecon/runtime/blockly_run.py)）がその呼び先で「いまどのブロックか」を記録し、区切り・1つ進むはコマンド自身の一時停止で止める。ブロックごとに停止・一時停止の関所（`_gate`）を通すため、待ちを含まない無限ループでも止められる。受け口は `POST /run`・`GET /run/state`・`POST /run/control`（開始・停止は待ち行列でGUIスレッドへ渡す）。
 - 外部のAIクライアント向けに、`POST /run` は任意の `maxSeconds`（正の有限秒）を受け、期限は開始を受け付けたGUIスレッドで決める。期限を過ぎた自分の試し実行は GUI の見回りが一度だけ止め、結果は「停止」＋`timedOut:true` になる（OS／GUIが固まる場合の保証ではない）。`/run/control` は全操作に正の整数 `runId` を要求し、いまの試し実行と違えば何も変えずに断る。`/run/state` は `capabilities:["boundedTrial","runIdControl"]` を返す。エディタ窓を閉じる経路でも、上限つきの試し実行は止めてから閉じる。上限なし（`maxSeconds` 省略）のブラウザ試行は従来どおり。
 - 本体と繋がっていない（受け口だけ動いている）ときは試し実行できない旨を返す。別のコマンドが本体で走っている間は始められない。
 
@@ -143,7 +143,7 @@
 
 ## 検証
 
-- `task test`（全体）。保存時のimport検査は許可外・未知を異常にし（正本は [`core/user_api_allowlist.py`](../SerialController/core/user_api_allowlist.py)）、配布時の未知は注意に留める。
+- `task test`（全体）。保存時のimport検査は許可外・未知を異常にし（正本は [`pokecon/domain/user_api_allowlist.py`](../SerialController/pokecon/domain/user_api_allowlist.py)）、配布時の未知は注意に留める。
 - Blocklyまわりは `uv run --frozen pytest tests -k blockly -q`（node必須の結合検証は、無ければskip）。`tests/blockly_node.py` が本物のBlockly（描画なし）を node の vm で読み込む補助で、`run_editor()` は editor.html の inline script を最小DOMで起動して操作の流れ（起動・控えの復元・上書き確認・保存前検査）を確かめる。
 - 試し実行は `tests/test_blockly_run.py`（本物のBlocklyで生成→本物のコマンドを偽の線で走らせる）、`tests/test_blockly_run_server.py`（受け口）、`tests/test_blockly_editor_run.py`（画面の流れ）、`tests/test_blockly_controller_input.py`（入力欄・十字キーが線へ出ること）。
 - 見た目・ドラッグ操作は実ブラウザでしか確かめられない。実機（COMポート）での試し実行は未確認。

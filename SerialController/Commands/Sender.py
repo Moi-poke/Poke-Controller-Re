@@ -1,12 +1,12 @@
 """Commands/Sender.py - 後方互換の再公開口.
 
-実体は core/Sender.py へ移った。既存のコードは
+実体は pokecon/domain/serial/sender.py へ移った。既存のコードは
     from Commands import Sender
     from Commands.Sender import Sender
 と書いたまま変えずに使える。新規のコードは core 側から読むこと。
 """
 
-from core.Sender import (
+from pokecon.domain.serial.sender import (
     ARBITRATION_COOLDOWN as ARBITRATION_COOLDOWN,
     ARBITRATION_MODE as ARBITRATION_MODE,
     ARBITRATION_MODES as ARBITRATION_MODES,

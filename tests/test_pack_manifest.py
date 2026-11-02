@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from core.pack_manifest import (
+from pokecon.domain.pack_manifest import (
     load_manifest,
     validate_manifest_data,
     validate_package_layout,
@@ -86,14 +86,14 @@ def test_legacy_root_template_gets_namespace_hint() -> None:
 
 
 def test_entry_segments_reject_hyphen_dir() -> None:
-    from core.pack_manifest import validate_entry_segments
+    from pokecon.domain.pack_manifest import validate_entry_segments
 
     errors = validate_entry_segments("my-pack/MyPack.py")
     assert any("フォルダ名" in e for e in errors)
 
 
 def test_entry_segments_accept_flat_and_ident_dir() -> None:
-    from core.pack_manifest import validate_entry_segments
+    from pokecon.domain.pack_manifest import validate_entry_segments
 
     assert validate_entry_segments("MyPack.py") == []
     assert validate_entry_segments("my_pack/MyPack.py") == []

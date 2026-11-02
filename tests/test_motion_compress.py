@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import math
 
-from core import motion
+from pokecon.domain import motion
 
 
 def _circle(

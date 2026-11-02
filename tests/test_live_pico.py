@@ -8,8 +8,9 @@ legacy の同期送信は test_transport.py で見る。ここでは worker が
 import threading
 import time
 
-from core import Sender, Transport
-from core.Keys import Button
+from pokecon.domain import transport as Transport
+from pokecon.domain.Keys import Button
+from pokecon.domain.serial import sender as Sender
 
 
 class FakeSerial:

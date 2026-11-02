@@ -5,7 +5,7 @@ from __future__ import annotations
 import cv2
 import numpy as np
 import pytest
-from services import blockly_color
+from pokecon.runtime import blockly_color
 
 
 def png_of(img: np.ndarray) -> bytes:

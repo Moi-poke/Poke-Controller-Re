@@ -24,8 +24,12 @@ CONTROLLER_DIR = ROOT / "SerialController"
 if str(CONTROLLER_DIR) not in sys.path:
     sys.path.insert(0, str(CONTROLLER_DIR))
 
-from core import blockly_headless  # noqa: E402
-from services import blockly_author, blockly_save, blockly_templates  # noqa: E402
+from pokecon.domain import blockly_headless  # noqa: E402
+from pokecon.runtime import (  # noqa: E402
+    blockly_author,
+    blockly_save,
+    blockly_templates,
+)
 
 EXIT_OK = 0
 EXIT_CHECK = 1
@@ -744,7 +748,7 @@ def _cmd_render(args: argparse.Namespace) -> int:
 
 def _editor_client(origin: str) -> Any:
     """エディタへ繋ぐ薄いクライアントを作る。重い import をここへ閉じ込める。"""
-    from services.blockly_agent_client import EditorClient
+    from pokecon.runtime.blockly_agent_client import EditorClient
 
     return EditorClient(origin)
 
@@ -852,7 +856,7 @@ def _png_of(img: Any) -> bytes | None:
 def _cmd_frame(args: argparse.Namespace) -> int:
     if Path(args.output).exists():
         return _fail(args, f"既にファイルがあります（上書きしません）: {args.output}")
-    from services import blockly_match
+    from pokecon.runtime import blockly_match
 
     try:
         client = _editor_client(args.server)
@@ -886,7 +890,7 @@ def _cmd_frame(args: argparse.Namespace) -> int:
 
 
 def _cmd_template(args: argparse.Namespace) -> int:
-    from services import blockly_capture, blockly_match
+    from pokecon.runtime import blockly_capture, blockly_match
 
     raw, error = _read_image(args.image, blockly_match)
     if error is not None:
@@ -939,7 +943,7 @@ def _cmd_template(args: argparse.Namespace) -> int:
 
 
 def _cmd_match(args: argparse.Namespace) -> int:
-    from services import blockly_match
+    from pokecon.runtime import blockly_match
 
     try:
         threshold = blockly_match.parse_threshold(args.threshold)
@@ -1006,7 +1010,7 @@ def _cmd_match(args: argparse.Namespace) -> int:
 
 
 def _cmd_color(args: argparse.Namespace) -> int:
-    from services import blockly_color, blockly_match
+    from pokecon.runtime import blockly_color, blockly_match
 
     try:
         ratio_limit = _parse_ratio(args.ratio)

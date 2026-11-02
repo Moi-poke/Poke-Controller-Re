@@ -12,8 +12,8 @@ from pathlib import Path
 from typing import Any
 
 from Commands.Keys import Button
-from KeyConfig import key_to_text, text_to_display
-from Keyboard import SwitchKeyboardController
+from pokecon.runtime.Keyboard import SwitchKeyboardController
+from pokecon.ui.KeyConfig import key_to_text, text_to_display
 
 
 class _Missing:

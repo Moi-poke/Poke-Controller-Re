@@ -44,13 +44,13 @@ MEAN_HZ_SEMANTICS: Final[str] = (
     "adjacent in-window interval count, not the nominal measurement window"
 )
 SOURCE_PIN_PATHS: Final[tuple[str, ...]] = (
-    "SerialController/ui/preview_clock.py",
-    "SerialController/GuiAssets.py",
-    "SerialController/Window.py",
-    "SerialController/core/Camera.py",
-    "SerialController/ui/camera_panel.py",
-    "SerialController/config.py",
-    "SerialController/WindowUtils.py",
+    "SerialController/pokecon/ui/preview_clock.py",
+    "SerialController/pokecon/ui/GuiAssets.py",
+    "SerialController/pokecon/app/Window.py",
+    "SerialController/pokecon/domain/Camera.py",
+    "SerialController/pokecon/ui/camera_panel.py",
+    "SerialController/pokecon/domain/config.py",
+    "SerialController/pokecon/ui/WindowUtils.py",
     "tests/test_preview_clock.py",
     "tests/preview_fps_support.py",
     "tests/test_preview_fps_e2e.py",
@@ -318,8 +318,8 @@ def make_fake_exit_app(
     stop_results: Sequence[Any],
 ) -> tuple[Any, list[str], Any]:
     """Build a real Window exit caller with deterministic external fakes."""
-    from Window import PokeControllerApp
-    from ui import preview_clock
+    from pokecon.app.Window import PokeControllerApp
+    from pokecon.ui import preview_clock
 
     events: list[str] = []
 
@@ -417,7 +417,7 @@ def make_fake_exit_app(
     setattr(app, "_stop_meter", lambda: record("audio_meter_stop"))
     setattr(app, "closingController", lambda: record("controller_closing"))
 
-    import Window as window_module
+    import pokecon.app.Window as window_module
 
     monkeypatch.setattr(
         window_module.tkmsg,
@@ -1315,7 +1315,7 @@ class PresentInstrumentation:
         self._closed = False
         self._dispatch_result_type: Any = None
         try:
-            from ui import preview_clock
+            from pokecon.ui import preview_clock
 
             self._dispatch_result_type = preview_clock.DispatchResult
         except ImportError:
@@ -1522,7 +1522,7 @@ class RealCaptureHarness:
 
     def _install_factory_patch(self) -> None:
         try:
-            from ui import preview_clock
+            from pokecon.ui import preview_clock
         except ImportError:
             return
         self._preview_clock_module = preview_clock
@@ -1577,7 +1577,7 @@ class RealCaptureHarness:
     def start(self) -> None:
         import tkinter as tk
 
-        from GuiAssets import CaptureArea
+        from pokecon.ui.GuiAssets import CaptureArea
 
         self._install_factory_patch()
         self.source = self._make_source()
@@ -2560,9 +2560,9 @@ def _run_teardown_probe(
 
     start_pins = _source_pins()
     try:
-        import Window as window_module
-        from GuiAssets import CaptureArea
-        from ui import preview_clock
+        import pokecon.app.Window as window_module
+        from pokecon.ui import preview_clock
+        from pokecon.ui.GuiAssets import CaptureArea
     except ImportError:
         return _unavailable_teardown_result(config, writer, start_pins)
 
@@ -3661,7 +3661,7 @@ class FakeWin32Api:
 
 
 def build_runtime_for_test(api: FakeWin32Api) -> Any:
-    from ui import preview_clock
+    from pokecon.ui import preview_clock
 
     if api.post_message_results == [False]:
         api.post_message_results[:] = [True, False]
@@ -3674,7 +3674,7 @@ def build_runtime_for_test(api: FakeWin32Api) -> Any:
 
 
 def worker_context_for_test() -> Any:
-    from ui import preview_clock
+    from pokecon.ui import preview_clock
 
     return preview_clock._worker_context_for_test(FakeWin32Api())
 

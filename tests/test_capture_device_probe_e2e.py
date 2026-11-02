@@ -116,7 +116,7 @@ def test_retained_capture_device_artifact_records_the_real_board() -> None:
         "fps": probe_module.REQUESTED_FPS,
     }
     pins = {row["path"]: row for row in artifact["source_pins"]}
-    assert len(pins["SerialController/core/Camera.py"]["sha256"]) == 64
+    assert len(pins["SerialController/pokecon/domain/Camera.py"]["sha256"]) == 64
 
     # Then: and it separates an absent board from a board that misbehaved, so a
     # reader can tell "nothing was attached" from "what was attached ignored

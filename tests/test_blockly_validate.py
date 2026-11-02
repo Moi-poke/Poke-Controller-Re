@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 
-from core import blockly_validate
+from pokecon.domain import blockly_validate
 
 
 def good_code() -> str:

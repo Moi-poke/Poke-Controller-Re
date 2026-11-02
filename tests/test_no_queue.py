@@ -1,7 +1,7 @@
 """Q経路の残存を禁止する。pico-wakeConにQ/Rは無いため、PC側にQ公開面を残さない。"""
 
-from core import CommandOperate
-from core.serial import encoding, sender
+from pokecon.domain import CommandOperate
+from pokecon.domain.serial import encoding, sender
 
 
 def test_queue_surface_removed() -> None:

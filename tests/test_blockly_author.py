@@ -9,8 +9,8 @@ from typing import Any
 import cv2
 import numpy as np
 import pytest
-from core import blockly_headless
-from services import blockly_author
+from pokecon.domain import blockly_headless
+from pokecon.runtime import blockly_author
 
 ROOT = Path(__file__).resolve().parent.parent
 BLOCKLY = ROOT / "SerialController" / "assets" / "blockly"
@@ -804,7 +804,7 @@ def test_check_workspace_rejects_corrupt_template(app_dir: Path) -> None:
 @NEEDS_NODE
 def test_catalog_markdown_lists_fields(app_dir: Path) -> None:
     catalog = blockly_headless.catalog(app_dir)
-    from services import blockly_templates
+    from pokecon.runtime import blockly_templates
 
     text = blockly_author.catalog_markdown(
         catalog.data, blockly_templates.list_image_templates(app_dir)

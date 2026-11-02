@@ -41,7 +41,7 @@ def test_resize_grows_the_real_sdl_client_area() -> None:
     _gated()
     import tkinter as tk
 
-    from core.sdl_surface import SdlSurface
+    from pokecon.domain.sdl_surface import SdlSurface
 
     root = tk.Tk()
     root.geometry("1000x700+80+80")
@@ -69,8 +69,8 @@ def test_a_frame_and_its_overlay_can_be_presented_at_the_new_size() -> None:
     _gated()
     import tkinter as tk
 
-    from core.preview_renderer import OverlayState, StickState
-    from core.sdl_surface import SdlSurface
+    from pokecon.domain.preview_renderer import OverlayState, StickState
+    from pokecon.domain.sdl_surface import SdlSurface
 
     root = tk.Tk()
     root.geometry("1000x700+80+80")

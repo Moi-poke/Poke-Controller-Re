@@ -14,8 +14,8 @@ from typing import Any, Literal
 import numpy as np
 import preview_fps_support as support
 import pytest
-from GuiAssets import CaptureArea
-from ui import preview_clock
+from pokecon.ui import preview_clock
+from pokecon.ui.GuiAssets import CaptureArea
 
 type WakeSource = Literal["timer", "control", "stale_timer", "error"]
 

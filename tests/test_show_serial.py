@@ -8,8 +8,8 @@ Tk の変数は GUI スレッドのもの。worker から読むと、GUI が忙�
 
 import threading
 
-from core import Sender
 from fakes import FakeTransport
+from pokecon.domain.serial import sender as Sender
 
 
 class RecordingVar:

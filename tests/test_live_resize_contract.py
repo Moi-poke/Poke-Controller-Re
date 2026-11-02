@@ -55,7 +55,7 @@ def _sizing(win: Any) -> None:
 def window(
     tk_root: tk.Tk, monkeypatch: pytest.MonkeyPatch
 ) -> Iterator[tuple[tk.Toplevel, tk.Frame]]:
-    from ui import screen_grab
+    from pokecon.ui import screen_grab
 
     monkeypatch.setattr(
         screen_grab,
@@ -117,7 +117,7 @@ def _settle(win: tk.Misc, seconds: float = 0.05) -> None:
 def test_the_content_keeps_its_size_while_the_edge_is_dragged(
     window: tuple[tk.Toplevel, tk.Frame],
 ) -> None:
-    from ui.live_resize import ResizeFreeze
+    from pokecon.ui.live_resize import ResizeFreeze
 
     win, content = window
     freeze = ResizeFreeze(win, content)
@@ -153,7 +153,7 @@ def test_the_content_keeps_its_size_while_the_edge_is_dragged(
 def test_pausing_mid_drag_lays_the_content_out_for_the_current_size(
     window: tuple[tk.Toplevel, tk.Frame],
 ) -> None:
-    from ui.live_resize import PAUSE_MS, ResizeFreeze
+    from pokecon.ui.live_resize import PAUSE_MS, ResizeFreeze
 
     win, content = window
     freeze = ResizeFreeze(win, content)
@@ -184,7 +184,7 @@ def test_pausing_mid_drag_lays_the_content_out_for_the_current_size(
 def test_moving_the_window_without_resizing_leaves_the_layout_alone(
     window: tuple[tk.Toplevel, tk.Frame],
 ) -> None:
-    from ui.live_resize import ResizeFreeze
+    from pokecon.ui.live_resize import ResizeFreeze
 
     win, content = window
     freeze = ResizeFreeze(win, content)
@@ -204,7 +204,7 @@ def test_moving_the_window_without_resizing_leaves_the_layout_alone(
 def test_the_status_bar_order_survives_a_drag(
     window: tuple[tk.Toplevel, tk.Frame],
 ) -> None:
-    from ui.live_resize import ResizeFreeze
+    from pokecon.ui.live_resize import ResizeFreeze
 
     win, content = window
     # Given: 中身の後ろにも部品がある（戻すときに末尾へ回すと順が変わる）。
@@ -231,8 +231,8 @@ def test_closing_the_window_mid_drag_does_not_crash(
     tk_root: tk.Tk,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from ui import screen_grab
-    from ui.live_resize import WATCH_MS, ResizeFreeze
+    from pokecon.ui import screen_grab
+    from pokecon.ui.live_resize import WATCH_MS, ResizeFreeze
 
     # Given: 絵を撮れず、中身を出したまま止めている（落ちたのはこの経路）。
     #        下には状態表示がある（本体と同じ並び）。

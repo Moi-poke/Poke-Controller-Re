@@ -23,7 +23,9 @@ def test_restart_operation_has_service_flags_and_actual_result(
 ) -> None:
     from types import SimpleNamespace
 
-    monkeypatch.setattr("BconSetup.tkmsg.askquestion", lambda *_a, **_k: "yes")
+    monkeypatch.setattr(
+        "pokecon.ui.BconSetup.tkmsg.askquestion", lambda *_a, **_k: "yes"
+    )
     service = Service(opened=True, phase="ready")
     obj = setup(service)
     getattr(obj, handler)()
@@ -35,7 +37,9 @@ def test_restart_operation_has_service_flags_and_actual_result(
 
 
 def test_cancelled_bootsel_never_submits(monkeypatch: Any) -> None:
-    monkeypatch.setattr("BconSetup.tkmsg.askquestion", lambda *_a, **_k: "no")
+    monkeypatch.setattr(
+        "pokecon.ui.BconSetup.tkmsg.askquestion", lambda *_a, **_k: "no"
+    )
     obj = setup(Service(opened=True, phase="ready"))
     obj._on_bootsel()
     assert not obj._service.operations

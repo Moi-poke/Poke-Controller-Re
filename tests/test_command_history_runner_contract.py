@@ -4,9 +4,9 @@ import time
 from datetime import datetime
 from typing import Any
 
-from core import CommandHistory
 from fakes import FakeCommand, FakeScheduler, FakeSer, FakeThread
-from services.command_runner import CommandRunner
+from pokecon.domain import CommandHistory
+from pokecon.runtime.command_runner import CommandRunner
 
 
 def make_runner(

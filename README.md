@@ -56,7 +56,7 @@ Blocklyエディタの機能拡充（詳細は [`docs/BLOCKLY_EDITOR.md`](docs/B
 
 ### ver4.0.0
 主な変更点（詳細は [`docs/V4_CHANGES.md`](docs/V4_CHANGES.md)）
-- 内部構造の大整理（[`services/`](SerialController/services)・[`ui/`](SerialController/ui)・[`core/serial/`](SerialController/core/serial)・[`core/transport/`](SerialController/core/transport) に分割、[`Window.py`](SerialController/Window.py) は組立専用に）
+- 内部構造の大整理（[`pokecon/runtime/`](SerialController/pokecon/runtime)・[`pokecon/ui/`](SerialController/pokecon/ui)・[`pokecon/domain/serial/`](SerialController/pokecon/domain/serial)・[`pokecon/domain/transport/`](SerialController/pokecon/domain/transport) に分割、[`Window.py`](SerialController/Window.py) は組立専用に）
 - Blocklyエディタ・音声対応・シリアルモニタ・スクリプトzip配布・表示フィルタの追加
 - シリアル通信の堅牢化とPico連携（有線／無線）、並列起動、起動高速化
 - Python 3.12以降が必要に（当時 3.12.10 固定）
@@ -66,7 +66,7 @@ Blocklyエディタの機能拡充（詳細は [`docs/BLOCKLY_EDITOR.md`](docs/B
 ### ver3.6.0
 主な変更点
 - 開発基盤の整備（`task` + ruff + mypy、型付け、コード整理）
-- GUI非依存部を [`SerialController/core/`](SerialController/core) へ分離（既存の自作スクリプトはそのまま動きます）
+- GUI非依存部を [`SerialController/pokecon/domain/`](SerialController/pokecon/domain) へ分離（既存の自作スクリプトはそのまま動きます）
 - LINE通知の削除（LINE Notify サービス終了のため。通知はDiscord連携へ）
 - Picoファーム連携（当時はpico-wakeCon。現在のPico 2 WはSwitch-bcon）
 - 複数台の並列起動に対応（ランチャー / `--profile`）

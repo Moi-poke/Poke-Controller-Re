@@ -44,8 +44,8 @@ import numpy as np
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 SERIAL_CONTROLLER = _REPO_ROOT / "SerialController"
-GUI_ASSETS_SOURCE = SERIAL_CONTROLLER / "GuiAssets.py"
-WINDOW_SOURCE = SERIAL_CONTROLLER / "Window.py"
+GUI_ASSETS_SOURCE = SERIAL_CONTROLLER / "pokecon" / "ui" / "GuiAssets.py"
+WINDOW_SOURCE = SERIAL_CONTROLLER / "pokecon" / "app" / "Window.py"
 HARNESS_SOURCE = _REPO_ROOT / "tests" / "preview_fps_support.py"
 
 CAPTURE_AREA = "CaptureArea"
@@ -204,7 +204,7 @@ class RecordingSurface(_Recording):
 
 def _render_result(ok: bool, detail: str) -> Any:
     """A real ``RenderResult``, so the double satisfies the renderer contract."""
-    from core import preview_renderer
+    from pokecon.domain import preview_renderer
 
     return preview_renderer.RenderResult(ok=ok, elapsed_ns=0, detail=detail)
 
@@ -411,7 +411,7 @@ def bare_capture_area(
     * ``_filter_buf`` / ``_correct_buf`` -- the BGR filter/correction work buffers
     * ``_last_frame_seq``   -- the same-seq skip key
     """
-    from GuiAssets import CaptureArea as _CaptureAreaClass
+    from pokecon.ui.GuiAssets import CaptureArea as _CaptureAreaClass
 
     area = _CaptureAreaClass.__new__(_CaptureAreaClass)
     surface = RecordingSurface(client_size=(width, height))
@@ -419,7 +419,7 @@ def bare_capture_area(
     master = RecordingMaster.with_sticks(left_stick, right_stick)
     camera = StubCamera(capture_size=(width, height))
 
-    from core import preview_renderer
+    from pokecon.domain import preview_renderer
 
     defaults = preview_renderer.OverlayState()
     area.master = master

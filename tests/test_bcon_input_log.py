@@ -13,7 +13,7 @@ import time
 
 def test_input_logger_reads_s_rows_like_legacy() -> None:
     """Given: S行と等価のlegacy行 / When: 差分を取る / Then: 同じイベントになること。"""
-    from core import InputLog
+    from pokecon.domain import InputLog
 
     legacy = InputLog.InputLogger(emit=lambda line: None)
     live = InputLog.InputLogger(emit=lambda line: None)
@@ -39,7 +39,7 @@ def test_input_logger_reads_s_rows_like_legacy() -> None:
 
 def test_bcon_notifies_sent_rows_once_and_skips_resends() -> None:
     """Given: bcon線＋聞き手 / When: 送る / Then: 送った行が1回だけ届き再送は削られること。"""
-    from core.transport import create_transport
+    from pokecon.domain.transport import create_transport
 
     made = create_transport("switch-bcon")
     got: list[str] = []
@@ -103,9 +103,9 @@ def test_sender_links_input_log_on_bcon_and_records() -> None:
     """Given: bcon線のSender / When: Aを押して離す / Then: 入力ログに残ること。"""
     import time as _time
 
-    from core import Sender
-    from core.Keys import Button, KeyPress
-    from core.transport import create_transport
+    from pokecon.domain.Keys import Button, KeyPress
+    from pokecon.domain.serial import sender as Sender
+    from pokecon.domain.transport import create_transport
 
     lines: list[str] = []
     transport = create_transport("switch-bcon")
@@ -145,8 +145,8 @@ def test_sender_links_input_log_on_bcon_and_records() -> None:
 
 def test_blockly_recorder_attaches_to_bcon_transports() -> None:
     """Given: bcon/proc線 / When: 記録を付ける / Then: 付けられること。"""
-    from core.transport import create_transport
-    from services import blockly_record
+    from pokecon.domain.transport import create_transport
+    from pokecon.runtime import blockly_record
 
     for name in ("switch-bcon", "switch-bcon-proc"):
         rec = blockly_record.Recorder()

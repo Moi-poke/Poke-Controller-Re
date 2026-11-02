@@ -32,7 +32,7 @@ class _LoopTransport:
 class _Cmd:
     """gyro_play が使う口だけを持つ最小の命令。"""
 
-    from core.CommandOperate import OperateMixin as _Mix
+    from pokecon.domain.CommandOperate import OperateMixin as _Mix
 
     checkIfAlive = _Mix.checkIfAlive
 
@@ -47,7 +47,7 @@ class _Cmd:
 
 
 def _write_track(path: str, offset_us: int = 0) -> None:
-    from core.motion_track import MotionRecorder
+    from pokecon.domain.motion_track import MotionRecorder
 
     with MotionRecorder(path, start_offset_us=offset_us) as rec:
         rec.write((0, 0, 4096, 100, 0, 0))
@@ -89,7 +89,7 @@ def test_gyro_play_missing_file_returns_false(tmp_path) -> None:
 
 
 def test_gyro_play_without_transport_returns_false(tmp_path) -> None:
-    from core.CommandOperate import OperateMixin
+    from pokecon.domain.CommandOperate import OperateMixin
 
     path = str(tmp_path / "take.pgyro")
     _write_track(path)

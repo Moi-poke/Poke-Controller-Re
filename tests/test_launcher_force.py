@@ -6,7 +6,7 @@ import os
 import sys
 from pathlib import Path
 
-import launcher
+from pokecon.app import launcher
 
 
 def test_launch_force_steals_lock(monkeypatch, tmp_path: Path) -> None:

@@ -13,8 +13,8 @@
 ## ジャイロの記録と再生（.pgyro）
 
 実コントローラーの動きを記録し、後から同じ動きを Switch へ送り直せる。UI は
-IMUパネル（`SerialController/ImuPanel.py`）で、記録器・再生器の実体は
-Tk 非依存の [`core/motion_track.py`](../SerialController/core/motion_track.py)。
+IMUパネル（`SerialController/pokecon/ui/ImuPanel.py`）で、記録器・再生器の実体は
+Tk 非依存の [`pokecon/domain/motion_track.py`](../SerialController/pokecon/domain/motion_track.py)。
 
 - **記録**: 入力源（パッドAPI / HID直結）で送出中に「送出値を記録する」を
   有効にすると、停止までのあいだ **Pico へ送る加工後の6値（ax,ay,az,gx,gy,gz）**
@@ -51,13 +51,13 @@ Tk 非依存の [`core/motion_track.py`](../SerialController/core/motion_track.p
   （`[IMU] gyro_bias`）を引き、`watched()` が符号・`gyro_scale`・不感帯を
   掛けた後の値が記録対象。**同じ記録を別の設定で再生しても、記録時の設定で
   送った値が出る**。記録を撮り直すときは設定を固定する。
-- ヘッドレスで試すときは `tools/imu_send.py --record out.pgyro` /
+- ヘッドレスで試すときは `tools/probes/imu_send.py --record out.pgyro` /
   `--play out.pgyro`（`--wave sensor` / `--wave hid` と組み合わせる）。
 
 ## Blockly の記録との連携
 
 Blockly エディタの「● 記録」は、ジャイロ送出中なら送った IMU サンプルも同時に
-残す（`services/blockly_record.py` の聞き手 → `Commands/PythonCommands/blockly_*.pgyro`）。
+残す（`pokecon/runtime/blockly_record.py` の聞き手 → `Commands/PythonCommands/blockly_*.pgyro`）。
 停止時に「ジャイロを再生」ブロックが手順の先頭へ入り、生成コードは
 `self.gyro_play("<パス>")` を呼ぶ。再生は `OperateMixin.gyro_play` が
 `transport.start_imu_loop(..., replace=True)` で開始し、コマンド終了時の

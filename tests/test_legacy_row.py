@@ -7,9 +7,9 @@ encoding.format_legacy_row を通す。ここでは両方へ同じ操作を
 
 import random
 
-from core import Sender
-from core.Keys import Button, Direction, Hat, SendFormat, Stick
 from fakes import FakeTransport
+from pokecon.domain.Keys import Button, Direction, Hat, SendFormat, Stick
+from pokecon.domain.serial import sender as Sender
 
 BUTTONS = [
     Button.Y,

@@ -10,7 +10,7 @@ import math
 
 import pytest
 from Commands.Keys import Button
-from core.pad_layout import (
+from pokecon.domain.pad_layout import (
     AUTO,
     DPAD_NAMES,
     JOYCON_L,

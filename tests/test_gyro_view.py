@@ -8,14 +8,14 @@ import pytest
 
 
 def _make_view(tk_root: Any) -> Any:
-    from GyroView import GyroView
+    from pokecon.ui.GyroView import GyroView
 
     return GyroView(tk_root, rate_range=500)
 
 
 def test_gyro_view_bounded_queue_keeps_latest(tk_root: Any) -> None:
     """Given: 描画されないまま大量push / When: キューを見る / Then: 上限で最新側が残る。"""
-    from GyroView import MAX_QUEUED_SAMPLES
+    from pokecon.ui.GyroView import MAX_QUEUED_SAMPLES
 
     view = _make_view(tk_root)
     try:
@@ -33,7 +33,7 @@ def test_gyro_view_redraws_once_per_tick_not_per_sample(
     tk_root: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Given: 1tickに複数サンプル / When: _tickを回す / Then: 再描画はtickにつき1回。"""
-    from GyroView import MAX_QUEUED_SAMPLES
+    from pokecon.ui.GyroView import MAX_QUEUED_SAMPLES
 
     view = _make_view(tk_root)
     calls: list[int] = []

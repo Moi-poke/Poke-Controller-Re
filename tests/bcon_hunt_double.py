@@ -14,7 +14,7 @@ from __future__ import annotations
 import threading
 import time
 
-from core.transport.bcon_protocol import (
+from pokecon.domain.transport.bcon_protocol import (
     T_HELLO,
     T_HELLO_ACK,
     T_STATUS,

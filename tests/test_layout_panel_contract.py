@@ -20,11 +20,11 @@ from collections.abc import Iterator
 from typing import Any
 
 import pytest
-from core.connection_state import ConnectionSnapshot
-from ui.camera_panel import CameraPanelMixin
-from ui.layout_panel import LayoutPanelMixin
-from ui.pane_layout import PaneArranger
-from ui.scroll_host import ScrollHost
+from pokecon.domain.connection_state import ConnectionSnapshot
+from pokecon.ui.camera_panel import CameraPanelMixin
+from pokecon.ui.layout_panel import LayoutPanelMixin
+from pokecon.ui.pane_layout import PaneArranger
+from pokecon.ui.scroll_host import ScrollHost
 
 _PROFILE = "switch1"
 _COLOR = "#1E88E5"

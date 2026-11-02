@@ -24,8 +24,8 @@ from typing import Any
 
 import numpy as np
 import pytest
-from core.coordinates import fit_rect
-from core.preview_renderer import (
+from pokecon.domain.coordinates import fit_rect
+from pokecon.domain.preview_renderer import (
     BadgeState,
     ImgRectState,
     OverlayState,
@@ -33,7 +33,7 @@ from core.preview_renderer import (
     RenderResult,
     StickState,
 )
-from core.sdl_surface import SdlSurface
+from pokecon.domain.sdl_surface import SdlSurface
 
 CAPTURE = (1280, 720)
 VIEWPORT = (640, 360)

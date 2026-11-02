@@ -17,8 +17,8 @@ from types import ModuleType
 import pytest
 from Commands.Keys import Button
 from Commands.PythonCommandBase import PythonCommand
-from core.CommandLoader import CommandLoader
-from services import macro_save
+from pokecon.domain.CommandLoader import CommandLoader
+from pokecon.runtime import macro_save
 
 _MOD_NAME = "test_macro_reload_execute_mod"
 
@@ -66,7 +66,7 @@ def test_save_reload_execute_roundtrip(
 
     # loader.reload() の経路に載せる。実パスは絶対化すると import 名に
     # ならないため、test_loader_reload と同じく getModuleNames だけ差す。
-    import core.Utility as util
+    import pokecon.domain.Utility as util
 
     cast_mp: typing.Any = monkeypatch
     cast_mp.setattr(util, "getModuleNames", lambda path: [_MOD_NAME])

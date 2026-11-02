@@ -11,9 +11,9 @@ import json
 from typing import Any
 
 from blockly_node import NEEDS_NODE, run_blockly
-from core import Sender
 from fakes import FakeTransport
-from services import blockly_run
+from pokecon.domain.serial import sender as Sender
+from pokecon.runtime import blockly_run
 
 pytestmark = NEEDS_NODE
 

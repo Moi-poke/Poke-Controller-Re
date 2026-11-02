@@ -9,8 +9,8 @@ import pytest
 pytest.importorskip("tkinter")
 
 from fakes import FakeCommand, FakeScheduler, FakeSer  # noqa: E402
-from services.command_runner import CommandRunner  # noqa: E402
-from ui.command_panel import CommandPanelMixin  # noqa: E402
+from pokecon.runtime.command_runner import CommandRunner  # noqa: E402
+from pokecon.ui.command_panel import CommandPanelMixin  # noqa: E402
 
 
 class _Button(dict[str, Any]):

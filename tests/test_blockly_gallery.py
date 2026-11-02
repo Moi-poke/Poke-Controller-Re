@@ -13,7 +13,7 @@ from typing import Any
 
 import pytest
 from blockly_node import BLOCKLY, NEEDS_NODE, run_editor
-from services import blockly_save
+from pokecon.runtime import blockly_save
 
 ROOT = Path(__file__).resolve().parent.parent
 SERIAL = ROOT / "SerialController"
@@ -66,8 +66,7 @@ def test_samples_endpoint_lists_samples_over_http(
     """本物の受け口の GET /samples が一覧を返すこと。"""
     # Given: 同梱の作例を置き場にした本物の受け口
     pytest.importorskip("tkinter")
-    import WindowUtils
-    from ui import blockly_editor
+    from pokecon.ui import WindowUtils, blockly_editor
 
     monkeypatch.setattr(WindowUtils, "APP_DIR", str(SERIAL))
     handler = functools.partial(blockly_editor._Handler)

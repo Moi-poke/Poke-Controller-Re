@@ -10,7 +10,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 import pytest
-from services import blockly_match
+from pokecon.runtime import blockly_match
 
 
 def _frame() -> np.ndarray:

@@ -1,6 +1,6 @@
 """Camera.getStats の検証。機器を開かずに回せる範囲だけ。"""
 
-from core.Camera import Camera
+from pokecon.domain.Camera import Camera
 
 
 def test_stats_initially_zero() -> None:

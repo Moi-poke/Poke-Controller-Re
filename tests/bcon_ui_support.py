@@ -3,10 +3,10 @@
 from dataclasses import replace
 from typing import Any
 
-from BconSetup import BCON_QUEUE_MAX, BconSetup
-from LogPane import DropOldestQueue
-from core.connection_state import ConnectionSnapshot
-from core.ui_inbox import UiInbox
+from pokecon.domain.connection_state import ConnectionSnapshot
+from pokecon.domain.ui_inbox import UiInbox
+from pokecon.ui.BconSetup import BCON_QUEUE_MAX, BconSetup
+from pokecon.ui.LogPane import DropOldestQueue
 
 
 class Widget:

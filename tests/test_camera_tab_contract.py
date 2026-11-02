@@ -16,7 +16,7 @@ from collections.abc import Iterator
 from typing import Any
 
 import pytest
-from ui.camera_panel import CameraPanelMixin
+from pokecon.ui.camera_panel import CameraPanelMixin
 
 
 class _Host(CameraPanelMixin):

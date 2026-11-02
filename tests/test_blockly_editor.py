@@ -14,8 +14,7 @@ import pytest
 
 tkinter = pytest.importorskip("tkinter")
 
-import WindowUtils  # noqa: E402
-from ui import blockly_editor  # noqa: E402
+from pokecon.ui import WindowUtils, blockly_editor  # noqa: E402
 
 
 def make_app(base: Path) -> Path:
@@ -196,7 +195,7 @@ def make_match_frame() -> bytes:
 def test_match_frame_hit(server: str, monkeypatch: pytest.MonkeyPatch) -> None:
     import cv2
     import numpy as np
-    from services import blockly_match
+    from pokecon.runtime import blockly_match
 
     frame = make_match_frame()
     arr = np.frombuffer(frame, dtype=np.uint8)

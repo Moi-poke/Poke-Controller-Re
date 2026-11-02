@@ -9,7 +9,7 @@ import threading
 import time
 from typing import Any
 
-from core.transport.bcon_protocol import (
+from pokecon.domain.transport.bcon_protocol import (
     PROTO_VER,
     RESULT_OK,
     T_HELLO,
@@ -61,7 +61,7 @@ def _make_scripted_ser() -> Any:
 
 
 def _open_transport() -> tuple[Any, Any]:
-    from core.transport import create_transport
+    from pokecon.domain.transport import create_transport
 
     made = create_transport("bcon")
     ser = _make_scripted_ser()

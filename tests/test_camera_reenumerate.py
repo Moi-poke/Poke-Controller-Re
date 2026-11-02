@@ -11,11 +11,11 @@ from __future__ import annotations
 
 from typing import Any
 
+import pokecon.ui.camera_panel as camera_panel
 import pytest
-import ui.camera_panel as camera_panel
-from WindowUtils import deviceKey
-from core.dshow_devices import VideoInputDevice
-from ui.camera_panel import CameraPanelMixin
+from pokecon.domain.dshow_devices import VideoInputDevice
+from pokecon.ui.WindowUtils import deviceKey
+from pokecon.ui.camera_panel import CameraPanelMixin
 
 
 class _Device:

@@ -1,7 +1,7 @@
 """取込期限と非表示・終了のキャンセル。サービスの購読は取込後も維持する。"""
 
-from BconSetup import SAVE_SUCCESS_TEXT, SAVE_TIMEOUT_TEXT
 from bcon_ui_support import Service, setup
+from pokecon.ui.BconSetup import SAVE_SUCCESS_TEXT, SAVE_TIMEOUT_TEXT
 
 
 def test_capture_deadline_requires_saved_player_info() -> None:

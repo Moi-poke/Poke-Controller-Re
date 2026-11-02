@@ -11,7 +11,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 from typing import Any
 
-from ui.audio_panel import AudioPanelMixin
+from pokecon.ui.audio_panel import AudioPanelMixin
 
 
 class Var:

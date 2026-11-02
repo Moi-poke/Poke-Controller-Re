@@ -13,8 +13,8 @@ import pytest
 
 def test_baud_index_to_bps_uses_protocol_table():
     """各indexはBAUD_TABLEの値に一致する（期待値は表から読む）。"""
-    from core.transport import bcon_baud as baud_ui
-    from core.transport.bcon_protocol import BAUD_TABLE
+    from pokecon.domain.transport import bcon_baud as baud_ui
+    from pokecon.domain.transport.bcon_protocol import BAUD_TABLE
 
     # 表の5件すべてが引けること。ハードコードせず表に当てる。
     for index in sorted(BAUD_TABLE.keys()):
@@ -23,8 +23,8 @@ def test_baud_index_to_bps_uses_protocol_table():
 
 def test_baud_default_index_is_table_default():
     """既定indexはDEFAULT_BAUD_INDEX（=3）で1Mbpsを指す。"""
-    from core.transport import bcon_baud as baud_ui
-    from core.transport.bcon_protocol import BAUD_TABLE, DEFAULT_BAUD_INDEX
+    from pokecon.domain.transport import bcon_baud as baud_ui
+    from pokecon.domain.transport.bcon_protocol import BAUD_TABLE, DEFAULT_BAUD_INDEX
 
     assert DEFAULT_BAUD_INDEX == 3
     assert BAUD_TABLE[DEFAULT_BAUD_INDEX] == 1000000
@@ -36,8 +36,8 @@ def test_baud_default_index_is_table_default():
 
 def test_baud_invalid_index_never_sent():
     """範囲外indexは送出せず拒否する（BAUD_SETを投げない）。"""
-    from core.transport import bcon_baud as baud_ui
-    from core.transport.bcon_protocol import BAUD_TABLE
+    from pokecon.domain.transport import bcon_baud as baud_ui
+    from pokecon.domain.transport.bcon_protocol import BAUD_TABLE
 
     for bad in (-1, 5, 99):
         assert bad not in BAUD_TABLE
@@ -50,8 +50,8 @@ def test_baud_invalid_index_never_sent():
 
 def test_baud_adopt_confirm_message():
     """adopt成功時は確定文言（切替完了＋bps入り）を出す。"""
-    from core.transport import bcon_baud as baud_ui
-    from core.transport.bcon_protocol import BAUD_TABLE, DEFAULT_BAUD_INDEX
+    from pokecon.domain.transport import bcon_baud as baud_ui
+    from pokecon.domain.transport.bcon_protocol import BAUD_TABLE, DEFAULT_BAUD_INDEX
 
     bps = BAUD_TABLE[DEFAULT_BAUD_INDEX]
     msg = baud_ui.baud_adopt_message(bps)
@@ -61,8 +61,8 @@ def test_baud_adopt_confirm_message():
 
 def test_baud_revert_display_message():
     """adopt失敗時は復帰文言（新旧bps入り・確定と文面が違う）を出す。"""
-    from core.transport import bcon_baud as baud_ui
-    from core.transport.bcon_protocol import BAUD_TABLE
+    from pokecon.domain.transport import bcon_baud as baud_ui
+    from pokecon.domain.transport.bcon_protocol import BAUD_TABLE
 
     new_bps = BAUD_TABLE[1]
     old_bps = BAUD_TABLE[3]
@@ -76,7 +76,7 @@ def test_baud_revert_display_message():
 
 def test_combo_state_is_editable_only_for_bcon():
     """レガシーは固定、bcon だけ選べる。"""
-    from core.transport import bcon_baud as baud_ui
+    from pokecon.domain.transport import bcon_baud as baud_ui
 
     assert baud_ui.baud_combo_state(True) == "readonly"
     assert baud_ui.baud_combo_state(False) == "disabled"
@@ -84,8 +84,8 @@ def test_combo_state_is_editable_only_for_bcon():
 
 def test_combo_values_switch_between_table_and_legacy():
     """bcon は BAUD_TABLE の表示名、レガシーは渡した候補をそのまま使う。"""
-    from core.transport import bcon_baud as baud_ui
-    from core.transport.bcon_protocol import BAUD_TABLE
+    from pokecon.domain.transport import bcon_baud as baud_ui
+    from pokecon.domain.transport.bcon_protocol import BAUD_TABLE
 
     labels = baud_ui.baud_combo_values(True, [9600, 4800])
     assert labels == [baud_ui.BAUD_DISPLAY_LABELS[i] for i in sorted(BAUD_TABLE)]
@@ -94,8 +94,8 @@ def test_combo_values_switch_between_table_and_legacy():
 
 def test_label_and_index_roundtrip_covers_table():
     """コンボの表示名と index が全段で往復する（選んだ段を取り違えない）。"""
-    from core.transport import bcon_baud as baud_ui
-    from core.transport.bcon_protocol import BAUD_TABLE
+    from pokecon.domain.transport import bcon_baud as baud_ui
+    from pokecon.domain.transport.bcon_protocol import BAUD_TABLE
 
     for index in sorted(BAUD_TABLE):
         label = baud_ui.baud_label_for_index(index)
@@ -116,8 +116,8 @@ class _Var:
 def _baud_host(*, opened=False, phase="disconnected", baud=None, index=3):
     from types import SimpleNamespace
 
-    from core.connection_state import ConnectionSnapshot
-    from ui.serial_panel import SerialPanelMixin
+    from pokecon.domain.connection_state import ConnectionSnapshot
+    from pokecon.ui.serial_panel import SerialPanelMixin
 
     snapshot = ConnectionSnapshot(
         generation=1, phase=phase, transport_name="bcon", opened=opened, baud=baud
@@ -216,7 +216,7 @@ def test_refresh_reselects_only_the_saved_device_when_it_returns(tk_root, monkey
     import tkinter as tk
     from tkinter import ttk
 
-    from ui.serial_panel import SerialPanelMixin
+    from pokecon.ui.serial_panel import SerialPanelMixin
 
     host = _baud_host()
     host.settings.com_port_name = _Var("COM65001")
@@ -238,7 +238,7 @@ def test_refresh_reselects_only_the_saved_device_when_it_returns(tk_root, monkey
         lambda: SerialPanelMixin._refresh_connection_controls(host)
     )
     ports = []
-    monkeypatch.setattr("WindowUtils.listComPorts", lambda: ports)
+    monkeypatch.setattr("pokecon.ui.WindowUtils.listComPorts", lambda: ports)
     try:
         for available, expected in (
             ([("COM65001", "saved")], "COM65001"),

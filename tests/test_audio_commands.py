@@ -2,8 +2,8 @@
 
 import numpy as np
 import pytest
-from core import audio_dsp
-from core.CommandAudio import AudioMixin
+from pokecon.domain import audio_dsp
+from pokecon.domain.CommandAudio import AudioMixin
 
 
 def sine(freq: float, seconds: float, rate: int = 44100) -> np.ndarray:

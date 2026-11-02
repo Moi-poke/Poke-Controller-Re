@@ -28,7 +28,7 @@ from Commands.CommandAudio import AudioMixin
 #   PokeConDialogue も再公開する。既存の設定が
 #       from Commands.PythonCommandBase import PokeConDialogue
 #     と書いていても、そのまま使えるようにするため。
-from Commands.CommandDialog import DialogMixin
+from Commands.CommandDialog import DialogMixin, PokeConDialogue as PokeConDialogue
 
 # 操作APIと待ちの実体は CommandOperate.py にある。
 #   OperateMixin は PythonCommand へ重ねる（press / hold / wait / checkIfAlive）。
@@ -48,20 +48,20 @@ from Commands.CommandOperate import OperateMixin, StopThread
 #     from Commands.PythonCommandBase import clear_template_cache と
 #     書いている場合に、置き場所の違いで動かなくなるのを防ぐため。
 #   実体は1つ（CommandVision 側）なので、キャッシュも1つで一貫する。
-from Commands.CommandVision import VisionMixin
+from Commands.CommandVision import TEMPLATE_PATH as TEMPLATE_PATH, VisionMixin
 from Commands.Keys import KeyPress
-from DiscordNotify import Discord_Notify
+from loguru import logger
+from pokecon.app.DiscordNotify import Discord_Notify
 
 # 回復可能なエラーの分類と、利用者への再試行の案内。利用者スクリプトが
 #   from Commands.PythonCommandBase import RecoverableError
 # と書けるよう、ここから再公開する（実体は core.recovery）。
-from core.recovery import (
+from pokecon.domain.recovery import (
     RecoverableError as RecoverableError,
     RecoveryAborted as RecoveryAborted,
     RecoveryAdvice as RecoveryAdvice,
     classify as classifyRecoverable,
 )
-from loguru import logger
 
 
 def _begin_timer_period() -> None:
@@ -557,7 +557,7 @@ class PythonCommand(CommandBase.Command, OperateMixin, DialogMixin):
         if queue is not None:
             return queue
         try:
-            import LogPane
+            from pokecon.ui import LogPane
         except Exception:
             return None
         return getattr(LogPane, "sub_log_queue", None)
@@ -673,7 +673,7 @@ class PythonCommand(CommandBase.Command, OperateMixin, DialogMixin):
                     continue
 
             if self.keys.ser.openSerial(port, name, baud):
-                from core.procon_color import is_bcon_transport
+                from pokecon.domain.procon_color import is_bcon_transport
 
                 target = getattr(self.keys.ser, "transport", None)
                 if target is not None and is_bcon_transport(target):

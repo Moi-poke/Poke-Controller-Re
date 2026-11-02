@@ -5,10 +5,10 @@ from threading import Event, Lock, Thread
 from typing import Any
 
 import pytest
-from core import Sender
-from core.connection_state import ConnectionSnapshot
-from core.transport.bcon import BconTransport
-from core.transport.bcon_protocol import (
+from pokecon.domain.connection_state import ConnectionSnapshot
+from pokecon.domain.serial.sender import Sender
+from pokecon.domain.transport.bcon import BconTransport
+from pokecon.domain.transport.bcon_protocol import (
     T_BAUD_SET,
     T_HELLO,
     T_HELLO_ACK,
@@ -19,7 +19,7 @@ from core.transport.bcon_protocol import (
     T_STATUS,
     frame_build,
 )
-from services.serial_service import SerialService
+from pokecon.runtime.serial_service import SerialService
 
 
 class ControlledWire:
@@ -74,18 +74,18 @@ def make_service(
         wires.append(wire)
         return wire
 
-    monkeypatch.setattr("core.transport.bcon.serial.Serial", open_wire)
+    monkeypatch.setattr("pokecon.domain.transport.bcon.serial.Serial", open_wire)
     service = SerialService(
         notify_user=lambda text: None, base_dir=".", input_log_emit=None
     )
     if proc:
-        from core.transport.bcon_proc import BconProcTransport
+        from pokecon.domain.transport.bcon_proc import BconProcTransport
         from test_bcon_proc import _fake_spawn
 
         transport: Any = BconProcTransport(_spawn=_fake_spawn)
     else:
         transport = BconTransport()
-    service.sender = Sender.Sender(is_show_serial=False, transport=transport)
+    service.sender = Sender(is_show_serial=False, transport=transport)
     return service, transport, wires
 
 
@@ -163,7 +163,7 @@ def test_open_error_preserves_actual_reason_and_never_claims_ready(
     def unavailable(**kwargs: Any) -> Any:
         raise OSError("USB device unavailable")
 
-    monkeypatch.setattr("core.transport.bcon.serial.Serial", unavailable)
+    monkeypatch.setattr("pokecon.domain.transport.bcon.serial.Serial", unavailable)
     try:
         assert service.connect(0, "test-port", 1000000, False, "") == (False, False)
         snapshot = service.connection_snapshot()

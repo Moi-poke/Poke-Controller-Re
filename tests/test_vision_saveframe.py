@@ -12,7 +12,7 @@ from typing import Any
 
 import cv2
 import numpy as np
-from core.CommandVision import VisionMixin
+from pokecon.domain.CommandVision import VisionMixin
 
 
 class _FakeCam:
@@ -57,7 +57,7 @@ def test_saveframe_default_folder_is_under_base_dir(
     tmp_path: Path, monkeypatch: Any
 ) -> None:
     """Given: folder を省く / When: 保存する / Then: cwd ではなく BASE_DIR の下へ置くこと。"""
-    from core import CommandVision
+    from pokecon.domain import CommandVision
 
     # 実装は BASE_DIR と結ぶ（Utility.ospath は区切りを直すだけなので、
     # そちらを差し替えても実際の解決は検証できない）。

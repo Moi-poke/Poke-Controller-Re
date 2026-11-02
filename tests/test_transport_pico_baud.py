@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from core.transport.text_serial import PicoUartTransport, TextSerialTransport
+from pokecon.domain.transport.text_serial import PicoUartTransport, TextSerialTransport
 
 
 def _patched_open(t: PicoUartTransport) -> dict[str, Any]:

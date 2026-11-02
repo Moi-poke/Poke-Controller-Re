@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import cv2
 import numpy as np
-from services import blockly_capture
+from pokecon.runtime import blockly_capture
 
 
 def _img() -> np.ndarray:

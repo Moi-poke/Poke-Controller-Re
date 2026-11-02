@@ -13,8 +13,8 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-from core.connection_state import ConnectionSnapshot
-from ui.serial_panel import SerialPanelMixin
+from pokecon.domain.connection_state import ConnectionSnapshot
+from pokecon.ui.serial_panel import SerialPanelMixin
 
 
 class _Var:

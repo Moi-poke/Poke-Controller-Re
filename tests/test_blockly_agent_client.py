@@ -15,7 +15,7 @@ from collections.abc import Iterator
 from typing import Any
 
 import pytest
-from services.blockly_agent_client import EditorClient, parse_origin
+from pokecon.runtime.blockly_agent_client import EditorClient, parse_origin
 
 #: `/frame` が返す本物の PNG の先頭（中身は問わない）。
 PNG = b"\x89PNG\r\n\x1a\n" + b"body-of-a-png"

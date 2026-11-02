@@ -15,7 +15,7 @@ from loguru import logger
 
 def test_import_all_modules_continues_on_system_exit(monkeypatch: object) -> None:
     """import 時の sys.exit()（SystemExit）で全体の読み込みを止めない。"""
-    import core.Utility as util
+    import pokecon.domain.Utility as util
 
     good = ModuleType("test_import_good_xyz")
     broken_name = "test_import_bad_xyz"
@@ -44,7 +44,7 @@ def test_import_all_modules_continues_on_system_exit(monkeypatch: object) -> Non
 
 def test_reload_continues_on_system_exit(monkeypatch: object) -> None:
     """reload 中の sys.exit()（SystemExit）でも他の再読み込みを続ける。"""
-    from core.CommandLoader import CommandLoader
+    from pokecon.domain.CommandLoader import CommandLoader
 
     good = ModuleType("test_reload_exit_good_xyz")
     bad = ModuleType("test_reload_exit_bad_xyz")
@@ -56,7 +56,7 @@ def test_reload_continues_on_system_exit(monkeypatch: object) -> None:
     loader = CommandLoader(base_path="dummy", base_class=object)
     loader.modules = [good, bad]
 
-    import core.Utility as util
+    import pokecon.domain.Utility as util
 
     mp.setattr(util, "getModuleNames", lambda path: [good.__name__, bad.__name__])
 
@@ -80,7 +80,7 @@ def test_reload_continues_on_system_exit(monkeypatch: object) -> None:
 
 def test_reload_continues_on_single_failure(monkeypatch: object) -> None:
     """1 つの再読み込みが落ちても例外なく続け、他は再読み込みする。"""
-    from core.CommandLoader import CommandLoader
+    from pokecon.domain.CommandLoader import CommandLoader
 
     good = ModuleType("test_reload_good_xyz")
     bad = ModuleType("test_reload_bad_xyz")
@@ -95,7 +95,7 @@ def test_reload_continues_on_single_failure(monkeypatch: object) -> None:
     loader = CommandLoader(base_path="dummy", base_class=object)
     loader.modules = [good, bad]
 
-    import core.Utility as util
+    import pokecon.domain.Utility as util
 
     cast_mp.setattr(util, "getModuleNames", lambda path: [good.__name__, bad.__name__])
 

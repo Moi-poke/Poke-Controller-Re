@@ -14,8 +14,8 @@ import time
 from typing import Any
 
 import pytest
-from core.ui_inbox import UiInbox
-from ui.serial_panel import SerialPanelMixin
+from pokecon.domain.ui_inbox import UiInbox
+from pokecon.ui.serial_panel import SerialPanelMixin
 
 
 class _Var:
@@ -167,7 +167,7 @@ class _Panel(SerialPanelMixin):
 
 
 def _install_source(monkeypatch: pytest.MonkeyPatch, source: _Source) -> None:
-    import core.pad_source as pad_source
+    import pokecon.domain.pad_source as pad_source
 
     monkeypatch.setattr(pad_source, "PadSource", lambda **kwargs: source)
 

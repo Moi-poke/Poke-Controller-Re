@@ -9,11 +9,11 @@ from pathlib import Path
 
 def test_menubar_view_menu_has_size_presets() -> None:
     """表示メニューに全体サイズの指定と比率固定がある。"""
-    from Menubar import PokeController_Menubar
+    from pokecon.ui.Menubar import PokeController_Menubar
 
     assert hasattr(PokeController_Menubar, "applyWindowSize")
     assert hasattr(PokeController_Menubar, "lockAspect")
-    src = Path("SerialController/Menubar.py").read_text(encoding="utf-8")
+    src = Path("SerialController/pokecon/ui/Menubar.py").read_text(encoding="utf-8")
     assert "表示" in src
     assert "1280x720" in src
     assert "1920x1080" in src
@@ -23,13 +23,15 @@ def test_menubar_view_menu_has_size_presets() -> None:
 
 def test_the_preview_size_combobox_is_gone_from_the_camera_panel() -> None:
     """表示サイズ欄はダイアログへ移し、コンボボックスと確認ダイアログは無い。"""
-    from ui.camera_panel import CameraPanelMixin
+    from pokecon.ui.camera_panel import CameraPanelMixin
 
     assert hasattr(CameraPanelMixin, "applyDisplaySettings")
     assert not hasattr(CameraPanelMixin, "applyWindowSize"), (
         "コンボボックス前提の applyWindowSize が残っている"
     )
-    src = Path("SerialController/ui/camera_panel.py").read_text(encoding="utf-8")
+    src = Path("SerialController/pokecon/ui/camera_panel.py").read_text(
+        encoding="utf-8"
+    )
     assert "show_size_cb" not in src
     assert "show_size_tmp" not in src
     assert "askokcancel" not in src, "拡大縮小でモーダル確認している"
@@ -40,9 +42,11 @@ def test_the_display_settings_dialog_offers_two_modes_and_one_size_picker() -> N
     """ダイアログは表示モード2つと固定サイズ欄だけを持つ。Tkは作らず源を見る。"""
     import ast
 
-    from ui.display_settings import DisplaySettingsDialog
+    from pokecon.ui.display_settings import DisplaySettingsDialog
 
-    src = Path("SerialController/ui/display_settings.py").read_text(encoding="utf-8")
+    src = Path("SerialController/pokecon/ui/display_settings.py").read_text(
+        encoding="utf-8"
+    )
     tree = ast.parse(src)
     modes = [
         node.value
@@ -74,24 +78,26 @@ def test_the_display_settings_dialog_offers_two_modes_and_one_size_picker() -> N
 
 def test_window_moves_the_show_mode_between_the_setting_and_the_panel() -> None:
     """読込・保存の両方で show_mode を設定ファイルへ往復させる（片道だと残る）。"""
-    window = Path("SerialController/Window.py").read_text(encoding="utf-8")
+    window = Path("SerialController/pokecon/app/Window.py").read_text(encoding="utf-8")
     assert "self.show_mode.set(self.settings.show_mode.get())" in window
     assert "self.settings.show_mode.set(self.show_mode.get())" in window
     # 消したコンボボックス経路は残さない
     assert "show_size_cb" not in window
     assert "show_size_tmp" not in window
-    settings = Path("SerialController/Settings.py").read_text(encoding="utf-8")
+    settings = Path("SerialController/pokecon/app/Settings.py").read_text(
+        encoding="utf-8"
+    )
     assert 'self.show_mode = tk.StringVar(value=general.get("show_mode"))' in settings
     assert '"show_mode": self.show_mode.get()' in settings
 
 
 def test_menubar_has_no_wake_setup() -> None:
     """wakeconは非推奨でメニューに出さない。bconは残す。"""
-    from Menubar import PokeController_Menubar
+    from pokecon.ui.Menubar import PokeController_Menubar
 
     assert not hasattr(PokeController_Menubar, "OpenWakeSetup")
     assert hasattr(PokeController_Menubar, "OpenBconSetup")
-    src = Path("SerialController/Menubar.py").read_text(encoding="utf-8")
+    src = Path("SerialController/pokecon/ui/Menubar.py").read_text(encoding="utf-8")
     assert "Switch2 Wake設定" not in src
     assert "WakeSetup" not in src
 
@@ -102,11 +108,15 @@ def test_window_has_minimum_size() -> None:
     中身の要求寸法を下限にすると、複数台を 1 画面に並べられない。見切れは
     ScrollHost が受け持つ（tests/test_scroll_host_contract.py）。
     """
-    from Window import MIN_COMPACT_WIDTH, MIN_WINDOW_WIDTH, PokeControllerApp
+    from pokecon.app.Window import (
+        MIN_COMPACT_WIDTH,
+        MIN_WINDOW_WIDTH,
+        PokeControllerApp,
+    )
 
     assert hasattr(PokeControllerApp, "_apply_content_minsize")
     assert MIN_COMPACT_WIDTH < MIN_WINDOW_WIDTH
-    src = Path("SerialController/Window.py").read_text(encoding="utf-8")
+    src = Path("SerialController/pokecon/app/Window.py").read_text(encoding="utf-8")
     assert ".minsize(" in src
     # 窓全体ではなく、設定タブの欄の中だけをスクロールさせる。
     assert "ScrollHost(self.frame_1)" in src
@@ -123,7 +133,7 @@ def test_window_puts_the_three_areas_on_draggable_panes() -> None:
     行の重みで固定していた頃は大きさを変えられなかった。並べ方と仕切りの
     振る舞いは tests/test_pane_layout_contract.py が実物の Tk で見る。
     """
-    src = Path("SerialController/Window.py").read_text(encoding="utf-8")
+    src = Path("SerialController/pokecon/app/Window.py").read_text(encoding="utf-8")
     assert "PaneArranger(" in src
     for area in (
         '"preview": self.preview_area',
@@ -136,7 +146,7 @@ def test_window_puts_the_three_areas_on_draggable_panes() -> None:
 
 def test_transport_list_has_switch_bcon_without_pico() -> None:
     """Transport候補はswitch-bcon表記でpico_uart無し。旧名も通る。"""
-    from core.transport import list_transports, resolve_transport_name
+    from pokecon.domain.transport import list_transports, resolve_transport_name
 
     assert "switch-bcon" in list_transports()
     assert "switch-bcon-proc" in list_transports()
@@ -146,27 +156,27 @@ def test_transport_list_has_switch_bcon_without_pico() -> None:
 
 def test_setting_tab_change_releases_focus() -> None:
     """タブ切替でフォーカスをタブ枠へ戻す（矢印キー奪取防止）。"""
-    from Window import PokeControllerApp
+    from pokecon.app.Window import PokeControllerApp
 
     assert hasattr(PokeControllerApp, "_unfocus_setting_tab")
-    src = Path("SerialController/Window.py").read_text(encoding="utf-8")
+    src = Path("SerialController/pokecon/app/Window.py").read_text(encoding="utf-8")
     assert "NotebookTabChanged" in src
     assert "focus_set" in src
 
 
 def test_setting_tabs_separate_four_sections() -> None:
     """シリアル/コントローラ/オーディオ/コマンドはタブ分離する。"""
-    import Window
+    from pokecon.app import Window
 
     assert hasattr(Window.PokeControllerApp, "_build_setting_tabs")
-    src = Path("SerialController/Window.py").read_text(encoding="utf-8")
+    src = Path("SerialController/pokecon/app/Window.py").read_text(encoding="utf-8")
     for tab in ("シリアル", "コントローラ", "オーディオ", "コマンド"):
         assert tab in src
     for path, frame in (
-        ("SerialController/ui/serial_panel.py", "tab_serial"),
-        ("SerialController/ui/serial_panel.py", "tab_controller"),
-        ("SerialController/ui/audio_panel.py", "tab_audio"),
-        ("SerialController/ui/command_panel.py", "tab_command"),
+        ("SerialController/pokecon/ui/serial_panel.py", "tab_serial"),
+        ("SerialController/pokecon/ui/serial_panel.py", "tab_controller"),
+        ("SerialController/pokecon/ui/audio_panel.py", "tab_audio"),
+        ("SerialController/pokecon/ui/command_panel.py", "tab_command"),
     ):
         assert frame in Path(path).read_text(encoding="utf-8")
 
@@ -175,10 +185,10 @@ def test_audio_tab_has_no_diagnostic_record_or_latency_buttons() -> None:
     """Test Rec と遅延計測は外した。Monitor と Level で疎通は確かめられ、
     実測値はどこからも使われていなかったため（計測本体は tools 用に core に残す）。
     """
-    from ui.audio_panel import AudioPanelMixin
+    from pokecon.ui.audio_panel import AudioPanelMixin
 
     assert not hasattr(AudioPanelMixin, "recordAudioTest")
     assert not hasattr(AudioPanelMixin, "measureLatency")
-    src = Path("SerialController/ui/audio_panel.py").read_text(encoding="utf-8")
+    src = Path("SerialController/pokecon/ui/audio_panel.py").read_text(encoding="utf-8")
     assert "Test Rec" not in src
     assert "遅延計測" not in src

@@ -15,8 +15,8 @@ from typing import Any
 
 import numpy as np
 import pytest
-from core.Camera import LatestFrame
-from core.preview_pump import PreviewPump
+from pokecon.domain.Camera import LatestFrame
+from pokecon.domain.preview_pump import PreviewPump
 
 
 class _FakeClock:

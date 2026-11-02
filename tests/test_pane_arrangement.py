@@ -8,7 +8,7 @@
 from __future__ import annotations
 
 import pytest
-from core.pane_arrangement import (
+from pokecon.domain.pane_arrangement import (
     ARRANGEMENTS,
     DEFAULT_ARRANGEMENT,
     Leaf,
@@ -125,7 +125,7 @@ def test_unknown_arrangements_fall_back_to_the_default() -> None:
 
 
 def test_sash_ratios_round_trip_through_the_settings_text() -> None:
-    from core.pane_arrangement import format_sash_ratios, parse_sash_ratios
+    from pokecon.domain.pane_arrangement import format_sash_ratios, parse_sash_ratios
 
     ratios = {"H[V[preview,tabs],log]": [0.7], "V[preview,tabs]": [0.55]}
 
@@ -145,7 +145,7 @@ def test_sash_ratios_round_trip_through_the_settings_text() -> None:
     ],
 )
 def test_broken_sash_text_reads_as_no_saved_positions(text: str) -> None:
-    from core.pane_arrangement import parse_sash_ratios
+    from pokecon.domain.pane_arrangement import parse_sash_ratios
 
     # Then: 壊れた値は捨てる（起動を止めず、既定の位置で始める）。
     assert parse_sash_ratios(text) == {}

@@ -10,8 +10,8 @@ import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from core import pack_zip
-from services import script_pack
+from pokecon.domain import pack_zip
+from pokecon.runtime import script_pack
 
 
 def _make_zip_with_dep(base: Path, dep: str = "somelib_xyz_unknown_aaa") -> Path:

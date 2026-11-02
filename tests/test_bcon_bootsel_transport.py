@@ -44,8 +44,8 @@ def _make_scripted_ser(feed_delay: float = 0.001):
 
 
 def test_bootsel_ack_returns_true():
-    from core.transport import create_transport
-    from core.transport.bcon_protocol import (
+    from pokecon.domain.transport import create_transport
+    from pokecon.domain.transport.bcon_protocol import (
         BOOTSEL_MAGIC,
         T_BOOTSEL,
         T_STATUS,
@@ -87,7 +87,7 @@ def test_bootsel_ack_returns_true():
 
 
 def test_bootsel_no_ack_returns_false_without_raise():
-    from core.transport import create_transport
+    from pokecon.domain.transport import create_transport
 
     made = create_transport("bcon")
     ser = _make_scripted_ser()

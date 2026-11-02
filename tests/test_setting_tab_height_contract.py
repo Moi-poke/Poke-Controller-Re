@@ -15,8 +15,8 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 
 import pytest
-from ui.notebook_fit import POLL_MS, SelectedTabHeight
-from ui.scroll_host import ScrollHost
+from pokecon.ui.notebook_fit import POLL_MS, SelectedTabHeight
+from pokecon.ui.scroll_host import ScrollHost
 
 
 @dataclass

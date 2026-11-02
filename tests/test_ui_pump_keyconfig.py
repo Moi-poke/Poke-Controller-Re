@@ -8,7 +8,7 @@ import pytest
 
 tkinter = pytest.importorskip("tkinter")
 
-from KeyConfig import PokeKeycon, _button  # noqa: E402
+from pokecon.ui.KeyConfig import PokeKeycon, _button  # noqa: E402
 
 
 class _FakeKc:

@@ -5,9 +5,9 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from core import pack_zip
-from core.user_api_allowlist import THIRD_PARTY
-from services import script_pack
+from pokecon.domain import pack_zip
+from pokecon.domain.user_api_allowlist import THIRD_PARTY
+from pokecon.runtime import script_pack
 
 
 def _write_entry(base: Path, source: str) -> Path:

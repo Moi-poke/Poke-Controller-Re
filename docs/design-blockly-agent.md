@@ -25,10 +25,10 @@ Poke-Controller では「生 JSON を手書きさせず、小さな宣言的仕�
 
 ## 成果物
 
-1. `SerialController/core/blockly_headless.py`
+1. `SerialController/pokecon/domain/blockly_headless.py`
    - vendored Blockly 資産を node の vm で読み、workspace JSON → Python コード、またはブロックカタログを返す。
    - node が無いときは理由付きで失敗する（アプリ本体の動作には影響しない）。
-2. `SerialController/services/blockly_author.py`
+2. `SerialController/pokecon/runtime/blockly_author.py`
    - コンパクト仕様（下記）→ workspace JSON の決定的 builder。
    - 保存前検査（workspace / dialog vars / template refs / 生成コード）と、`save_blockly` による対保存。
 3. `tools/blockly_agent.py`

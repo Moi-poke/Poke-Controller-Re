@@ -8,7 +8,7 @@ import pytest
 
 
 def test_parse_ready_status() -> None:
-    from core.hidhide import parse_cli_output
+    from pokecon.domain.hidhide import parse_cli_output
 
     out = "\n".join(
         [
@@ -23,7 +23,7 @@ def test_parse_ready_status() -> None:
 
 
 def test_missing_cloak_or_device_is_not_ready() -> None:
-    from core.hidhide import parse_cli_output
+    from pokecon.domain.hidhide import parse_cli_output
 
     out = f'--app-reg "{sys.executable}"'
     status = parse_cli_output(out, (sys.executable,), cli_path="cli.exe")
@@ -43,7 +43,7 @@ def test_missing_cloak_or_device_is_not_ready() -> None:
 
 
 def test_detect_hidhide_uses_runner_and_caches() -> None:
-    import core.hidhide as hh
+    import pokecon.domain.hidhide as hh
 
     hh.clear_cache()
     out = "\n".join(
@@ -70,7 +70,7 @@ def test_detect_hidhide_uses_runner_and_caches() -> None:
 
 
 def test_detect_hidhide_missing_cli() -> None:
-    import core.hidhide as hh
+    import pokecon.domain.hidhide as hh
 
     hh.clear_cache()
     status = hh.detect_hidhide(
@@ -83,7 +83,7 @@ def test_detect_hidhide_missing_cli() -> None:
 
 def test_detect_hidhide_does_not_cache_transient_failure() -> None:
     """CLIが一度失敗しても、次の呼び出しで読み直す（HID欄が消えたままにしない）。"""
-    import core.hidhide as hh
+    import pokecon.domain.hidhide as hh
 
     hh.clear_cache()
     out = "\n".join(
@@ -107,7 +107,7 @@ def test_detect_hidhide_does_not_cache_transient_failure() -> None:
 
 def test_decode_output_falls_back_to_cp932() -> None:
     """CLIがcp932で書いた行を、復号失敗で落とさず読むこと。"""
-    from core.hidhide import _decode_output
+    from pokecon.domain.hidhide import _decode_output
 
     text = '--dev-hide "HID\\VID_057E&PID_2009\\A&0&0000"  // ジャイロ'
     assert _decode_output(text.encode("cp932")).endswith("ジャイロ")
@@ -119,7 +119,7 @@ def test_detect_hidhide_survives_cp932_output(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Given: CLIがcp932を返す / When: 状態を読む / Then: 読取スレッドを落とさず解析すること。"""
-    import core.hidhide as hh
+    import pokecon.domain.hidhide as hh
 
     hh.clear_cache()
     out = "\n".join(

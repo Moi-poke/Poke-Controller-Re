@@ -34,7 +34,7 @@ def _support_module() -> Any:
 
 
 def _readback_type() -> Any:
-    module: Any = importlib.import_module("core.Camera")
+    module: Any = importlib.import_module("pokecon.domain.Camera")
     return module.CaptureDeviceReadback
 
 

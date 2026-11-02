@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from services import blockly_templates
+from pokecon.runtime import blockly_templates
 
 
 def make_app(base: Path) -> Path:

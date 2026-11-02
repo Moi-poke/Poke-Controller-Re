@@ -15,7 +15,7 @@ import pytest
 
 tkinter = pytest.importorskip("tkinter")
 
-from ui import blockly_editor  # noqa: E402
+from pokecon.ui import blockly_editor  # noqa: E402
 
 
 @pytest.fixture()
@@ -70,7 +70,7 @@ def test_list_names_the_install_so_drafts_stay_per_install(
     save_server: tuple[str, Path], monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """一覧は置き場ごとの識別子を返し、ブラウザ内の控えを置き場ごとに分けられること。"""
-    import WindowUtils
+    from pokecon.ui import WindowUtils
 
     host, _ = save_server
     # Given/When: 同じ置き場で2回・別の置き場で1回取る
@@ -145,7 +145,7 @@ def save_server(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> Iterator[tuple[str, Path]]:
     """保存先を一時置き場にした受け口。"""
-    import WindowUtils
+    from pokecon.ui import WindowUtils
 
     app = tmp_path / "app"
     (app / "Commands" / "PythonCommands").mkdir(parents=True)

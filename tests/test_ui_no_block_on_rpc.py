@@ -62,7 +62,7 @@ class _FakeArea:
 
 def _make_inbox() -> Any:
     """GUI スレッドへの受け渡し箱（実物）。"""
-    from core.ui_inbox import UiInbox
+    from pokecon.domain.ui_inbox import UiInbox
 
     return UiInbox()
 
@@ -82,7 +82,7 @@ class _FakeRoot:
 
 
 def _make_service(tmp_path: Any) -> Any:
-    from services.serial_service import SerialService
+    from pokecon.runtime.serial_service import SerialService
 
     service = SerialService(
         notify_user=lambda _m: None,
@@ -94,7 +94,7 @@ def _make_service(tmp_path: Any) -> Any:
 
 
 def _make_log_host(service: Any) -> Any:
-    from ui import log_panel
+    from pokecon.ui import log_panel
 
     host = log_panel.LogPanelMixin.__new__(log_panel.LogPanelMixin)
     host._closing = False  # type: ignore[attr-defined]
@@ -121,8 +121,7 @@ def test_display_text_returns_fast_with_stalled_transport(
     tmp_path: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """表示ポンプが8秒停滞に引きずられないこと。"""
-    import LogPane
-    from ui import log_panel
+    from pokecon.ui import LogPane, log_panel
 
     service = _make_service(tmp_path)
     host = _make_log_host(service)
@@ -152,7 +151,7 @@ def test_display_text_returns_fast_with_stalled_transport(
 
 def test_update_title_returns_fast_with_stalled_transport(tmp_path: Any) -> None:
     """タイトル更新が8秒停滞に引きずられないこと。"""
-    import Window
+    from pokecon.app import Window
 
     service = _make_service(tmp_path)
     host = Window.PokeControllerApp.__new__(Window.PokeControllerApp)
@@ -174,8 +173,8 @@ def test_update_title_returns_fast_with_stalled_transport(tmp_path: Any) -> None
 
 def test_connect_button_only_submits_plain_values() -> None:
     """接続ハンドラが transport や同期 connect を呼ばず即座に戻る。"""
-    from core.connection_state import ConnectionSnapshot
-    from ui.serial_panel import SerialPanelMixin
+    from pokecon.domain.connection_state import ConnectionSnapshot
+    from pokecon.ui.serial_panel import SerialPanelMixin
 
     class Service:
         def __init__(self) -> None:
@@ -222,8 +221,8 @@ def test_connect_button_only_submits_plain_values() -> None:
 
 
 def test_worker_snapshot_callback_only_enqueues() -> None:
-    from core.connection_state import ConnectionSnapshot
-    from ui.serial_panel import SerialPanelMixin
+    from pokecon.domain.connection_state import ConnectionSnapshot
+    from pokecon.ui.serial_panel import SerialPanelMixin
 
     host = SerialPanelMixin.__new__(SerialPanelMixin)
     host.inbox = _make_inbox()
@@ -257,8 +256,8 @@ def test_late_status_notification_renders_failed_service_truth(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """同世代の古い受信通知が失敗後に届いても両画面は最新を表示する。"""
-    from core.connection_state import ConnectionSnapshot
-    from core.transport.bcon_protocol import T_STATUS
+    from pokecon.domain.connection_state import ConnectionSnapshot
+    from pokecon.domain.transport.bcon_protocol import T_STATUS
     from test_bcon_connection_lifecycle import (
         connect_in_thread,
         make_service,
@@ -344,8 +343,8 @@ def test_late_status_notification_renders_failed_service_truth(
 
 
 def test_connection_logs_discard_stale_delivery_and_preserve_history(monkeypatch):
-    from services.serial_service import SerialService
-    from ui.serial_panel import SerialPanelMixin
+    from pokecon.runtime.serial_service import SerialService
+    from pokecon.ui.serial_panel import SerialPanelMixin
 
     raw = []
     rendered = []
@@ -364,7 +363,7 @@ def test_connection_logs_discard_stale_delivery_and_preserve_history(monkeypatch
         if message == "in-flight":
             service.disconnect()
 
-    monkeypatch.setattr("services.serial_service.logger.info", logging_boundary)
+    monkeypatch.setattr("pokecon.runtime.serial_service.logger.info", logging_boundary)
     try:
         service._connection_log(0, "history")
         host.inbox.drain()

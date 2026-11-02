@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import threading
 
-from core.transport import create_transport
-from core.transport.bcon_protocol import T_PING
+from pokecon.domain.transport import create_transport
+from pokecon.domain.transport.bcon_protocol import T_PING
 
 
 class _BlockingFirstSer:

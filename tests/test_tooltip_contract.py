@@ -12,7 +12,7 @@ import tkinter.ttk as ttk
 from collections.abc import Iterator
 
 import pytest
-from ui.tooltip import Tooltip
+from pokecon.ui.tooltip import Tooltip
 
 
 @pytest.fixture
@@ -104,11 +104,11 @@ def test_every_tooltip_target_is_a_widget_the_window_builds() -> None:
     import ast
     from pathlib import Path
 
-    from Window import TOOLTIPS
+    from pokecon.app.Window import TOOLTIPS
 
     sources = [
-        Path("SerialController/Window.py"),
-        *Path("SerialController/ui").glob("*.py"),
+        Path("SerialController/pokecon/app/Window.py"),
+        *Path("SerialController/pokecon/ui").glob("*.py"),
     ]
     built: set[str] = set()
     for path in sources:

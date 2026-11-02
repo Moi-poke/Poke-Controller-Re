@@ -12,8 +12,8 @@ from typing import Any, cast
 
 import numpy as np
 import pytest
-from core import Camera as CamMod
-from core.Camera import Camera, CameraController
+from pokecon.domain import Camera as CamMod
+from pokecon.domain.Camera import Camera, CameraController
 
 
 class _RaisingCapture:

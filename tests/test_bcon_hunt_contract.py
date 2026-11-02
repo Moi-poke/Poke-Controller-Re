@@ -5,11 +5,11 @@ from __future__ import annotations
 import time
 
 from bcon_hunt_double import HUNT_DWELL_S, HuntingPicoSer
-from core.transport.bcon_protocol import T_HELLO, frame_build
+from pokecon.domain.transport.bcon_protocol import T_HELLO, frame_build
 
 
 def _hunt_with(ser: HuntingPicoSer) -> int | None:
-    from core.transport import create_transport
+    from pokecon.domain.transport import create_transport
 
     made = create_transport("bcon")
     made.ser = ser

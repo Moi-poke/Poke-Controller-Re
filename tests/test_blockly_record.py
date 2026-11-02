@@ -20,11 +20,12 @@ import pytest
 pytest.importorskip("tkinter")
 
 from blockly_node import NEEDS_NODE, run_blockly, run_editor  # noqa: E402
-from core import InputLog, Sender  # noqa: E402
-from core.Keys import Button, Direction, Hat, KeyPress  # noqa: E402
 from fakes import FakeTransport  # noqa: E402
-from services import blockly_record  # noqa: E402
-from ui import blockly_editor  # noqa: E402
+from pokecon.domain import InputLog as InputLog  # noqa: E402
+from pokecon.domain.Keys import Button, Direction, Hat, KeyPress  # noqa: E402
+from pokecon.domain.serial import sender as Sender
+from pokecon.runtime import blockly_record  # noqa: E402
+from pokecon.ui import blockly_editor  # noqa: E402
 
 pytestmark = NEEDS_NODE
 
@@ -518,7 +519,7 @@ class _Runner:
 
 def test_server_refuses_trial_while_recording_and_recording_while_trial() -> None:
     """受け口でも、記録中の試し実行・試し実行中の記録を断ること（画面の制限だけに頼らない）。"""
-    from services import blockly_run
+    from pokecon.runtime import blockly_run
 
     transport = FakeTransport()
     host = _FakeHost(transport)
@@ -599,7 +600,7 @@ def test_record_stop_writes_gyro_file_and_returns_metadata(
     tmp_path: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Given: IMU付きの記録 / When: /record/stop / Then: .pgyro を書き、応答に載せること。"""
-    from core.motion_track import MotionPlayer
+    from pokecon.domain.motion_track import MotionPlayer
 
     monkeypatch.setattr(blockly_editor.WindowUtils, "APP_DIR", str(tmp_path))
     transport = _ImuFakeTransport()

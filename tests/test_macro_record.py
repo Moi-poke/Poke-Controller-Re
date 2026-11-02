@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import datetime
 
-from core.InputLog import InputEvent
-from services.macro_recorder import MacroRecorder
+from pokecon.domain.InputLog import InputEvent
+from pokecon.runtime.macro_recorder import MacroRecorder
 
 
 def _wall() -> datetime.datetime:

@@ -2,7 +2,7 @@
 
 import configparser
 
-import config
+from pokecon.domain import config
 
 
 def make_parser() -> configparser.ConfigParser:
@@ -13,7 +13,7 @@ def make_parser() -> configparser.ConfigParser:
 
 def test_preview_filter_defaults_match_core() -> None:
     """[PreviewFilter] の既定は core の正本と一致する。"""
-    from core import preview_filter
+    from pokecon.domain import preview_filter
 
     defaults = config.default_sections()["PreviewFilter"]
     for key, value in preview_filter.DEFAULT_CORRECTION.items():

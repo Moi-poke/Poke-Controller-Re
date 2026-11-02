@@ -6,14 +6,14 @@ import pytest
 
 
 def test_empty_events() -> None:
-    from core.motion_track import resample_to_grid
+    from pokecon.domain.motion_track import resample_to_grid
 
     assert resample_to_grid([]) == (0, [])
 
 
 def test_holds_last_value_between_events() -> None:
     """5ms格子に前値ホールドで並べ、先頭の遅れはoffsetで返す。"""
-    from core.motion_track import resample_to_grid
+    from pokecon.domain.motion_track import resample_to_grid
 
     events = [
         (10.010, (0, 0, 4096, 100, 0, 0)),
@@ -30,7 +30,7 @@ def test_holds_last_value_between_events() -> None:
 
 def test_long_gap_becomes_rest() -> None:
     """前値ホールドの上限を超える空白は静止値で埋める。"""
-    from core.motion_track import REST_SAMPLE, resample_to_grid
+    from pokecon.domain.motion_track import REST_SAMPLE, resample_to_grid
 
     events = [
         (5.000, (0, 0, 4096, 1000, 0, 0)),
@@ -46,7 +46,7 @@ def test_long_gap_becomes_rest() -> None:
 
 
 def test_unsorted_events_are_sorted() -> None:
-    from core.motion_track import resample_to_grid
+    from pokecon.domain.motion_track import resample_to_grid
 
     offset_us, samples = resample_to_grid(
         [(1.010, (0, 0, 4096, 200, 0, 0)), (1.000, (0, 0, 4096, 100, 0, 0))],
@@ -58,7 +58,7 @@ def test_unsorted_events_are_sorted() -> None:
 
 
 def test_too_long_recording_raises() -> None:
-    from core.motion_track import MAX_GRID_SAMPLES, resample_to_grid
+    from pokecon.domain.motion_track import MAX_GRID_SAMPLES, resample_to_grid
 
     period_s = 0.005
     span = MAX_GRID_SAMPLES * period_s
@@ -68,7 +68,7 @@ def test_too_long_recording_raises() -> None:
 
 def test_end_s_extends_track_with_rest() -> None:
     """マクロの終わりまで、最後の角速度を積分しないよう静止で延ばす。"""
-    from core.motion_track import REST_SAMPLE, resample_to_grid
+    from pokecon.domain.motion_track import REST_SAMPLE, resample_to_grid
 
     events = [(2.000, (0, 0, 4096, 1000, 0, 0))]
     _, samples = resample_to_grid(events, origin_s=2.0, end_s=2.5)
@@ -81,7 +81,7 @@ def test_end_s_extends_track_with_rest() -> None:
 
 def test_samples_before_origin_are_trimmed() -> None:
     """起点より前のサンプルは捨て、起点の値は直前のサンプルで始める。"""
-    from core.motion_track import resample_to_grid
+    from pokecon.domain.motion_track import resample_to_grid
 
     events = [
         (1.000, (0, 0, 4096, 100, 0, 0)),

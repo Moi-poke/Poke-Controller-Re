@@ -14,10 +14,10 @@ from typing import Any
 
 import pytest
 from Commands.Keys import Button, Hat
-from core.pad_layout import JOYCON_L, JOYCON_R, SHAPES, layout_shapes
-from ui.controller_dock import ControllerDock
-from ui.controller_pad import ControllerGUI
-from ui.scroll_host import ScrollHost
+from pokecon.domain.pad_layout import JOYCON_L, JOYCON_R, SHAPES, layout_shapes
+from pokecon.ui.controller_dock import ControllerDock
+from pokecon.ui.controller_pad import ControllerGUI
+from pokecon.ui.scroll_host import ScrollHost
 
 
 class _Sender:

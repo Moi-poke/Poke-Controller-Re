@@ -151,4 +151,4 @@ OCR・物体検出ブロックはない。
 - [コンパクト仕様 v1](references/spec.md) / [CLI 契約](references/cli.md) / [画像認識](references/vision.md)
 - [ブロック一覧](references/blocks.md) は生成された参考スナップショット。最新ブロック・テンプレートは対象 clone の `catalog` で確認する。手編集しない。
 - [6 作例](examples/) / [検証範囲](../BLOCKLY_AGENT_VERIFICATION.md) / [人向け GUI 操作](../BLOCKLY_EDITOR.md)
-- 実装: [CLI](../../tools/blockly_agent.py)、[authoring](../../SerialController/services/blockly_author.py)
+- 実装: [CLI](../../tools/blockly_agent.py)、[authoring](../../SerialController/pokecon/runtime/blockly_author.py)

@@ -6,7 +6,7 @@ Tk を作らず、候補の解釈と 2 モードの分岐だけを確かめる�
 
 from __future__ import annotations
 
-from core.display_mode import (
+from pokecon.domain.display_mode import (
     COMPACT_REQUEST_SIZE,
     DEFAULT_LAYOUT,
     DEFAULT_SHOW_MODE,

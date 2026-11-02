@@ -1,6 +1,6 @@
 """WindowUtils.acceptsAudioArg の検証。"""
 
-import WindowUtils
+from pokecon.ui import WindowUtils
 
 
 class NoArg:

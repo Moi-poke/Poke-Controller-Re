@@ -12,8 +12,8 @@ import tkinter.ttk as ttk
 from collections.abc import Iterator
 
 import pytest
-from core.pane_arrangement import arrangement_tree
-from ui.pane_layout import PaneArranger
+from pokecon.domain.pane_arrangement import arrangement_tree
+from pokecon.ui.pane_layout import PaneArranger
 
 
 class _Areas:
@@ -123,7 +123,7 @@ def _luminance(color: str) -> float:
 
 
 def test_dividers_are_thick_and_coloured_enough_to_find(areas: _Areas) -> None:
-    from ui.pane_layout import SASH_COLOR, SASH_THICKNESS, STYLE
+    from pokecon.ui.pane_layout import SASH_COLOR, SASH_THICKNESS, STYLE
 
     areas.apply("log_right")
 

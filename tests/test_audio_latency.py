@@ -1,7 +1,7 @@
 """audio_latency（押下→検知の実測部品）の検証。実機なしで回す。"""
 
 import numpy as np
-from core import audio_latency as AL
+from pokecon.domain import audio_latency as AL
 
 
 def _step(total: int, at: int, level: float = 0.3) -> np.ndarray:

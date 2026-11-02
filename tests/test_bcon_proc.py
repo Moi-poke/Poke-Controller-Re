@@ -10,7 +10,7 @@ import queue
 import threading
 from typing import Any
 
-from core.transport.bcon_protocol import T_BEACON_START as _T_BEACON
+from pokecon.domain.transport.bcon_protocol import T_BEACON_START as _T_BEACON
 
 
 class _FakeWorkerHandle:
@@ -68,8 +68,8 @@ class _FakeSerial:
 
 
 def test_proc_proxy_opens_and_closes_with_fake_worker(monkeypatch):
-    import core.transport.bcon as _bcon
-    from core.transport import bcon_proc
+    import pokecon.domain.transport.bcon as _bcon
+    from pokecon.domain.transport import bcon_proc
 
     monkeypatch.setattr(_bcon.serial, "Serial", _FakeSerial)
     made = bcon_proc.BconProcTransport(_spawn=_fake_spawn)
@@ -120,9 +120,9 @@ def _open_proc_with_scripted_ser(monkeypatch):
     import threading as _threading
     import time as _time
 
-    import core.transport.bcon as _bcon
-    from core.transport import bcon_proc
-    from core.transport.bcon_protocol import (
+    import pokecon.domain.transport.bcon as _bcon
+    from pokecon.domain.transport import bcon_proc
+    from pokecon.domain.transport.bcon_protocol import (
         T_HELLO,
         T_HELLO_ACK,
         T_STATUS,
@@ -213,8 +213,8 @@ def test_proc_session_ops_round_trip(monkeypatch):
 
 
 def test_send_config_public_path(monkeypatch):
-    from core.transport import create_transport
-    from core.transport.bcon_protocol import T_STATUS_REQ
+    from pokecon.domain.transport import create_transport
+    from pokecon.domain.transport.bcon_protocol import T_STATUS_REQ
 
     made = create_transport("switch-bcon")
     ser = _ScriptedSer()
@@ -230,8 +230,8 @@ def test_proc_pump_delivers_on_arrival():
     """到着確認駆動のポンプが即時分配する（タイムアウト待ちしない）。"""
     import time as _time
 
-    from core.transport import create_transport
-    from core.transport.bcon_protocol import T_STATUS, frame_build
+    from pokecon.domain.transport import create_transport
+    from pokecon.domain.transport.bcon_protocol import T_STATUS, frame_build
 
     made = create_transport("switch-bcon")
     ser = _ScriptedSer()
@@ -255,7 +255,7 @@ def test_proc_pump_delivers_on_arrival():
 
 def test_proc_spawn_smoke_and_double_close():
     """本物のspawnで起動・丁寧な失敗・二重closeする。"""
-    from core.transport import bcon_proc
+    from pokecon.domain.transport import bcon_proc
 
     calls: list[int] = []
     real_spawn = bcon_proc._default_spawn
@@ -300,7 +300,7 @@ def test_proc_socket_framing_round_trip_and_eof():
     import socket as _socket
     import time as _time
 
-    from core.transport import bcon_proc
+    from pokecon.domain.transport import bcon_proc
 
     listener = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
     listener.bind(("127.0.0.1", 0))
@@ -331,7 +331,7 @@ def test_proc_send_imu_queues_without_rpc(monkeypatch):
     """IMUは同期RPCを通らず、子が50フレーム書く。統計は親側で数える。"""
     import time as _time
 
-    from core.transport.bcon_protocol import T_IMU_SAMPLE
+    from pokecon.domain.transport.bcon_protocol import T_IMU_SAMPLE
 
     made, sers, stop, worker = _open_proc_with_scripted_ser(monkeypatch)
     calls: list[str] = []
@@ -372,8 +372,8 @@ def test_proc_sockets_enable_tcp_nodelay(monkeypatch):
     """accept側・connect側の両方でTCP_NODELAYを立てる。"""
     import socket as _socket
 
-    import core.transport.bcon_proc as _proc
-    from core.transport import bcon_proc_child
+    import pokecon.domain.transport.bcon_proc as _proc
+    from pokecon.domain.transport import bcon_proc_child
 
     nodelay = (_socket.IPPROTO_TCP, _socket.TCP_NODELAY, 1)
     got_accepted: list[tuple[int, int, int]] = []
@@ -478,7 +478,7 @@ def test_proc_live_loop_and_hooks(monkeypatch):
 
 def test_proc_child_input_hold_and_current_baud(monkeypatch):
     """入力の門は子で判定し、親はフレームごとの RPC を追加しない。"""
-    from core.transport.bcon_protocol import T_STATE
+    from pokecon.domain.transport.bcon_protocol import T_STATE
 
     made, sers, stop, worker = _open_proc_with_scripted_ser(monkeypatch)
     try:

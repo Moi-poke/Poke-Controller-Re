@@ -16,7 +16,7 @@ from typing import Any
 
 import pytest
 from bcon_ui_support import Service
-from ui.collapsible import CollapsibleSection, SectionFrame
+from pokecon.ui.collapsible import CollapsibleSection, SectionFrame
 
 # 取り消せない操作。押し間違えないよう普段の操作と別のまとまりに置く。
 _DESTRUCTIVE = ("_btn_keys", "_btn_bootsel")
@@ -56,7 +56,7 @@ def _title(group: Any) -> str:
 
 @pytest.fixture(params=[True, False], ids=["tab", "window"])
 def bcon(request: Any, tk_root: tk.Tk) -> Iterator[Any]:
-    from BconSetup import BconSetup
+    from pokecon.ui.BconSetup import BconSetup
 
     window = tk.Toplevel(tk_root)
     if request.param:

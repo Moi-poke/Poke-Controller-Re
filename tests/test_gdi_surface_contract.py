@@ -81,7 +81,7 @@ _BADGE_CHARSET = 1  # DEFAULT_CHARSET
 _TRANSPARENT = 1
 
 _ROOT = Path(__file__).resolve().parent.parent
-_CORE = _ROOT / "SerialController" / "core"
+_CORE = _ROOT / "SerialController" / "pokecon" / "domain"
 _RENDERER_SOURCE = "preview_renderer.py"
 _SURFACE_SOURCE = "gdi_surface.py"
 
@@ -94,7 +94,7 @@ _BACKTRACKING_NAMES = frozenset(
 _TRAMPOLINE_FROM_CLOCK = frozenset(
     {"_WNDPROC_TYPE", "_WNDPROC_FACTORY", "_CtypesWin32Api", "preview_clock"}
 )
-# Mirrors tools/check_core.py BANNED_TOP + BANNED_APP for the renderer, plus the
+# Mirrors tools/gates/check_core.py BANNED_TOP + BANNED_APP for the renderer, plus the
 # PIL and ui entry points the brief calls out by name.
 _RENDERER_BANNED_IMPORTS = frozenset(
     {
@@ -928,14 +928,14 @@ class RecordingGdiApi:
 # ---------------------------------------------------------------------------
 def _renderer_module() -> Any:
     """Import ``core/preview_renderer`` at call time so absence is a per-test RED."""
-    import core.preview_renderer as module
+    import pokecon.domain.preview_renderer as module
 
     return module
 
 
 def _surface_module() -> Any:
     """Import ``core/gdi_surface`` at call time so absence is a per-test RED."""
-    import core.gdi_surface as module
+    import pokecon.domain.gdi_surface as module
 
     return module
 
@@ -946,7 +946,7 @@ def _fresh_surface_module() -> Any:
     Reloading resets the module globals, so the once-per-process registration
     assertion starts from a surface that has not registered yet.
     """
-    return importlib.reload(importlib.import_module("core.gdi_surface"))
+    return importlib.reload(importlib.import_module("pokecon.domain.gdi_surface"))
 
 
 # ---------------------------------------------------------------------------
@@ -1345,7 +1345,7 @@ def test_preview_renderer_module_imports_no_tkinter_and_no_app_layer() -> None:
     # Then: no GUI toolkit, no image library, no app-layer or ui import, so the
     # module keeps core/ inside the task bounds gate.
     assert not (imported & _RENDERER_BANNED_IMPORTS)
-    assert not {name for name in imported if name.startswith("ui.")}
+    assert not {name for name in imported if name.startswith("pokecon.ui.")}
 
 
 def test_overlay_coordinates_are_display_pixel_ints_left_to_the_caller() -> None:

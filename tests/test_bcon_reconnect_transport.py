@@ -10,8 +10,12 @@ from test_bcon_bootsel_transport import _make_scripted_ser
 
 def test_reconnect_ack_sends_len0_frame_and_returns_true():
     """T_RECONNECT は LEN0。ACK が来れば True、baud は変えない。"""
-    from core.transport import create_transport
-    from core.transport.bcon_protocol import T_RECONNECT, T_STATUS, frame_build
+    from pokecon.domain.transport import create_transport
+    from pokecon.domain.transport.bcon_protocol import (
+        T_RECONNECT,
+        T_STATUS,
+        frame_build,
+    )
 
     made = create_transport("bcon")
     ser = _make_scripted_ser()
@@ -53,7 +57,7 @@ def test_reconnect_ack_sends_len0_frame_and_returns_true():
 
 def test_reconnect_no_ack_returns_false_without_raise():
     """ACK が来なくても例外を投げず False。再武装は未確認。"""
-    from core.transport import create_transport
+    from pokecon.domain.transport import create_transport
 
     made = create_transport("bcon")
     ser = _make_scripted_ser()
@@ -69,7 +73,7 @@ def test_reconnect_no_ack_returns_false_without_raise():
 
 def test_reconnect_on_closed_transport_returns_false():
     """未オープンなら送らずに False。例外を出さない。"""
-    from core.transport import create_transport
+    from pokecon.domain.transport import create_transport
 
     made = create_transport("bcon")
     assert made.ser is None
@@ -78,7 +82,7 @@ def test_reconnect_on_closed_transport_returns_false():
 
 def test_reconnect_is_a_known_type_with_len_zero():
     """0x3B は未知型に落ちていない（既知型として長さ0で登録されている）。"""
-    from core.transport.bcon_protocol import T_RECONNECT, proto_expected_len
+    from pokecon.domain.transport.bcon_protocol import T_RECONNECT, proto_expected_len
 
     assert T_RECONNECT == 0x3B
     assert proto_expected_len(T_RECONNECT) == 0
@@ -91,8 +95,8 @@ def test_bootsel_resends_until_ack_because_hunt_cannot_lock_on_one_frame():
     (Switch-bcon/src/main.c:274-281)。したがって最初の数回は
     「lock 消費」になり ACK は返らない。
     """
-    from core.transport import create_transport
-    from core.transport.bcon_protocol import T_BOOTSEL, T_STATUS, frame_build
+    from pokecon.domain.transport import create_transport
+    from pokecon.domain.transport.bcon_protocol import T_BOOTSEL, T_STATUS, frame_build
 
     made = create_transport("bcon")
     ser = _make_scripted_ser()
@@ -130,8 +134,8 @@ def test_bootsel_resends_until_ack_because_hunt_cannot_lock_on_one_frame():
 
 def test_send_until_status_gives_up_after_timeout_without_raise():
     """ACK が来ないまま期限に達したら False。例外は投げない。"""
-    from core.transport import create_transport
-    from core.transport.bcon_protocol import T_RECONNECT
+    from pokecon.domain.transport import create_transport
+    from pokecon.domain.transport.bcon_protocol import T_RECONNECT
 
     made = create_transport("bcon")
     ser = _make_scripted_ser()
@@ -154,9 +158,9 @@ def test_proc_transport_exposes_bootsel_and_reconnect_like_the_direct_one():
     request_bootsel / request_reconnect が proc 側に無く、
     BconSetup の getattr が None になって必ず False になっていた。
     """
-    from core.transport import create_transport
-    from core.transport.bcon import BconTransport
-    from core.transport.bcon_proc import _ALLOWED_CALLS, BconProcTransport
+    from pokecon.domain.transport import create_transport
+    from pokecon.domain.transport.bcon import BconTransport
+    from pokecon.domain.transport.bcon_proc import _ALLOWED_CALLS, BconProcTransport
 
     direct = create_transport("bcon")
     proc = create_transport("switch-bcon-proc")

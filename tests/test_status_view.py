@@ -11,9 +11,9 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-from core.connection_state import ConnectionSnapshot
-from core.display_mode import PROFILE_COLORS, normalize_profile_color
-from core.status_view import BADGE_COLORS, hex_to_colorref, status_view
+from pokecon.domain.connection_state import ConnectionSnapshot
+from pokecon.domain.display_mode import PROFILE_COLORS, normalize_profile_color
+from pokecon.domain.status_view import BADGE_COLORS, hex_to_colorref, status_view
 
 # 実行中のコマンド名。既定の「止まっている」とは別の値であることが分かるもの。
 RUNNING_NAME = "自動テスト"
@@ -69,7 +69,7 @@ def test_open_port_without_ready_never_shows_idle(phase: Any) -> None:
 
 
 def test_layout_projects_snapshot_without_querying_transport() -> None:
-    from ui.layout_panel import LayoutPanelMixin
+    from pokecon.ui.layout_panel import LayoutPanelMixin
 
     class Value:
         value = ""
@@ -99,7 +99,7 @@ def test_layout_projects_snapshot_without_querying_transport() -> None:
 def test_bcon_link_state_is_shown_in_the_global_bar_and_marks_stale(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from ui.layout_panel import LayoutPanelMixin
+    from pokecon.ui.layout_panel import LayoutPanelMixin
 
     class Value:
         value = ""
@@ -120,7 +120,7 @@ def test_bcon_link_state_is_shown_in_the_global_bar_and_marks_stale(
         status_device=Value(),
         status_bcon=Value(),
     )
-    monkeypatch.setattr("ui.layout_panel.time.monotonic", lambda: 100.0)
+    monkeypatch.setattr("pokecon.ui.layout_panel.time.monotonic", lambda: 100.0)
     LayoutPanelMixin._publish_status(host)
     assert host.status_bcon.value == "Pico↔Switch: 有線（更新停止）"
 

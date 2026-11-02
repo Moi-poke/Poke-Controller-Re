@@ -64,7 +64,7 @@ TYPO = "gd1"
 
 def _gui_assets() -> Any:
     """Import ``GuiAssets`` at call time so a missing seam is a per-test RED."""
-    import GuiAssets as module
+    import pokecon.ui.GuiAssets as module
 
     return module
 
@@ -81,9 +81,9 @@ def _create(host: Any, renderer: str) -> Any:
 #: GdiSurface`` yields a *second* class object and ``isinstance`` would report
 #: False for a surface that really is the GDI one. The backend's identity is the
 #: contract; which class object this process happens to hold is a fixture leak.
-SDL_BACKEND = "core.sdl_surface.SdlSurface"
-GDI_BACKEND = "core.gdi_surface.GdiSurface"
-PHOTO_BACKEND = "ui.photo_surface.PhotoImageSurface"
+SDL_BACKEND = "pokecon.domain.sdl_surface.SdlSurface"
+GDI_BACKEND = "pokecon.domain.gdi_surface.GdiSurface"
+PHOTO_BACKEND = "pokecon.ui.photo_surface.PhotoImageSurface"
 
 
 def _backend_of(surface: Any) -> str:
@@ -94,7 +94,7 @@ def _backend_of(surface: Any) -> str:
 
 def _gdi_class() -> type[Any]:
     """The real GDI surface, imported lazily so a rename is a per-test RED."""
-    from core.gdi_surface import GdiSurface
+    from pokecon.domain.gdi_surface import GdiSurface
 
     return GdiSurface
 
@@ -402,7 +402,7 @@ def test_non_windows_gdi_maps_to_photo_without_constructing_gdi(
 
 def _forbid_sdl(monkeypatch: pytest.MonkeyPatch) -> None:
     """Make ``SdlSurface()`` raise ``OSError`` exactly like a missing library."""
-    from core import sdl_surface
+    from pokecon.domain import sdl_surface
 
     class _Missing:
         def __init__(self) -> None:

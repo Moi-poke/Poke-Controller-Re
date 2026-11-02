@@ -15,8 +15,8 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-from core.hidhide import HidHideStatus
-from ui.serial_panel import SerialPanelMixin
+from pokecon.domain.hidhide import HidHideStatus
+from pokecon.ui.serial_panel import SerialPanelMixin
 
 
 class _Serial:
@@ -57,7 +57,7 @@ class _Panel(SerialPanelMixin):
 @pytest.fixture(autouse=True)
 def _clear_hidhide_cache() -> Iterator[None]:
     """detect_hidhide の5秒キャッシュをテストごとに捨てる。"""
-    from core import hidhide
+    from pokecon.domain import hidhide
 
     hidhide.clear_cache()
     yield
@@ -65,7 +65,7 @@ def _clear_hidhide_cache() -> Iterator[None]:
 
 
 def _install_status(monkeypatch: pytest.MonkeyPatch, *, ready: bool) -> None:
-    from core import hidhide
+    from pokecon.domain import hidhide
 
     status = HidHideStatus(
         installed=True,

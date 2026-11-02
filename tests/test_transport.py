@@ -4,26 +4,9 @@
 ハード必須の確認（遅延体感・end 時中立）は実機で行う。
 """
 
-from core import Sender, Transport, WakeLink
 from fakes import FakeTransport, NoSerTransport
-
-
-def test_old_paths_alias_new() -> None:
-    """旧位置（core/Transport.py 直下）は新配置の別名である。"""
-    import core.Sender as old_s
-    import core.Transport as old_t
-    import core.serial.sender as new_s
-    import core.transport as new_t
-
-    assert old_t.Transport is new_t.Transport
-    assert old_t.TextSerialTransport is new_t.TextSerialTransport
-    assert old_t.PicoUartTransport is new_t.PicoUartTransport
-    assert old_t.create_transport is new_t.create_transport
-    assert old_t.register_transport is new_t.register_transport
-    assert old_t.resolve_transport_name is new_t.resolve_transport_name
-    assert old_s.Sender is new_s.Sender
-    assert old_s.list_arbitration_modes is new_s.list_arbitration_modes
-    assert old_s.resolve_arbitration_mode is new_s.resolve_arbitration_mode
+from pokecon.domain import WakeLink as WakeLink, transport as Transport
+from pokecon.domain.serial import sender as Sender
 
 
 def test_ui_names_are_classes_not_modules() -> None:
@@ -35,7 +18,7 @@ def test_ui_names_are_classes_not_modules() -> None:
     """
     import inspect
 
-    import ui.command_panel as command_panel
+    import pokecon.ui.command_panel as command_panel
 
     assert inspect.isclass(command_panel.CommandLoader)
 

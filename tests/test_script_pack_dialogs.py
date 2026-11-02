@@ -10,10 +10,10 @@ import pytest
 
 tkinter = pytest.importorskip("tkinter")
 
-import ScriptPackTool  # noqa: E402
-from core import pack_zip  # noqa: E402
-from services import script_pack as _script_pack  # noqa: E402
-from ui import script_pack_dialogs  # noqa: E402
+from pokecon.app import ScriptPackTool  # noqa: E402
+from pokecon.domain import pack_zip  # noqa: E402
+from pokecon.runtime import script_pack as _script_pack  # noqa: E402
+from pokecon.ui import script_pack_dialogs  # noqa: E402
 
 
 def _stub_install_deps(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -165,7 +165,7 @@ def test_overwrite_still_works(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) 
     app.mkdir()
     zip_v1 = _make_zip(tmp_path / "v1", CLEAN_ENTRY, "1.0.0")
     pack_zip.create_pack(tmp_path / "v1" / "src", tmp_path / "v1.zip")
-    from services import script_pack
+    from pokecon.runtime import script_pack
 
     assert script_pack.install_zip(app, zip_v1).status == "installed"
     zip_v2 = _make_zip(tmp_path / "v2", CLEAN_ENTRY, "2.0.0")
@@ -180,7 +180,7 @@ def test_deps_then_overwrite_sequential(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """依存承認のあと上書き確認が出て、両方「はい」で入る。"""
-    from services import script_pack
+    from pokecon.runtime import script_pack
 
     app = tmp_path / "app"
     app.mkdir()

@@ -18,8 +18,8 @@ test_a_passthrough_would_put_red_in_the_blue_slot も落ちる。
 from __future__ import annotations
 
 import pytest
-from core.gdi_surface import _colorref, _dib_channels
-from core.preview_renderer import TK_COLORREF
+from pokecon.domain.gdi_surface import _colorref, _dib_channels
+from pokecon.domain.preview_renderer import TK_COLORREF
 
 #: 各色が指す RGB。テスト対象の実装とは独立した期待値なので、素通しは満たせない。
 _EXPECTED_RGB: dict[str, tuple[int, int, int]] = {

@@ -18,7 +18,7 @@ def _wait_until(pred: Any, timeout: float = 3.0, step: float = 0.01) -> bool:
 
 def _make_runner() -> Any:
     from fakes import FakeScheduler
-    from services.command_runner import CommandRunner
+    from pokecon.runtime.command_runner import CommandRunner
 
     clock = FakeScheduler()
     runner = CommandRunner(
@@ -75,7 +75,7 @@ def _live_fence_ser() -> Any:
 def test_fenced_live_worker_is_restarted_when_the_fence_is_cleared() -> None:
     """Given: live 対応の線を打切りで塞いだ / When: 塞いだ相手の死を確認する / Then: worker を起こし直すこと。"""
     from fakes import FakeCommand, FakeThread, StuckThread
-    from services import command_runner
+    from pokecon.runtime import command_runner
 
     runner, clock = _make_runner()
     ser = _live_fence_ser()
@@ -165,9 +165,9 @@ def test_fenced_live_worker_is_not_restarted_while_closing() -> None:
 
 def test_posture_push_keeps_the_sender_lock() -> None:
     """Given: live 経路の送信器 / When: ボタン・Hat・スティックを申告する / Then: 列への投入が錠の中であること。"""
-    from core.Keys import Button
-    from core.serial.sender import Sender
     from fakes import FakeTransport
+    from pokecon.domain.Keys import Button
+    from pokecon.domain.serial.sender import Sender
 
     sender = Sender(is_show_serial=False, transport=FakeTransport())
     # live 対応の判定だけを差し替える（worker は起こさないので列は誰も吐かない）。
@@ -202,7 +202,7 @@ class _RecordingSer:
 def test_m_counts_skip_a_transport_without_a_raw_serial() -> None:
     """Given: 生シリアルを渡さない方式 / When: M計数を読む / Then: 1バイトも書かず空を返すこと。"""
     from fakes import FakeTransport
-    from services.run_journal import read_m_counts
+    from pokecon.runtime.run_journal import read_m_counts
 
     class RawRefusing(FakeTransport):
         """bcon と同じく生シリアルを渡さない方式。"""
@@ -229,7 +229,7 @@ def test_m_counts_skip_a_transport_without_a_raw_serial() -> None:
 def test_m_counts_still_reads_a_transport_with_a_raw_serial() -> None:
     """Given: 生シリアルを持つ方式 / When: M計数を読む / Then: 従来どおり M を書くこと。"""
     from fakes import FakeTransport
-    from services.run_journal import read_m_counts
+    from pokecon.runtime.run_journal import read_m_counts
 
     class RawGiving(FakeTransport):
         def __init__(self) -> None:
@@ -250,9 +250,9 @@ def test_m_counts_still_reads_a_transport_with_a_raw_serial() -> None:
 
 def test_live_worker_stays_silent_while_the_line_is_closed() -> None:
     """Given: まだ開いていない live 対応の線 / When: worker を回す / Then: 1行も送らないこと。"""
-    from core.Keys import Button
-    from core.serial.sender import Sender
     from fakes import FakeTransport
+    from pokecon.domain.Keys import Button
+    from pokecon.domain.serial.sender import Sender
 
     class ClosedLiveTransport(FakeTransport):
         capability = "BCON_STATE"
@@ -285,8 +285,8 @@ def test_live_worker_stays_silent_while_the_line_is_closed() -> None:
 
 def test_drop_owner_keeps_other_owners_and_clears_the_runaway_command() -> None:
     """Given: コマンド(script)と人の入力(gamepad)が押している / When: script だけ取り下げる / Then: 人の押下が残ること。"""
-    from core.serial.sender import Sender
     from fakes import FakeTransport
+    from pokecon.domain.serial.sender import Sender
 
     sender = Sender(is_show_serial=False, transport=FakeTransport())
     sender.pressButtons([1], source="script")  # 逃げたコマンドの押下
@@ -302,8 +302,8 @@ def test_drop_owner_keeps_other_owners_and_clears_the_runaway_command() -> None:
 
 def test_drop_owner_queues_a_state_without_the_runaway_press() -> None:
     """Given: 逃げたコマンドの押下が残る / When: 送り元を取り下げる / Then: 次の状態にその押下が無いこと。"""
-    from core.serial.sender import Sender
     from fakes import FakeTransport
+    from pokecon.domain.serial.sender import Sender
 
     sender = Sender(is_show_serial=False, transport=FakeTransport())
     sender._liveCapable = lambda *a, **k: True  # type: ignore[method-assign]
@@ -324,8 +324,8 @@ def test_drop_owner_queues_a_state_without_the_runaway_press() -> None:
 
 def test_cross_owner_sticks_do_not_roll_back() -> None:
     """Given: script が左、gamepad が右を申告している / When: script が左を動かす / Then: 右が巻き戻らないこと。"""
-    from core.serial.sender import Sender
     from fakes import FakeTransport
+    from pokecon.domain.serial.sender import Sender
 
     sender = Sender(is_show_serial=False, transport=FakeTransport())
     sender.setStick("L", 100, 100, source="script")
@@ -340,8 +340,8 @@ def test_cross_owner_sticks_do_not_roll_back() -> None:
 
 def test_restore_owner_keeps_saved_stick_coordinates() -> None:
     """Given: script の左スティックを退避した / When: gamepad が右を動かした後に戻す / Then: 退避した左だけが戻ること。"""
-    from core.serial.sender import Sender
     from fakes import FakeTransport
+    from pokecon.domain.serial.sender import Sender
 
     sender = Sender(is_show_serial=False, transport=FakeTransport())
     sender.setStick("L", 100, 100, source="script")
@@ -359,9 +359,9 @@ def test_open_after_slow_close_restarts_live_worker() -> None:
     """Given: 送出で詰まったまま close が join を諦めた線 / When: すぐ開き直す / Then: worker を起こし直すこと。"""
     import threading
 
-    from core import Transport
-    from core.serial.sender import Sender
     from fakes import FakeTransport
+    from pokecon.domain import transport as Transport
+    from pokecon.domain.serial.sender import Sender
 
     class SlowLiveTransport(FakeTransport):
         name = "slowlive"
@@ -419,9 +419,9 @@ def test_open_after_slow_close_restarts_live_worker() -> None:
 
 def test_legacy_close_sends_neutral_and_resets_state() -> None:
     """Given: legacy の線で A を押した / When: 閉じる / Then: 中立の行を送り、押下状態も入力ログも残さないこと。"""
-    from core.Keys import Button
-    from core.serial.sender import Sender
     from fakes import FakeTransport
+    from pokecon.domain.Keys import Button
+    from pokecon.domain.serial.sender import Sender
 
     transport = FakeTransport()
     sender = Sender(is_show_serial=False, transport=transport)

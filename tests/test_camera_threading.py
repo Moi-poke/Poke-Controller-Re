@@ -12,7 +12,7 @@ from typing import Any
 
 import cv2
 import numpy as np
-from core.preview_renderer import ImgRectState, RectState, StickState
+from pokecon.domain.preview_renderer import ImgRectState, RectState, StickState
 
 
 class _RecordingSurface:
@@ -73,8 +73,8 @@ def _make_fake_capture_class(read_sleep: float = 0.2):
 
 def test_reopen_does_not_resurrect_old_thread(monkeypatch: Any) -> None:
     """rapid open→destroy→open x20 → CameraThread は1本だけ、isRunning True。"""
-    from core import Camera as CamMod
-    from core.Camera import Camera
+    from pokecon.domain import Camera as CamMod
+    from pokecon.domain.Camera import Camera
 
     monkeypatch.setattr(cv2, "VideoCapture", _make_fake_capture_class(0.2))
     monkeypatch.setattr(CamMod, "_configure_capture", lambda *a, **k: None)
@@ -105,8 +105,8 @@ def test_reopen_does_not_resurrect_old_thread(monkeypatch: Any) -> None:
 
 def test_open_creates_fresh_stop_event(monkeypatch: Any) -> None:
     """openCamera は共有 Event の clear ではなく新世代を開始する。"""
-    from core import Camera as CamMod
-    from core.Camera import Camera
+    from pokecon.domain import Camera as CamMod
+    from pokecon.domain.Camera import Camera
 
     monkeypatch.setattr(cv2, "VideoCapture", _make_fake_capture_class(0.01))
     monkeypatch.setattr(CamMod, "_configure_capture", lambda *a, **k: None)
@@ -130,7 +130,7 @@ def test_camera_queue_open_creates_fresh_stop_event() -> None:
     """CameraQueue も共有 Event の clear ではなく新世代を開始する。"""
     import multiprocessing as mp
 
-    from core.Camera import CameraQueue
+    from pokecon.domain.Camera import CameraQueue
 
     # 実プロセスを起動せず、_stop_process だけ差し替えて Event の扱いを見る
     q = CameraQueue.__new__(CameraQueue)
@@ -180,12 +180,12 @@ def test_camera_queue_open_creates_fresh_stop_event() -> None:
 
 def test_failure_path_has_floor_sleep(monkeypatch: Any) -> None:
     """ret==False 連続時も wait(0.0) で空転しない。5ms 以上の floor。"""
-    from core import Camera as CamMod
+    from pokecon.domain import Camera as CamMod
 
     assert hasattr(CamMod, "READ_FAILURE_FLOOR_S"), "failure floor 定数がありません"
     assert float(CamMod.READ_FAILURE_FLOOR_S) >= 0.005
 
-    from core.Camera import Camera
+    from pokecon.domain.Camera import Camera
 
     class _FailCap:
         def isOpened(self) -> bool:
@@ -221,7 +221,7 @@ def test_failure_path_has_floor_sleep(monkeypatch: Any) -> None:
 
 def test_failure_wait_uses_floor(monkeypatch: Any) -> None:
     """失敗時の wait 間隔が floor 以上になる。"""
-    from core.Camera import Camera
+    from pokecon.domain.Camera import Camera
 
     waits: list[float] = []
     orig_wait = threading.Event.wait
@@ -243,7 +243,7 @@ def test_failure_wait_uses_floor(monkeypatch: Any) -> None:
         def release(self) -> None:
             return None
 
-    import core.Camera as CamMod
+    import pokecon.domain.Camera as CamMod
 
     monkeypatch.setattr(cv2, "VideoCapture", lambda *a, **k: _FailCap())
     monkeypatch.setattr(CamMod, "_configure_capture", lambda *a, **k: None)
@@ -264,7 +264,7 @@ def test_failure_wait_uses_floor(monkeypatch: Any) -> None:
 
 
 def test_latest_frame_seq_monotonic() -> None:
-    from core.Camera import LatestFrame
+    from pokecon.domain.Camera import LatestFrame
 
     q = LatestFrame()
     assert hasattr(q, "seq"), "LatestFrame.seq がありません"
@@ -282,7 +282,7 @@ def test_latest_frame_seq_monotonic() -> None:
 
 
 def test_latest_frame_keeps_only_the_newest() -> None:
-    from core.Camera import LatestFrame
+    from pokecon.domain.Camera import LatestFrame
 
     lf = LatestFrame()
     first = np.zeros((2, 2, 3), dtype=np.uint8)
@@ -297,8 +297,8 @@ def test_latest_frame_keeps_only_the_newest() -> None:
 
 def test_prepare_src_caches_on_same_seq(monkeypatch: Any) -> None:
     """同じ seq では cvt を繰り返さない。新 frame では再計算する。"""
-    from core.Camera import LatestFrame
-    from core.CommandVision import VisionMixin
+    from pokecon.domain.Camera import LatestFrame
+    from pokecon.domain.CommandVision import VisionMixin
 
     calls = {"cvt": 0}
     orig_cvt = cv2.cvtColor
@@ -342,9 +342,9 @@ def test_prepare_src_caches_on_same_seq(monkeypatch: Any) -> None:
 
 def test_match_cache_skips_redundant_match(monkeypatch: Any) -> None:
     """固定 scene で matchTemplate 呼び出しが減る。新 frame では再実行。"""
-    import core.CommandVision as VisMod
-    from core.Camera import LatestFrame
-    from core.CommandVision import VisionMixin
+    import pokecon.domain.CommandVision as VisMod
+    from pokecon.domain.Camera import LatestFrame
+    from pokecon.domain.CommandVision import VisionMixin
 
     lf = LatestFrame()
     lf.put(np.zeros((16, 16, 3), dtype=np.uint8), time.perf_counter_ns())
@@ -387,7 +387,7 @@ def test_match_cache_skips_redundant_match(monkeypatch: Any) -> None:
 def test_gui_draw_skips_same_seq() -> None:
     """GUI _drawFrame は同じ seq を描き直さない。"""
     import numpy as _np
-    from GuiAssets import CaptureArea
+    from pokecon.ui.GuiAssets import CaptureArea
 
     area = CaptureArea.__new__(CaptureArea)
     area.show_width = 4
@@ -423,8 +423,8 @@ def test_gui_draw_skips_same_seq() -> None:
 
 
 def test_vision_reuses_thread_local_scratch() -> None:
-    from core.Camera import LatestFrame
-    from core.CommandVision import VisionMixin
+    from pokecon.domain.Camera import LatestFrame
+    from pokecon.domain.CommandVision import VisionMixin
 
     lf1 = LatestFrame()
     lf1.put(np.zeros((8, 8, 3), dtype=np.uint8), time.perf_counter_ns())
@@ -466,8 +466,8 @@ def test_vision_reuses_thread_local_scratch() -> None:
 
 def _make_seq_mix(frame_value: int = 0):  # type: ignore[no-untyped-def]
     """seq 付きカメラを持つ VisionMixin を作る。"""
-    from core.Camera import LatestFrame
-    from core.CommandVision import VisionMixin
+    from pokecon.domain.Camera import LatestFrame
+    from pokecon.domain.CommandVision import VisionMixin
 
     lf = LatestFrame()
     lf.put(np.full((8, 8, 3), frame_value, dtype=np.uint8), time.perf_counter_ns())
@@ -539,7 +539,7 @@ def test_vision_borrow_returns_alias_and_retain_copies() -> None:
 
 def test_release_later_joins_even_if_camera_none() -> None:
     """camera None でも渡された thread を join する（放置しない）。"""
-    from core.Camera import Camera
+    from pokecon.domain.Camera import Camera
 
     cam = Camera(fps=30)
     joined: list[str] = []
@@ -622,8 +622,8 @@ def test_reopened_camera_does_not_publish_old_generation_frame(
     monkeypatch: Any,
 ) -> None:
     """旧 read が新世代の開始後に戻っても、そのフレームを公開しない。"""
-    from core import Camera as CamMod
-    from core.Camera import Camera
+    from pokecon.domain import Camera as CamMod
+    from pokecon.domain.Camera import Camera
 
     fake_cap, caps = _make_gated_capture_class()
     monkeypatch.setattr(cv2, "VideoCapture", fake_cap)
@@ -671,8 +671,8 @@ def test_open_refuses_while_deferred_release_pending(
     monkeypatch: Any, capsys: Any
 ) -> None:
     """解放待ちの間に開き直すと、同じデバイスを二重に開かない。"""
-    from core import Camera as CamMod
-    from core.Camera import Camera
+    from pokecon.domain import Camera as CamMod
+    from pokecon.domain.Camera import Camera
 
     fake_cap, caps = _make_gated_capture_class()
     monkeypatch.setattr(cv2, "VideoCapture", fake_cap)
@@ -706,8 +706,8 @@ def test_open_refuses_while_deferred_release_pending(
 
 def test_open_clears_queue_under_generation_lock(monkeypatch: Any) -> None:
     """clear は世代 bump と同じ錠の中で行う（旧 put を clear 後に残さない）。"""
-    from core import Camera as CamMod
-    from core.Camera import Camera
+    from pokecon.domain import Camera as CamMod
+    from pokecon.domain.Camera import Camera
 
     fake_cap, caps = _make_gated_capture_class()
     monkeypatch.setattr(cv2, "VideoCapture", fake_cap)
@@ -739,8 +739,8 @@ def test_deferred_release_failure_sets_release_failed(
     monkeypatch: Any, capsys: Any
 ) -> None:
     """裏の release() が投げても待ち役を落とさず、状態と GUI に残す。"""
-    from core import Camera as CamMod
-    from core.Camera import Camera
+    from pokecon.domain import Camera as CamMod
+    from pokecon.domain.Camera import Camera
 
     fake_cap, caps = _make_gated_capture_class(release_raises=True)
     monkeypatch.setattr(cv2, "VideoCapture", fake_cap)

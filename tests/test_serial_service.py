@@ -3,9 +3,10 @@
 import os
 import threading
 
-from core import Sender, Transport
 from fakes import CannedMonTransport, FakeTransport
-from services.serial_service import SenderSpec, SerialService
+from pokecon.domain import transport as Transport
+from pokecon.domain.serial import sender as Sender
+from pokecon.runtime.serial_service import SenderSpec, SerialService
 
 
 def make_service() -> tuple[SerialService, list[str]]:
@@ -147,8 +148,8 @@ def test_connect_bcon_runs_hello_automatically(monkeypatch) -> None:
     """ACK 前に入力が流れず、live 開始まで済んだ ready を待つ。"""
     import time
 
-    from core.transport.bcon import BconTransport
-    from core.transport.bcon_protocol import (
+    from pokecon.domain.transport.bcon import BconTransport
+    from pokecon.domain.transport.bcon_protocol import (
         T_HELLO,
         T_HELLO_ACK,
         T_STATE,
@@ -194,7 +195,9 @@ def test_connect_bcon_runs_hello_automatically(monkeypatch) -> None:
             self.is_open = False
 
     wire = Wire()
-    monkeypatch.setattr("core.transport.bcon.serial.Serial", lambda **kwargs: wire)
+    monkeypatch.setattr(
+        "pokecon.domain.transport.bcon.serial.Serial", lambda **kwargs: wire
+    )
     service, _ = make_service()
     line = BconTransport()
     service.sender = Sender.Sender(is_show_serial=False, transport=line)
@@ -289,7 +292,7 @@ def test_connect_bcon_runs_hello_automatically(monkeypatch) -> None:
 
 def test_connect_legacy_skips_hello(monkeypatch) -> None:
     """従来方式の実際の書込を観察し、BCON バイナリを混ぜない。"""
-    from core.transport.text_serial import TextSerialTransport
+    from pokecon.domain.transport.text_serial import TextSerialTransport
 
     class Wire:
         is_open = True
@@ -313,7 +316,8 @@ def test_connect_legacy_skips_hello(monkeypatch) -> None:
 
     wire = Wire()
     monkeypatch.setattr(
-        "core.transport.text_serial.serial.Serial", lambda *args, **kwargs: wire
+        "pokecon.domain.transport.text_serial.serial.Serial",
+        lambda *args, **kwargs: wire,
     )
     service, _ = make_service()
     service.sender = Sender.Sender(
@@ -479,7 +483,7 @@ def test_set_show_serial_without_sender_never_raises() -> None:
 
 
 def test_bcon_connect_stop_failure_never_sends_hello() -> None:
-    from services.bcon_connect import connect_bcon
+    from pokecon.runtime.bcon_connect import connect_bcon
 
     class Target:
         capability = "BCON_STATE"
@@ -509,7 +513,7 @@ def test_bcon_connect_stop_failure_never_sends_hello() -> None:
 
 
 def test_bcon_connect_sender_resume_failure_reholds() -> None:
-    from services.bcon_connect import connect_bcon
+    from pokecon.runtime.bcon_connect import connect_bcon
 
     class Target:
         capability = "BCON_STATE"
@@ -738,8 +742,8 @@ def test_terminal_completion_can_reconnect_after_failure_and_disconnect() -> Non
 def test_missing_establishment_api_fails_open_connection_and_releases_admission(
     monkeypatch,
 ):
-    from core.transport.bcon import BconTransport
-    from core.transport.bcon_protocol import T_HELLO, T_STATE
+    from pokecon.domain.transport.bcon import BconTransport
+    from pokecon.domain.transport.bcon_protocol import T_HELLO, T_STATE
 
     class Wire:
         is_open = True
@@ -760,7 +764,9 @@ def test_missing_establishment_api_fails_open_connection_and_releases_admission(
             self.is_open = False
 
     wire = Wire()
-    monkeypatch.setattr("core.transport.bcon.serial.Serial", lambda **kwargs: wire)
+    monkeypatch.setattr(
+        "pokecon.domain.transport.bcon.serial.Serial", lambda **kwargs: wire
+    )
     line = BconTransport()
     monkeypatch.setattr(line, "current_baud", None)
     service, _ = make_service()

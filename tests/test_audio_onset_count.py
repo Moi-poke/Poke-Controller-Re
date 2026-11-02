@@ -1,7 +1,7 @@
 """連打の立ち上がり計数の検証。合成波で回す（実機不要）。"""
 
 import numpy as np
-from core import audio_latency as AL
+from pokecon.domain import audio_latency as AL
 
 RATE = 44100
 

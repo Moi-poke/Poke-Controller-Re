@@ -1,0 +1,274 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""display_settings.py - 表示設定のダイアログ（tkinter）。
+
+プレビューの表示モード（固定サイズ／ウィンドウに合わせる）、固定モードの
+ときのプリセット、FPS と描画方式を決める画面。FPS と描画方式は一度決めたら
+滅多に変えないので、カメラ欄の常設コンボからここへ移した。判断そのものは core.display_mode が持ち、ここは
+選ぶ・画面変数へ書く・適用を呼ぶだけ。Window 本体は import しない（循環になる）。
+
+一度に1つだけ開いてほしいので、開いているかの判定と参照の保持は呼び出し側
+（Menubar）が持つ。ここは渡された値で1つの窓を構成するだけ。
+"""
+
+from __future__ import annotations
+
+import tkinter as tk
+import tkinter.ttk as ttk
+from collections.abc import Callable
+from typing import Any
+
+from pokecon.domain.display_mode import (
+    DEFAULT_SHOW_MODE,
+    DEFAULT_SHOW_SIZE,
+    PROFILE_COLORS,
+    SHOW_MODES,
+    SHOW_SIZES,
+    normalize_profile_color,
+)
+from pokecon.ui import WindowUtils
+
+# モード名のラベル。fit の意味（枠に合わせた拡大縮小と縦横比の維持）は
+# ラベルの下の 1 行で補う（ラベルを長くすると固定サイズとの対比が読みにくい）。
+_MODE_LABELS: dict[str, str] = {
+    "fixed": "固定サイズ",
+    "fit": "ウィンドウに合わせる",
+}
+
+# FPS・描画方式が候補表に無いときの既定。camera_panel の _current_fps /
+# _current_renderer と同じ値（画面と実際の値をずらさない）。
+_DEFAULT_FPS = "60"
+_DEFAULT_RENDERER = "auto"
+
+# プロファイルの色の見本の大きさ（px）。1 枚だけあれば意味が伝わる。
+_COLOR_SAMPLE_SIZE = 24
+
+
+def _known(value: str, choices: tuple[str, ...], fallback: str) -> str:
+    """候補に無い値は既定へ落とす（壊れた設定で起動を止めないため）。"""
+    return value if value in choices else fallback
+
+
+class DisplaySettingsDialog(tk.Toplevel):
+    """表示設定。OK／適用の瞬間に ``on_apply(mode, size, color, fps, renderer)``
+    を呼ぶ。
+
+    適用は即時。ウィンドウの最小サイズと設定の保存は呼び出し側
+    （applyDisplaySettings）が行うので、ここでは変数へ書くところまでで
+    save を重複させない。
+    """
+
+    def __init__(
+        self,
+        master: tk.Misc,
+        mode: str,
+        size: str,
+        on_apply: Callable[[str, str, str, str, str], None],
+        color: str = "",
+        fps: str = _DEFAULT_FPS,
+        renderer: str = _DEFAULT_RENDERER,
+    ) -> None:
+        super().__init__(master)
+        self._on_apply = on_apply
+        self.title("表示設定")
+        # メインウィンドウのモーダルにはしない（描画は裏で進むので）。
+        # 親ウィンドウの上に湧くだけで、最前面には固定しない。
+        # master の型は tk.Misc だが transient は Wm しか受けない。渡されるのは
+        # メインウィンドウ（root = Tk）だけなので、この1点だけはみ出す。
+        self.transient(master)  # type: ignore[call-overload]
+
+        # 渡された値が壊れていても候補表の範囲に収める（画面の嘘を避ける）。
+        # 属性名に _var を付けているのは、Misc.size() と衝突するため。
+        known_mode = _known(mode, SHOW_MODES, DEFAULT_SHOW_MODE)
+        known_size = _known(size, SHOW_SIZES, DEFAULT_SHOW_SIZE)
+        self.mode_var = tk.StringVar(value=known_mode)
+        self.size_var = tk.StringVar(value=known_size)
+        # 色も正規化してから持つ（見本と保存値がずれないように）。
+        self.color_var = tk.StringVar(
+            value=self._color_name(normalize_profile_color(color))
+        )
+
+        body = ttk.Frame(self, padding=10)
+        body.grid(column=0, row=0, sticky="ew")
+        body.columnconfigure(1, weight=1)
+
+        ttk.Label(body, text="表示モード").grid(column=0, columnspan=2, row=0)
+        for row, value in enumerate(SHOW_MODES, start=1):
+            ttk.Radiobutton(
+                body,
+                text=_MODE_LABELS[value],
+                variable=self.mode_var,
+                value=value,
+                command=self._sync_enabled,
+            ).grid(column=0, columnspan=2, row=row, sticky="w")
+
+        note_row = len(SHOW_MODES) + 1
+        # fit の意味はラベルだけでは伝わらないので 1 行だけ補う。
+        ttk.Label(
+            body,
+            text="「ウィンドウに合わせる」は枠に合わせて拡大縮小します（映像の縦横比は保たれます）。",
+        ).grid(column=0, columnspan=2, row=note_row, sticky="w")
+
+        size_row = note_row + 1
+        ttk.Label(body, text="固定サイズ").grid(
+            column=0, row=size_row, pady=(8, 0), sticky="w"
+        )
+        self.size_cb = ttk.Combobox(
+            body,
+            textvariable=self.size_var,
+            state="readonly",
+            values=list(SHOW_SIZES),
+            width=12,
+        )
+        self.size_cb.grid(column=1, padx="5", pady=(8, 0), row=size_row, sticky="w")
+
+        # プロファイルの色。並べた窓を見分けるための識別子なので、
+        # ここで選んだ色が帯とコンパクトバーの色チップに出る。
+        color_row = size_row + 1
+        ttk.Label(body, text="プロファイルの色").grid(
+            column=0, row=color_row, pady=(8, 0), sticky="w"
+        )
+        self.color_cb = ttk.Combobox(
+            body,
+            textvariable=self.color_var,
+            state="readonly",
+            values=[name for name, _ in PROFILE_COLORS],
+            width=12,
+        )
+        self.color_cb.grid(column=1, padx="5", pady=(8, 0), row=color_row, sticky="w")
+        self.color_cb.bind("<<ComboboxSelected>>", self._sync_color, add="")
+
+        # 選んだ色の見本。枠を 1 本引いて、空の「なし」も形が分かるようにする。
+        self.color_sample = tk.Frame(
+            body,
+            width=_COLOR_SAMPLE_SIZE,
+            height=_COLOR_SAMPLE_SIZE,
+            highlightthickness=1,
+            highlightbackground="#808080",
+        )
+        self.color_sample.grid(column=2, padx=(8, 0), pady=(8, 0), row=color_row)
+
+        # FPS（取り込みと表示の両方）。候補は WindowUtils の表を共有する。
+        fps_values = [str(v) for v in WindowUtils.FPS_VALUES]
+        self.fps_var = tk.StringVar(
+            value=_known(str(fps), tuple(fps_values), _DEFAULT_FPS)
+        )
+        fps_row = color_row + 1
+        ttk.Label(body, text="FPS").grid(column=0, row=fps_row, pady=(8, 0), sticky="w")
+        self.fps_cb = ttk.Combobox(
+            body,
+            textvariable=self.fps_var,
+            state="readonly",
+            values=fps_values,
+            width=12,
+        )
+        self.fps_cb.grid(column=1, padx="5", pady=(8, 0), row=fps_row, sticky="w")
+
+        # 描画方式。面は起動時に 1 回だけ作るので、変更は再起動後に効く。
+        renderers = tuple(WindowUtils.RENDERER_VALUES)
+        self.renderer_var = tk.StringVar(
+            value=_known(renderer, renderers, _DEFAULT_RENDERER)
+        )
+        renderer_row = fps_row + 1
+        ttk.Label(body, text="描画方式").grid(
+            column=0, row=renderer_row, pady=(8, 0), sticky="w"
+        )
+        self.renderer_cb = ttk.Combobox(
+            body,
+            textvariable=self.renderer_var,
+            state="readonly",
+            values=list(renderers),
+            width=12,
+        )
+        self.renderer_cb.grid(
+            column=1, padx="5", pady=(8, 0), row=renderer_row, sticky="w"
+        )
+        ttk.Label(
+            body,
+            text="（auto=GPU優先, sdl=GPU, gdi=CPU, photo=汎用 / 再起動後に反映）",
+        ).grid(column=2, padx=(8, 0), pady=(8, 0), row=renderer_row, sticky="w")
+
+        buttons = ttk.Frame(self, padding=(10, 0, 10, 10))
+        buttons.grid(column=0, row=1, sticky="e")
+        specs = (
+            ("適用", self._apply),
+            ("OK", self._ok),
+            ("キャンセル", self._cancel),
+        )
+        for column, (text, command) in enumerate(specs):
+            ttk.Button(buttons, text=text, command=command).grid(
+                column=column, padx="5", row=0
+            )
+
+        self._sync_enabled()
+        self._sync_color()
+        self.protocol("WM_DELETE_WINDOW", self._cancel)
+        self.bind("<Escape>", lambda _event: self._cancel(), add="+")
+
+    def _sync_enabled(self) -> None:
+        """fit のときは固定サイズ欄を無効化する（選ばない項目は触らせない）。"""
+        state = "disabled" if self.mode_var.get() == "fit" else "readonly"
+        self.size_cb.config(state=state)
+
+    @staticmethod
+    def _color_name(color: str) -> str:
+        """``#RRGGBB`` を表の日本語名へ戻す。無ければ「なし」。"""
+        for name, value in PROFILE_COLORS:
+            if value == color:
+                return name
+        return PROFILE_COLORS[0][0]
+
+    @staticmethod
+    def _chosen_color(name: str) -> str:
+        """表の日本語名を ``#RRGGBB`` へ戻す。無ければ空文字。"""
+        for candidate, value in PROFILE_COLORS:
+            if candidate == name:
+                return value
+        return ""
+
+    def _sync_color(self, _event: Any = None) -> None:
+        """見本の色を、表から読み直して差し替える。
+
+        「なし」を選んだときは枠だけ出す（背景の色は残さない）。
+        """
+        color = self._chosen_color(self.color_var.get())
+        self.color_sample.config(background=color if color else self._sample_bg())
+
+    def _sample_bg(self) -> str:
+        """「なし」のときの空き地の色。ttk の TFrame の背景色へ合わせる。
+
+        ttk のウィジェットは background オプションを持たない（色は Style が
+        持つ）ので、cget ではなく lookup で見る。取れなければ OS 既定の色。
+        """
+        try:
+            return str(ttk.Style(self).lookup("TFrame", "background") or "#F0F0F0")
+        except Exception:
+            return "#F0F0F0"
+
+    def _chosen(self) -> tuple[str, str, str, str, str]:
+        """いま選んだ (mode, size, color, fps, renderer) を返す。
+
+        無効化中のサイズも載せる。
+        """
+        return (
+            self.mode_var.get(),
+            self.size_var.get(),
+            self._chosen_color(self.color_var.get()),
+            self.fps_var.get(),
+            self.renderer_var.get(),
+        )
+
+    def _apply(self) -> None:
+        """選んだ内容を適用する（窓は閉じない）。"""
+        self._on_apply(*self._chosen())
+
+    def _ok(self) -> None:
+        """適用してから閉じる。適用の失敗で窓を閉じないまま残さない。"""
+        try:
+            self._apply()
+        finally:
+            self.destroy()
+
+    def _cancel(self) -> None:
+        """何も適用せず閉じる。この窓の変数は捨てられるので保存しない。"""
+        self.destroy()

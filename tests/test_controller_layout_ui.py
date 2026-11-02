@@ -8,8 +8,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from BconSetup import BconSetup
-from core.pad_layout import (
+from pokecon.domain.pad_layout import (
     AUTO,
     JOYCON_L,
     JOYCON_R,
@@ -17,8 +16,9 @@ from core.pad_layout import (
     LAYOUT_LABELS,
     PROCON,
 )
-from ui.bcon_panel import BconPanelMixin
-from ui.serial_panel import SerialPanelMixin
+from pokecon.ui.BconSetup import BconSetup
+from pokecon.ui.bcon_panel import BconPanelMixin
+from pokecon.ui.serial_panel import SerialPanelMixin
 
 
 class _Var:

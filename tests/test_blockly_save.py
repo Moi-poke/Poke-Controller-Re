@@ -6,8 +6,8 @@ import json
 from pathlib import Path
 
 import pytest
-from core import blockly_validate
-from services import blockly_save
+from pokecon.domain import blockly_validate
+from pokecon.runtime import blockly_save
 
 
 def good_code() -> str:
@@ -118,7 +118,7 @@ def test_delete_bad_stem_returns_failed(tmp_path: Path) -> None:
 
 
 def test_vision_code_with_subdir_saves_without_warnings(tmp_path: Path) -> None:
-    from services import blockly_templates
+    from pokecon.runtime import blockly_templates
 
     app = make_app(tmp_path)
     code = (
@@ -327,7 +327,7 @@ def test_motion_save_load_keeps_fields_and_code(tmp_path: Path) -> None:
 
 def test_motion_save_load_code_still_validates(tmp_path: Path) -> None:
     """Given motion入り保存物 / When 保存→読込する / Then 読込後のコード相当が検証を通ること。"""
-    from core import blockly_validate
+    from pokecon.domain import blockly_validate
 
     app = make_app(tmp_path)
     ws = _motion_ws()

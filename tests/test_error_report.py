@@ -8,12 +8,12 @@ from __future__ import annotations
 
 import os
 
-from core import error_report
+from pokecon.domain import error_report
 
 
 def test_resolve_log_dir_is_absolute_and_cwd_independent() -> None:
     """log 置き場は APP_DIR 基準の絶対パス。cwd を見ない。"""
-    from core import error_report as er
+    from pokecon.domain import error_report as er
 
     app_dir = os.path.normpath(os.path.join("dummy", "SerialController"))
     got = er.resolve_log_dir(app_dir)
@@ -26,7 +26,7 @@ def test_latest_log_file_picks_newest(tmp_path) -> None:  # type: ignore[no-unty
     """log_*.log のうち更新時刻が新しい物を選ぶ。無ければ None。"""
     import time
 
-    from core import error_report as er
+    from pokecon.domain import error_report as er
 
     old = tmp_path / "log_20200101-000000.log"
     new = tmp_path / "log_20200102-000000.log"
@@ -41,7 +41,7 @@ def test_latest_log_file_picks_newest(tmp_path) -> None:  # type: ignore[no-unty
 
 def test_read_tail_lines_caps_lines_and_bytes(tmp_path) -> None:  # type: ignore[no-untyped-def]
     """末尾 N 行・最大バイトで打ち切る。無い物は空で返す。"""
-    from core import error_report as er
+    from pokecon.domain import error_report as er
 
     path = tmp_path / "a.log"
     path.write_text("\n".join(f"line{i}" for i in range(10)) + "\n", encoding="utf-8")
@@ -53,7 +53,7 @@ def test_read_tail_lines_caps_lines_and_bytes(tmp_path) -> None:  # type: ignore
 
 def test_build_report_contains_env_and_tail_without_secrets() -> None:
     """報告文は環境＋例外＋ログ末尾を持ち、設定の中身は混ぜない。"""
-    from core import error_report as er
+    from pokecon.domain import error_report as er
 
     text = er.build_report(
         app_version="v4.0.1 Modified",

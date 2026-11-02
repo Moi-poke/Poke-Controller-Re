@@ -92,7 +92,7 @@ def _assert_16_to_9(width: int, height: int) -> None:
 def test_a_locked_window_stays_16_to_9_while_its_edge_is_dragged(
     window: tk.Toplevel,
 ) -> None:
-    from ui.window_aspect import WindowAspectLock
+    from pokecon.ui.window_aspect import WindowAspectLock
 
     lock = WindowAspectLock(window)
     assert lock.set_enabled(True)
@@ -117,7 +117,7 @@ def test_a_locked_window_stays_16_to_9_while_its_edge_is_dragged(
 
 
 def test_an_unlocked_window_resizes_freely(window: tk.Toplevel) -> None:
-    from ui.window_aspect import WindowAspectLock
+    from pokecon.ui.window_aspect import WindowAspectLock
 
     lock = WindowAspectLock(window)
     lock.set_enabled(True)
@@ -134,7 +134,7 @@ def test_an_unlocked_window_resizes_freely(window: tk.Toplevel) -> None:
 def test_turning_the_lock_on_makes_the_current_window_16_to_9(
     window: tk.Toplevel,
 ) -> None:
-    from ui.window_aspect import WindowAspectLock
+    from pokecon.ui.window_aspect import WindowAspectLock
 
     window.geometry("1000x700")
     window.update()
@@ -162,7 +162,7 @@ def test_turning_the_lock_on_makes_the_current_window_16_to_9(
 def test_resizing_programmatically_while_locked_is_repaired(
     window: tk.Toplevel,
 ) -> None:
-    from ui.window_aspect import WindowAspectLock
+    from pokecon.ui.window_aspect import WindowAspectLock
 
     lock = WindowAspectLock(window)
     lock.set_enabled(True)
@@ -182,7 +182,7 @@ def test_resizing_programmatically_while_locked_is_repaired(
 
 
 def test_closing_a_locked_window_is_safe(tk_root: tk.Tk) -> None:
-    from ui.window_aspect import WindowAspectLock
+    from pokecon.ui.window_aspect import WindowAspectLock
 
     win = tk.Toplevel(tk_root)
     win.geometry("800x450")

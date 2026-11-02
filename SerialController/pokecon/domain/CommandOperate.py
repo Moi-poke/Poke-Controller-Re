@@ -1,0 +1,668 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""CommandOperate.py - 操作 API と待ち（OperateMixin）.
+
+内容:
+  ・操作   press / pressRep / pressEvery / hold / holdEnd
+  ・待ち   wait / short_wait / _precise_sleep / _wait_or_stop / _deadline
+  ・関所   _gate / _gateRelease / checkIfAlive / _waitResume
+  ・その他 timeLeap（Switch の日付を進める操作）
+
+操作と待ちは利用者の設定が最も多く呼ぶ部分である。実行制御
+（start / do_safe / 停止）と分けているのは、操作の意味を知りたいときに
+実行制御まで読まずに済むようにするためである。
+
+親クラス（PythonCommand）に依存するもの:
+  ・属性     keys / alive / _stop_event / _resume_event
+  ・メソッド _cleanup / _pausedSeconds
+  Mixin なので、重ねる側がこれらを持っていることが前提になる。
+  逆に実行制御の側は checkIfAlive をここから使う（相互に使い合う関係）。
+
+互換:
+  PythonCommandBase.py が OperateMixin を PythonCommand へ重ねるので、
+  press / hold / wait などの呼び出し方は変わらない。
+"""
+
+from __future__ import annotations
+
+import os
+import threading
+import time
+from collections.abc import Callable
+from typing import Any
+
+from loguru import logger
+from pokecon.domain.Keys import Button, Direction
+from pokecon.paths import BASE_DIR
+
+
+# 停止要求を伝える例外。checkIfAlive / _gate / _gateRelease が投げるので、
+#   操作側と一緒に置いている。
+#   PythonCommandBase.py から再公開するので、
+#       from Commands.PythonCommandBase import StopThread
+#     と書いている既存の設定はそのまま使える。
+class StopThread(Exception):
+    pass
+
+
+class OperateMixin:
+    """操作 API と待ち。PythonCommand へ重ねて使う。
+
+    外向きの API（press / pressRep / pressEvery / hold / holdEnd / wait / short_wait /
+      checkIfAlive / timeLeap）は名前・引数・意味とも1文字も変えていない。
+    """
+
+    # 親（PythonCommand）が用意するもの。Mixin 単体には無いため型だけ宣言する。
+    keys: Any
+    alive: bool
+    _stop_event: threading.Event
+    _resume_event: threading.Event
+    _cleanup: Callable[..., None]
+    _pausedSeconds: Callable[[], float]
+
+    # 待ちを刻む幅は _TICK 側で持つ。_SPIN_MARGIN はスピンを廃止した
+    # 現在は未使用だが、外部コマンドが参照している可能性があるため
+    # 名前だけ残す（削除すると AttributeError になりうる）。
+    _SPIN_MARGIN = 0.001
+
+    # 停止要求の拾い幅。50msだとStop→抜けが最大50ms遅れるため20msへ。
+    # Event.waitで寝るのでCPU負荷は増えない（毎秒50回起きるだけ）。
+    _TICK = 0.02
+
+    # press button at duration times(s)
+    def press(self, buttons: Any, duration: float = 0.1, wait: float = 0.1) -> None:
+        self._gate()
+        self.keys.input(buttons)
+        self.wait(duration)
+        self.keys.inputEnd(buttons)
+        self.wait(wait)
+        self.checkIfAlive()
+
+    # press button at duration times(s) repeatedly
+    def pressRep(
+        self,
+        buttons: Any,
+        repeat: int,
+        duration: float = 0.1,
+        interval: float = 0.1,
+        wait: float = 0.1,
+    ) -> None:
+        for i in range(0, repeat):
+            self._gate()
+            self.press(buttons, duration, 0 if i == repeat - 1 else interval)
+        self.wait(wait)
+
+    # press button every interval(s), holding duration(s)
+    def pressEvery(self, buttons: Any, interval: float, duration: float) -> None:
+        """press開始間隔で duration だけ押す。waitの逆算が要らない。
+
+        press(btn, duration, wait) が「押下＋解放後待ち」なのに対し、
+        こちらは「開始間隔＋保持幅」で指定する。連打の周期を守りたい
+        ときに使う（実測：duration 0.05・interval 0.09 で全通）。
+        duration が interval を超えたら interval に丸め、理由を残す
+        （負待ちで固まらないため）。
+
+        比率の目安（実測根拠）:
+          ・duration は 0.034 以上を推奨する。単発24msで約63%、
+            34msで約90%の到達率（音計数・素シリアル・30試行）。
+            schedulerの最低保持（既定16ms）は短い押下を延ばすが、
+            要求より短くはしないため、短い指定はそのまま短く出る。
+          ・interval は duration + 0.05 以上を推奨する。50ms押下・
+            100ms間隔で240/240到達の実績あり。
+          ・背中合わせ連打（duration == interval、ギャップ約0）は
+            1発ごとの登録を狙う物ではない。未送出の中立は次押下へ
+            読み替えられ、同方向の連続はワイヤ上で1つの長押しへ
+            畳まれる。メニューのスクロール送り等、長押しで進む用途
+            に使うこと（高速日時変更の実績あり）。1発ずつ数える用途
+            ではギャップを空けること。
+          ・40ms間隔と全タイトル1発必達は両立しない。下流
+            （Switch側サンプリング）の物理制約である。
+        """
+        self._gate()
+        interval = float(interval)
+        duration = float(duration)
+        if duration > interval:
+            logger.warning(
+                f"pressEvery: duration({duration}) が interval({interval}) を"
+                "超えたため interval に丸めます"
+            )
+            duration = interval
+        start = time.perf_counter()
+        self.keys.input(buttons)
+        self.wait(duration)
+        self.keys.inputEnd(buttons)
+        self.wait(max(0.0, interval - (time.perf_counter() - start)))
+        self.checkIfAlive()
+
+    # add hold buttons
+    def hold(self, buttons: Any, wait: float = 0.1) -> None:
+        self._gate()
+        self.keys.hold(buttons)
+        self.wait(wait)
+        self.checkIfAlive()
+
+    # release holding buttons
+    def holdEnd(self, buttons: Any) -> None:
+        """押しっぱなしを解放する。Pause では足止めしない。
+
+        _gate() を通さないのは意図的。一時停止は「押下状態を保ったまま
+        処理だけ止める」方針なので、解放をそこで足止めすると押した
+        ままで止まる。解放は常に許す。ただし keys が捨てられている
+        場合だけは AttributeError ではなく StopThread にする（停止
+        直後に呼ばれると、本来の停止が別の例外へ化けるため）。
+        """
+        self._gateRelease()
+        self.keys.holdEnd(buttons)
+        self.checkIfAlive()
+
+    def _gateRelease(self) -> None:
+        """解放系の関所。停止だけを見て、一時停止では足止めしない。"""
+        if self.keys is None:
+            raise StopThread("keys are already released")
+
+    def _precise_sleep(self, wait: float) -> None:
+        """指定時間だけ待つ。停止要求が来たら待ち切らずに戻る。
+
+        末尾を少しだけ忙しく回して精度を確保する作りにはしていない。
+        press() の既定が duration=0.1 / wait=0.1 のため1操作あたり2回通り、
+        実行中ずっと CPU を使うことになるためである。
+
+        さらに一時停止ぶんの補正もその回転で消化すると、止めた秒数だけ
+        再開直後に1コアが張り付き、映像描画(33ms)とログ描画(200ms)まで
+        巻き添えにする。待ちは _wait_or_stop へ一本化している。
+
+        停止要求は _wait_or_stop が _TICK 刻みで拾う。待機中に
+        停止を見ない作りでは、wait(10) の最中に Stop を押しても最大10秒
+        止まらなかったためである。
+        """
+        # 待ちの本体。停止・一時停止は _wait_or_stop が拾う。
+        # 末尾を忙しく回す作りはやめている（補正ぶんを1コア全開で
+        # 消化し、再開直後に映像とログの描画を引きずっていたため）。
+        self._wait_or_stop(wait)
+
+    def _wait_or_stop(self, timeout: float) -> bool:
+        """timeout 秒待つ。停止要求が来たら True を返して即座に戻る。
+
+        _TICK 刻みで待ち直す。旧実装は _stop_event.wait(timeout) で一息に
+        待っていたが、Pause は _resume_event.clear() で行うため、この
+        wait は起きない。結果、その待ちが満了するまで（wait(10) なら最大
+        10秒）足止めに入らなかった。刻んでおけば停止も一時停止も最大
+        _TICK で拾える。
+
+        刻んでも負荷は増えない。Event.wait は OS のタイマーで寝るので、
+        50ms 刻みなら毎秒20回起きるだけで、ビジースピンとは桁が違う。
+        旧実装では補正ぶんの時間がすべて末尾のスピンで消化され、Resume
+        直後にコアが張り付いて映像描画(33ms)とログ描画(200ms)を引きずって
+        いた。
+
+        一時停止の最中は残り時間を減らさない。止めているあいだに時計が
+        進むと、再開した直後に「待ち終わったこと」にされ、次の操作が
+        即座に飛ぶ。押下時間や画面遷移の待ちが飛ぶと手順がずれる。
+        """
+        remain = float(timeout)
+        while remain > 0:
+            if not self._resume_event.is_set():
+                # 一時停止中。remain は減らさない（時間も止める）
+                self._waitResume()
+                if self._stop_event.is_set():
+                    return True
+                continue
+            step = min(self._TICK, remain)
+            if self._stop_event.wait(step):
+                return True
+            remain -= step
+        return False
+
+    def _waitResume(self) -> None:
+        """一時停止が解除されるまで待つ。停止要求が来たらすぐ戻る。"""
+        while not self._resume_event.wait(self._TICK):
+            if self._stop_event.is_set():
+                return
+
+    def _deadline(self, timeout: float) -> Callable[[], bool]:
+        """「時間切れか」を返す関数を作る。一時停止ぶんは数えない。
+
+        実時間の絶対期限（perf_counter() + timeout）にすると、Pause して
+        いるあいだも時計だけが進む。timeout より長く止めてから再開すると、
+        1回も追加の照合をしないまま時間切れと判定され、画面認識の分岐が
+        誤った側へ進む。「少し手を離すために止めた」だけで手順が壊れる。
+
+        補正式は _precise_sleep と同じ（経過 − 一時停止の増分）。待ちの
+        期限を測る場所はここへ寄せ、式が方々へ散らないようにする。
+        """
+        start = time.perf_counter()
+        paused0 = self._pausedSeconds()
+        limit = float(timeout)
+
+        def expired() -> bool:
+            elapsed = time.perf_counter() - start - (self._pausedSeconds() - paused0)
+            return elapsed >= limit
+
+        return expired
+
+    def _runElapsed(self) -> float:
+        """一時停止ぶんを除いた経過の目盛りを返す（差分だけに意味がある）。
+
+        「静止が quiet 秒続いたか」のように、2点間の間隔を測る用途で使う。
+        実時間で測ると、途中で一時停止した分まで「続いた」ことになる。
+        """
+        return time.perf_counter() - self._pausedSeconds()
+
+    def _gate(self) -> None:
+        """操作を送る手前の関所。停止なら抜け、一時停止なら足止めする。
+
+        待ちの最中だけを見ていると、待ち時間0の連続操作（pressRep など）
+        が素通りする。送信の直前に必ずここを通す。
+
+        self.keys が None のときも捨てる。停止時の後始末（_cleanup）が
+        keys を None にするため、停止直後に操作へ入ると None を触って
+        AttributeError になり、本来の停止が別の例外に化けていた。
+        """
+        self.checkIfAlive()
+        if not self._resume_event.is_set():
+            self._waitResume()
+            self.checkIfAlive()
+        if self.keys is None:
+            raise StopThread("keys are already released")
+
+    # do nothing at wait time(s)
+    def short_wait(self, wait: float) -> None:
+        self._precise_sleep(float(wait))
+        self.checkIfAlive()
+
+    # do nothing at wait time(s)
+    def wait(self, wait: float) -> None:
+        """指定秒待つ。停止要求が来たら即座に起きる。
+
+        役割分担は「wait は起きるだけ／checkIfAlive が StopThread を
+        投げる」を保つ。
+        """
+        wait = float(wait)
+        if wait > 0:
+            self._precise_sleep(wait)
+        self.checkIfAlive()
+
+    def checkIfAlive(self) -> bool:
+        if not self.alive:
+            # thread の後始末は do_safe の finally が行う。ここで None に
+            # すると、実行中のスレッド自身が start() の生存判定を消して
+            # しまい二重起動を招く。
+            self._cleanup()
+
+            # raise exception for exit working thread
+            logger.info("Exit from command successfully")
+            raise StopThread("exit successfully")
+        else:
+            return True
+
+    # Controls the system time and get every-other-day bonus without any punishments
+    def timeLeap(self, is_go_back: bool = True) -> None:
+        self.press(Button.HOME, wait=1)
+        self.press(Direction.DOWN)
+        self.press(Direction.RIGHT)
+        self.press(Direction.RIGHT)
+        self.press(Direction.RIGHT)
+        self.press(Direction.RIGHT)
+        self.press(Direction.RIGHT)
+        self.press(Button.A, wait=1.5)  # System Settings
+        self.press(Direction.DOWN, duration=2, wait=0.5)
+
+        self.press(Button.A, wait=0.3)  # System Settings > System
+        self.press(Direction.DOWN)
+        self.press(Direction.DOWN)
+        self.press(Direction.DOWN)
+        self.press(Direction.DOWN, wait=0.3)
+        self.press(Button.A, wait=0.2)  # Date and Time
+        self.press(Direction.DOWN, duration=0.7, wait=0.2)
+
+        # increment and decrement
+        if is_go_back:
+            self.press(Button.A, wait=0.2)
+            self.press(Direction.UP, wait=0.2)  # Increment a year
+            self.press(Direction.RIGHT, duration=1.5)
+            self.press(Button.A, wait=0.5)
+
+            self.press(Button.A, wait=0.2)
+            self.press(Direction.LEFT, duration=1.5)
+            self.press(Direction.DOWN, wait=0.2)  # Decrement a year
+            self.press(Direction.RIGHT, duration=1.5)
+            self.press(Button.A, wait=0.5)
+
+        # use only increment
+        # for use of faster time leap
+        else:
+            self.press(Button.A, wait=0.2)
+            self.press(Direction.RIGHT)
+            self.press(Direction.RIGHT)
+            self.press(Direction.UP, wait=0.2)  # increment a day
+            self.press(Direction.RIGHT, duration=1)
+            self.press(Button.A, wait=0.5)
+
+        self.press(Button.HOME, wait=1)
+        self.press(Button.HOME, wait=1)
+
+    # ------------------------------------------------------------------
+    # スティック軌跡の再生（stick_move / stick_move2）
+    # ------------------------------------------------------------------
+    # 記録したスティック操作（極座標のwaypoint列）を再生する補助関数。
+    # press() が input→wait→inputEnd→wait のため区間境界で中立を経由する
+    # のに対し、こちらは input() の差分申告を直接連打するので中立を
+    # 経由しない。setStick は調停対象外で常時受理されるため、ボタン調停に
+    # 蹴られて欠けることもない。
+    #
+    # 時刻は区間開始 t0 からの相対msで持ち、待ちは絶対時刻の deadline で
+    # 行う（_sleep_until）。一時停止中は wait() が remain を減らさないため
+    # 起床だけが延び、次の刻みの deadline は元の時間軸のままになる。
+    # そのままでは再開後に残り刻みが一気に送られる（早送り）ため、
+    # 止まっていた時間 P_k だけ t0 を前へずらす（t0 += P_k）。
+    # P_k は _pausedSeconds() の差分で取る。「実経過−要求」で代用すると
+    # sleep のジッタまで足して蓄積するため使わない。
+
+    # 連鎖判定の窓（秒）。前区間の終了予定 _motion_clock からの遅れが
+    # この範囲内なら、今回の t0 を前区間の終了予定へ引き継ぐ。
+    # 待ちの行き過ぎは最大1刻み（_TICK=20ms）＋ブロック間の処理時間
+    # より大きければ連鎖が切れたと誤判定しない。50msが妥当。
+    _MOTION_CHAIN_WINDOW = 0.05
+    # 補間の刻み（秒）。再生の床は wait() の _TICK=20ms。
+    _MOTION_STEP_S = 0.02
+
+    def _sleep_until(self, deadline: float) -> float:
+        """deadline（perf_counter）まで待つ。止まっていた秒数も返す。
+
+        待ちは wait() に丸投げする（一時停止・停止の意味論を継承する）。
+        戻り値はこの待ちのあいだに止まっていた時間 P_k（秒）。
+        _pausedSeconds() の前後差で取る。sleep のジッタは含まない。
+        残りが0以下なら待たない（遅れを取り戻そうと詰めない）。
+        """
+        paused_before = self._pausedSeconds()
+        remain = deadline - time.perf_counter()
+        if remain > 0:
+            self.wait(remain)
+        paused_after = self._pausedSeconds()
+        return max(0.0, paused_after - paused_before)
+
+    @staticmethod
+    def _polar_dir(stick: Any, r: float, deg: float) -> Direction:
+        """極座標（r: 0〜、deg: 累積角度）から Direction を作る。
+
+        Direction の y は上が大きい（送信時に 255-y で反転する）。
+        タプル形 (x, y) で渡すと角度→座標の丸めが1回少なくて済む。
+        x・y は 0〜255 へクリップする（四角ゲートの斜めは 127 を超える）。
+        """
+        import math
+
+        a = math.radians(deg)
+        x = min(255, max(0, round(128 + r * math.cos(a))))
+        y = min(255, max(0, round(128 + r * math.sin(a))))
+        return Direction(stick, (int(x), int(y)))
+
+    def _motion_t0(self, now: float) -> float:
+        """今回の区間開始 t0 を決める。連鎖中なら前区間の終了予定を引き継ぐ。
+
+        長い一時停止の後は窓から外れて now に再同期する（予定時刻は過去の
+        ため引き継ぐ意味がない）。ずれは蓄積しない。
+        """
+        clk = getattr(self, "_motion_clock", None)
+        if clk is not None:
+            try:
+                gap = now - float(clk)
+            except (TypeError, ValueError):
+                gap = None
+            if gap is not None and 0 <= gap < self._MOTION_CHAIN_WINDOW:
+                return float(clk)
+        return now
+
+    def stick_move(
+        self,
+        stick: Any,
+        r0: float,
+        th0: float,
+        r1: float,
+        th1: float,
+        t_ms: float,
+    ) -> None:
+        """スティックを (r0, th0) から (r1, th1) へ T_ms で動かす。
+
+        極座標の線形補間。各刻みでは「時刻 t になったら t の値を送る」
+        （開始値 from は直前ブロックで送信済みのため送り直さない）。
+        r・θ とも変わらない静止区間は待つだけで何も送らない。
+        終了予定 _motion_clock を残す（次の区間が引き継ぐ）。
+        """
+        now = time.perf_counter()
+        t0 = self._motion_t0(now)
+        total = max(0.0, float(t_ms)) / 1000.0
+        step = self._MOTION_STEP_S
+        n = max(1, int(__import__("math").ceil(total / step)) if total > 0 else 1)
+        same = r0 == r1 and th0 == th1
+        t_ms_f = float(t_ms)
+        for k in range(1, n + 1):
+            tk = min(k * step * 1000.0, t_ms_f)
+            paused = self._sleep_until(t0 + tk / 1000.0)
+            # 止まっていたぶん開始をずらす（次刻み以降の早送りを防ぐ）。
+            # 当該刻みは既に終わっているため二重補正にはならない。
+            if paused:
+                t0 += paused
+            if not same and t_ms_f > 0:
+                u = tk / t_ms_f
+                self._gate()
+                self.keys.input(
+                    self._polar_dir(stick, r0 + u * (r1 - r0), th0 + u * (th1 - th0))
+                )
+            self.checkIfAlive()
+        self._motion_clock = t0 + total
+
+    def stick_move2(
+        self,
+        stick_l: Any,
+        l_from: tuple[float, float],
+        l_to: tuple[float, float],
+        stick_r: Any,
+        r_from: tuple[float, float],
+        r_to: tuple[float, float],
+        t_ms: float,
+    ) -> None:
+        """L/R を同じ T・同じ刻みループで動かす。
+
+        交互に input() すると L と R が別 slot に載り最大 8ms ずれるため、
+        1刻み1回の input([dirL, dirR]) でまとめて送る（_applyToSender が
+        リストを処理し sendPosture 一発になる）。静止している側は
+        リストに入れない。
+        """
+        now = time.perf_counter()
+        t0 = self._motion_t0(now)
+        total = max(0.0, float(t_ms)) / 1000.0
+        step = self._MOTION_STEP_S
+        import math as _math
+
+        n = max(1, int(_math.ceil(total / step)) if total > 0 else 1)
+        l_same = l_from[0] == l_to[0] and l_from[1] == l_to[1]
+        r_same = r_from[0] == r_to[0] and r_from[1] == r_to[1]
+        t_ms_f = float(t_ms)
+        for k in range(1, n + 1):
+            tk = min(k * step * 1000.0, t_ms_f)
+            paused = self._sleep_until(t0 + tk / 1000.0)
+            if paused:
+                t0 += paused
+            dirs = []
+            if not l_same and t_ms_f > 0:
+                u = tk / t_ms_f
+                dirs.append(
+                    self._polar_dir(
+                        stick_l,
+                        l_from[0] + u * (l_to[0] - l_from[0]),
+                        l_from[1] + u * (l_to[1] - l_from[1]),
+                    )
+                )
+            if not r_same and t_ms_f > 0:
+                u = tk / t_ms_f
+                dirs.append(
+                    self._polar_dir(
+                        stick_r,
+                        r_from[0] + u * (r_to[0] - r_from[0]),
+                        r_from[1] + u * (r_to[1] - r_from[1]),
+                    )
+                )
+            if dirs:
+                self._gate()
+                self.keys.input(dirs)
+            self.checkIfAlive()
+        self._motion_clock = t0 + total
+
+    # 解放用の固定の斜め座標。両軸が getTilting() の閾値 127 を超えるため
+    # 両 tilt が返り、両軸とも解放される（設計 ID:006 確定）。
+    # 中立の Direction (128, 128) では [UP] だけが返り水平軸が残るうえ、
+    # 実姿勢が水平に倒れていた場合は fixOtherAxis が端へ寄せて跳ねる。
+    _RELEASE_XY = (218, 218)
+
+    def stick_release(self, stick: Any) -> None:
+        """その側のスティックだけを解放する。
+
+        end="hold" のときは呼ばない（次の区間へ値を引き継ぐ）。
+        既定（"release"）では区間の最後に呼ぶ。
+        """
+        from pokecon.domain.Keys import Stick as _Stick
+
+        self._gateRelease()
+        side = _Stick.RIGHT if stick is _Stick.RIGHT else _Stick.LEFT
+        try:
+            x, y = self._RELEASE_XY
+            self.keys.inputEnd(Direction(side, (int(x), int(y))))
+        except AttributeError:
+            # keys が捨てられている（停止直後）。解放は諦め、停止を優先する。
+            pass
+        self.checkIfAlive()
+
+    def stick_release_both(self) -> None:
+        """L/R の両方を解放する。1 回の inputEnd でまとめて行う。"""
+        from pokecon.domain.Keys import Stick as _Stick
+
+        self._gateRelease()
+        try:
+            x, y = self._RELEASE_XY
+            self.keys.inputEnd(
+                [
+                    Direction(_Stick.LEFT, (int(x), int(y))),
+                    Direction(_Stick.RIGHT, (int(x), int(y))),
+                ]
+            )
+        except AttributeError:
+            pass
+        self.checkIfAlive()
+
+    # -- ジャイロ（Blockly の記録の再生） ---------------------------------
+
+    @staticmethod
+    def _resolve_gyro_path(name: str) -> str | None:
+        """記録ファイルの実パスを探す。無ければ None。
+
+        絶対パスはそのまま。相対は「今の作業ディレクトリ（起動時の
+        SerialController）」と「core の親（SerialController）」の順に見る。
+        """
+        if not name:
+            return None
+        if os.path.isabs(name):
+            candidates = [name]
+        else:
+            here = BASE_DIR
+            candidates = [
+                name,
+                os.path.join(os.getcwd(), name),
+                os.path.join(here, name),
+            ]
+        for path in candidates:
+            if os.path.isfile(path):
+                return path
+        return None
+
+    def _gyro_transport_handle(self) -> Any:
+        """ジャイロを送る線を keys から引く。無ければ None。"""
+        keys = getattr(self, "keys", None)
+        ser = getattr(keys, "ser", None)
+        transport = getattr(ser, "transport", None)
+        if transport is not None:
+            return transport
+        sender = getattr(ser, "sender", None)
+        return getattr(sender, "transport", None)
+
+    def gyro_play(self, name: str) -> bool:
+        """記録したジャイロ（.pgyro）を、命令と並行して送出する。
+
+        Blockly の「記録」が作るブロックから呼ばれる。記録済みの値は
+        加工せずそのまま送り、ファイルの周期（v1 は 200Hz）で進める。
+        先頭の遅れ（start_offset_us）は待ってから始める。マクロが
+        終わると _cleanup が IMU loop を止める。
+
+        既にジャイロを送っていても差し替える（パネルの送出を引き継ぐ）。
+        戻りは開始できたか。例外は外へ投げない。
+        """
+        from pokecon.domain.motion_track import MotionPlayer
+
+        path = self._resolve_gyro_path(str(name))
+        if path is None:
+            print(f"ジャイロの記録が見つかりません: {name}")
+            logger.warning(f"ジャイロの記録が見つかりません: {name}")
+            return False
+        player = MotionPlayer(path)
+        if not player.load() or len(player) == 0:
+            reason = player.error or "空"
+            print(f"ジャイロの記録を読めません: {name}（{reason}）")
+            logger.warning(f"ジャイロの記録を読めません: {name}（{reason}）")
+            return False
+        transport = self._gyro_transport_handle()
+        if transport is None:
+            print("送信線が無いためジャイロを再生できません")
+            return False
+        self._stop_gyro_playback()
+        offset_s = max(0, int(player.start_offset_us)) / 1_000_000.0
+        started = time.perf_counter()
+        inner = player.as_source()
+
+        def paced() -> tuple[int, int, int, int, int, int] | None:
+            if time.perf_counter() - started < offset_s:
+                return None
+            return inner()
+
+        period_s = max(1, int(player.period_us)) / 1_000_000.0
+        # 持ち主の名札。停止はこの名札が一致するときだけ行う
+        # （パネルの手動送出が割り込んだあとに、マクロの後始末で
+        # その送出を止めてしまわないため）。
+        owner = f"macro:{id(self):x}"
+        ok = False
+        try:
+            start = getattr(transport, "start_imu_loop", None)
+            if callable(start):
+                try:
+                    ok = bool(start(paced, period_s, replace=True, owner=owner))
+                except TypeError:
+                    # 差し替え・持ち主引数を持たない線（将来の別実装）。
+                    ok = bool(start(paced, period_s))
+                    owner = ""
+        except Exception as e:
+            logger.warning(f"ジャイロ再生を開始できません: {e!r}")
+            ok = False
+        if ok:
+            self._gyro_transport = transport
+            self._gyro_owner = owner
+        else:
+            print("ジャイロ再生を開始できませんでした")
+        return ok
+
+    def _stop_gyro_playback(self) -> None:
+        """マクロのジャイロ再生を止める。例外は投げない。
+
+        自分が起こしたループだけを止める（持ち主の名札を渡す）。
+        パネルの手動送出に引き継がれていれば何もしない。
+        """
+        transport, self._gyro_transport = getattr(self, "_gyro_transport", None), None
+        owner, self._gyro_owner = getattr(self, "_gyro_owner", ""), ""
+        if transport is None:
+            return
+        try:
+            stop = getattr(transport, "stop_imu_loop", None)
+            if callable(stop):
+                if owner:
+                    stop(owner=owner)
+                else:
+                    stop()
+        except Exception:
+            pass

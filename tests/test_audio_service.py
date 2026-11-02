@@ -3,7 +3,7 @@
 from typing import Any
 
 import pytest
-from services import audio_service
+from pokecon.runtime import audio_service
 
 
 class FakeCapture:

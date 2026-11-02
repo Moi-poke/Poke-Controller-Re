@@ -17,9 +17,9 @@ from typing import Any
 
 import pytest
 from blockly_node import NEEDS_NODE, run_editor
+from pokecon.ui import blockly_editor
 from test_blockly_run import BASIC, make_session, run_trial, trial, wait_until
 from test_blockly_run_server import FakeHost, post, trial_code, wait_state
-from ui import blockly_editor
 
 #: このファイル直下の node 検証に使う印。ファイル読込の検証には要らない。
 NODE_ONLY = NEEDS_NODE

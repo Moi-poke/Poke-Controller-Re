@@ -14,9 +14,9 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 
-import GuiAssets
 import pytest
-from GuiAssets import CaptureArea
+from pokecon.ui import GuiAssets
+from pokecon.ui.GuiAssets import CaptureArea
 
 
 class _CountingFake:

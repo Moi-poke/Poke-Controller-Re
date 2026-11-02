@@ -124,14 +124,14 @@ BADGE_FOREGROUND_HEX = "#FFFFFF"
 
 def _photo_surface_module() -> Any:
     """``ui.photo_surface``, imported at call time so a break is a per-test RED."""
-    import ui.photo_surface as module
+    import pokecon.ui.photo_surface as module
 
     return module
 
 
 def _capture_size() -> tuple[int, int]:
     """The camera's frame size, which ``compose`` judges frames against."""
-    from core.Camera import CAPTURE_SIZE
+    from pokecon.domain.Camera import CAPTURE_SIZE
 
     return (int(CAPTURE_SIZE[0]), int(CAPTURE_SIZE[1]))
 
@@ -739,7 +739,7 @@ def test_a_non_contiguous_frame_is_refused_with_its_own_detail(
 ) -> None:
     # Given: an attached surface and a frame of the capture size whose rows are
     # strided rather than packed.
-    from core.preview_renderer import OverlayState
+    from pokecon.domain.preview_renderer import OverlayState
 
     attached = _attach(monkeypatch)
     width, height = _capture_size()
@@ -766,7 +766,7 @@ def test_a_non_contiguous_frame_never_reaches_the_present_path(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # Given: an attached surface that has already composited one good frame.
-    from core.preview_renderer import OverlayState
+    from pokecon.domain.preview_renderer import OverlayState
 
     attached = _attach(monkeypatch)
     width, height = _capture_size()
@@ -795,7 +795,7 @@ def test_a_contiguous_frame_of_the_capture_size_still_composes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # Given: an attached surface and a well-formed frame.
-    from core.preview_renderer import OverlayState
+    from pokecon.domain.preview_renderer import OverlayState
 
     attached = _attach(monkeypatch)
     width, height = _capture_size()
@@ -835,7 +835,7 @@ def test_a_capture_frame_is_scaled_down_to_fill_a_smaller_show_size(
 ) -> None:
     # Given: an attached surface at a show size smaller than the capture size,
     # and a live frame at the capture size.
-    from core.preview_renderer import OverlayState
+    from pokecon.domain.preview_renderer import OverlayState
 
     show_size = (640, 360)
     attached = _attach(monkeypatch, size=show_size)
@@ -876,7 +876,7 @@ def test_a_capture_frame_is_scaled_and_centred_in_a_non_sixteen_by_nine_show_siz
 ) -> None:
     # Given: a viewport wider than 16:9 allows, so the picture fits by height and
     # the margins are top and bottom.
-    from core.preview_renderer import OverlayState
+    from pokecon.domain.preview_renderer import OverlayState
 
     viewport = (1000, 700)
     attached = _attach(monkeypatch, size=viewport)
@@ -907,7 +907,7 @@ def test_the_overlay_is_scaled_with_the_picture_and_offset_by_its_margin(
 ) -> None:
     # Given: a viewport of 1000x700, whose picture is 1000x563 at y=68 -- a
     # scale of 1000/1280 = 0.781 in x and 563/720 in y, plus a 68 row offset.
-    from core.preview_renderer import OverlayState, RectState, StickState
+    from pokecon.domain.preview_renderer import OverlayState, RectState, StickState
 
     viewport = (1000, 700)
     attached = _attach(monkeypatch, size=viewport)
@@ -949,7 +949,7 @@ def test_compose_refuses_a_viewport_with_no_room_instead_of_raising(
     # Given: a surface attached at a viewport of (0, 0). resize refuses it, so
     # the fitted rect is never computed -- the state a caller that hands attach a
     # nonsense size produces.
-    from core.preview_renderer import OverlayState
+    from pokecon.domain.preview_renderer import OverlayState
 
     module = _photo_surface_module()
     photos: list[Any] = []
@@ -981,7 +981,7 @@ def test_a_capture_frame_at_the_capture_size_is_not_scaled_at_all(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # Given: a viewport of exactly the capture size, the fast path.
-    from core.preview_renderer import OverlayState, StickState
+    from pokecon.domain.preview_renderer import OverlayState, StickState
 
     attached = _attach(monkeypatch, size=(1280, 720))
     width, height = _capture_size()
@@ -1060,7 +1060,7 @@ def test_compose_on_an_unattached_surface_still_reports_no_hwnd(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # Given: a constructed but unattached surface.
-    from core.preview_renderer import OverlayState
+    from pokecon.domain.preview_renderer import OverlayState
 
     surface = _photo_surface_module().PhotoImageSurface(host=None)
     width, height = _capture_size()
@@ -1076,7 +1076,7 @@ def test_a_second_present_after_one_frame_reports_no_frame(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # Given: an attached surface that has composed and presented one frame.
-    from core.preview_renderer import OverlayState
+    from pokecon.domain.preview_renderer import OverlayState
 
     attached = _attach(monkeypatch)
     width, height = _capture_size()
@@ -1160,7 +1160,7 @@ def test_one_kind_of_refusal_is_logged_once_however_many_frames_hit_it(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # Given: an attached surface, and a frame whose rows are strided.
-    from core.preview_renderer import OverlayState
+    from pokecon.domain.preview_renderer import OverlayState
 
     attached = _attach(monkeypatch)
     width, height = _capture_size()
@@ -1184,7 +1184,7 @@ def test_a_second_kind_of_refusal_is_still_logged_after_the_first(
 ) -> None:
     # Given: a surface that has already refused a strided frame, so the dedup
     # key for that cause is spent.
-    from core.preview_renderer import OverlayState
+    from pokecon.domain.preview_renderer import OverlayState
 
     attached = _attach(monkeypatch)
     width, height = _capture_size()
@@ -1383,7 +1383,7 @@ def test_importing_the_module_constructs_no_tk_interpreter() -> None:
             "tkinter.Toplevel = _Banned",
             "tkinter.Canvas = _Banned",
             "tkinter.Frame = _Banned",
-            "import ui.photo_surface",
+            "import pokecon.ui.photo_surface",
             "print('imported')",
         ]
     )
@@ -1401,7 +1401,7 @@ def test_importing_the_module_constructs_no_tk_interpreter() -> None:
     # display yet. A module-level Canvas or Tk would make the import itself the
     # crash, before any contract above could run.
     assert completed.returncode == 0, (
-        f"importing ui.photo_surface with Tk constructors banned failed:\n"
+        f"importing pokecon.ui.photo_surface with Tk constructors banned failed:\n"
         f"stdout={completed.stdout!r}\nstderr={completed.stderr!r}"
     )
     assert "imported" in completed.stdout, completed.stdout
@@ -1769,7 +1769,7 @@ def test_the_cursor_over_the_picture_follows_the_host_setting(
 
 def _badge_overlay(text: str = BADGE_TEXT, visible: bool = True) -> Any:
     """A visible overlay whose only component is the status badge."""
-    from core.preview_renderer import BadgeState, OverlayState
+    from pokecon.domain.preview_renderer import BadgeState, OverlayState
 
     badge = BadgeState(
         text=text,
@@ -1832,7 +1832,7 @@ def test_a_hidden_or_empty_badge_creates_no_canvas_item_at_all(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # Given: an attached surface and the two ways a badge is not drawn.
-    from core.preview_renderer import OverlayState
+    from pokecon.domain.preview_renderer import OverlayState
 
     attached = _attach(monkeypatch)
     width, height = _capture_size()
@@ -1869,7 +1869,7 @@ def test_recompose_redraws_the_overlay_without_a_new_frame(
     # Given: an attached surface that has composited and presented one frame
     # with an active left stick, with the records cleared so what gets
     # measured below is the recompose's own effect and not the present's.
-    from core.preview_renderer import OverlayState, RenderResult, StickState
+    from pokecon.domain.preview_renderer import OverlayState, RenderResult, StickState
 
     attached = _attach(monkeypatch)
     surface, canvas = attached.surface, attached.canvas

@@ -21,10 +21,10 @@ import pytest
 pytest.importorskip("tkinter")
 
 from blockly_node import NEEDS_NODE, run_blockly  # noqa: E402
-from core import Sender  # noqa: E402
 from fakes import FakeTransport  # noqa: E402
-from services import blockly_run  # noqa: E402
-from ui import blockly_editor  # noqa: E402
+from pokecon.domain.serial import sender as Sender  # noqa: E402
+from pokecon.runtime import blockly_run  # noqa: E402
+from pokecon.ui import blockly_editor  # noqa: E402
 
 pytestmark = NEEDS_NODE
 
@@ -455,7 +455,7 @@ def test_non_object_json_body_gets_a_reply(run_server: tuple[str, FakeHost]) -> 
 
 def test_trial_given_up_by_the_app_is_reported_as_stopped() -> None:
     """本体が止まらない作業を打ち切って空きに戻したら、編集画面へは「停止」と返すこと。"""
-    from services import blockly_run
+    from pokecon.runtime import blockly_run
 
     fake = FakeHost()
     blockly_editor._set_run_host(fake)

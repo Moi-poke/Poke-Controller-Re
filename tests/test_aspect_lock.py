@@ -9,7 +9,7 @@ OBS のウィンドウキャプチャは枠込みで取ることがあるため�
 from __future__ import annotations
 
 import pytest
-from core.aspect_lock import (
+from pokecon.domain.aspect_lock import (
     BOTTOM,
     BOTTOMLEFT,
     BOTTOMRIGHT,

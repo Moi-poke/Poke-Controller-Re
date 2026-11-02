@@ -4,7 +4,7 @@ import threading
 import time
 from typing import Any
 
-from core.CommandOperate import OperateMixin
+from pokecon.domain.CommandOperate import OperateMixin
 
 
 class _Keys:
