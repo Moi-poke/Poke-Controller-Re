@@ -30,8 +30,7 @@ def apply_gyro_deadband(
 ) -> tuple[int, int, int, int, int, int]:
     """ジャイロ各軸を不感帯以下で0にする（加速度は触らない）。
 
-    dead_rawはSwitch生値。0以下なら無変換。静止時の残余バイアスで
-    ゲーム側のスイング判定が誤発火する場合に使う。
+    dead_rawはSwitch生値。0以下なら無変換。各軸独立に、しきい値未満を0にする。
     """
     if dead_raw <= 0.0:
         return sample
