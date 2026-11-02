@@ -132,7 +132,7 @@ def gui_loop():
 
 実機が無いと閉じられない。次の順で、影響の小さいものから。
 
-1. **入力だけ**: `legacy_text` か `pico_uart` で接続し、`HOME` → `wait 1` → `A` → `finish` の生成コマンドを実行。Switch のコントローラテスト画面か入力ログで、A が1回入ることを確認する。
+1. **入力だけ**: `legacy_text` か `switch-bcon` で接続し、`HOME` → `wait 1` → `A` → `finish` の生成コマンドを実行。Switch のコントローラテスト画面か入力ログで、A が1回入ることを確認する。
 2. **保持・連打**: `hold` / `holdEnd` / `press_rep` を実行し、押しっぱなしと連打が実機で再現することを確認する。
 3. **画像認識**: キャプチャボードの実画面で `Template/controller_check/btn_a.png` を `wait_appear` に使い、タイムアウトせず一致することを確認する。`CROP` は実画面の解像度に合わせる。
 4. **スクショ / Discord**: `screenshot` で保存先に画像ができ、`discord` はテスト用チャンネルへ送れることを確認する。

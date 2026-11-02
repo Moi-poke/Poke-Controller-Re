@@ -22,7 +22,7 @@ core/  …… GUI 非依存の純粋ロジック（tkinter・アプリ層の imp
         │  audio_dsp / audio_latency: 検知・計測の純粋関数（FFT・相互相関・Tap時刻）
         │  InputLog / CommandLoader / Utility / CommandVision / CommandAudio ほか
         ▼
-ファーム (Arduino Leonardo / Pico；専用品は別 repo Moi-poke/pico-wakeCon)
+ファーム (Arduino Leonardo / Pico 2 W。Pico 2 WはSwitch-bconファーム、詳細は docs/BCON_TRANSPORT.md)
 ```
 
 エントリは [`SerialController/__main__.py`](../SerialController/__main__.py)（`python -m SerialController`）と

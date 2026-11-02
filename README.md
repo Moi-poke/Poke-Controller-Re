@@ -68,7 +68,7 @@ Blocklyエディタの機能拡充（詳細は [`docs/BLOCKLY_EDITOR.md`](docs/B
 - 開発基盤の整備（`task` + ruff + mypy、型付け、コード整理）
 - GUI非依存部を [`SerialController/core/`](SerialController/core) へ分離（既存の自作スクリプトはそのまま動きます）
 - LINE通知の削除（LINE Notify サービス終了のため。通知はDiscord連携へ）
-- Picoファーム（別repo pico-wakeCon）との通信対応
+- Picoファーム連携（当時はpico-wakeCon。現在のPico 2 WはSwitch-bcon）
 - 複数台の並列起動に対応（ランチャー / `--profile`）
 - `requirements.txt` を廃止（uv管理に一本化）
 
@@ -184,11 +184,12 @@ python .\SerialController\Window.py
 ```cmd
 python .\SerialController\launcher.py
 python .\SerialController\Window.py --profile switch1
-python .\SerialController\Window.py --profile switch1 --transport pico_uart
+python .\SerialController\Window.py --profile switch1 --transport switch-bcon
 ```
 
-通信方式は `legacy_text`（本家 Leonardo 用）と `pico_uart`（pico-wakeCon 用）、
-`bcon`（Switch-bcon 用、詳細は [`docs/BCON_TRANSPORT.md`](docs/BCON_TRANSPORT.md)）の3種です。
+通信方式は `legacy_text`（本家 Leonardo 用）、`switch-bcon`（Pico 2 W用）、
+`switch-bcon-proc`（同じBCONを別プロセスで送受信）の3種です。
+詳細は [`docs/BCON_TRANSPORT.md`](docs/BCON_TRANSPORT.md) を参照してください。
 `--transport` を省略したときは設定ファイルの `[Transport] name` を使います。
 
 ### 不具合の報告
