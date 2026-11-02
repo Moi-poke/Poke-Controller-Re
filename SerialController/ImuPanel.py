@@ -1291,8 +1291,7 @@ class ImuPanel:
                 gy = max(-32768, min(32767, int(round(gy * gyro_scale))))
                 gz = max(-32768, min(32767, int(round(gz * gyro_scale))))
             if dead_raw > 0.0:
-                # 静止時の残余バイアスでゲーム側の判定が誤発火する
-                # 場合の不感帯。各軸独立に潰す（実スイングは残る）。
+                # 不感帯。各軸独立に潰す。
                 try:
                     from core.imu_wave import apply_gyro_deadband
 

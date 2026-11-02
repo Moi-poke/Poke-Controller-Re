@@ -295,9 +295,9 @@ def default_sections() -> dict[str, dict[str, Any]]:
             "hid_gyro_scale": "1.0,1.0,1.0",
             # ジャイロバイアス（rad/s・3要素）。補正値の永続先。
             "gyro_bias": "0.0,0.0,0.0",
-            # ジャイロの不感帯（dps）。静止時の残余バイアス・ノイズで
-            # ゲーム側のスイング判定が誤発火するため既定3dps。0で無効。
-            "gyro_dead_dps": 3.0,
+            # ジャイロの不感帯（dps）。既定0（無効）にして小さい動きを
+            # 残す。必要なら 1〜3 程度を入れる。
+            "gyro_dead_dps": 0.0,
             # ジャイロ出力の倍率。1.0で生値そのまま。コンソール側の
             # スケール解釈が想定と違う場合の実測用トリム（0.01〜4.0）。
             "gyro_scale": 1.0,
@@ -605,7 +605,7 @@ def complete_missing(
         float_rules = {
             "sine_period_s": ("2.0", lambda value: value > 0),
             "step_duration_s": ("4.0", lambda value: value > 0),
-            "gyro_dead_dps": ("3.0", lambda value: 0 <= value <= 100),
+            "gyro_dead_dps": ("0.0", lambda value: 0 <= value <= 100),
             "gyro_scale": ("1.0", lambda value: 0.01 <= value <= 4.0),
         }
         for key, (dflt, ok) in float_rules.items():

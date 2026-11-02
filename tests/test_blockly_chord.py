@@ -249,6 +249,32 @@ def test_chord_stop_mid_hold() -> None:
     assert single[0]["duration"] == 0.5
 
 
+def test_chord_keeps_idle_until_stop() -> None:
+    """Given: 同時押しの後に無操作 / When: 停止時刻つきで変換 / Then: 停止までの待ちが末尾に入ること。"""
+    # Given: A+R を押して離した後、記録停止まで何もしない
+    events = [
+        _event("PRESS", "button", "Button.A", 10.0),
+        _event("PRESS", "button", "Button.R", 10.2),
+        _event("RELEASE", "button", "Button.A", 10.5, 0.5),
+        _event("RELEASE", "button", "Button.R", 10.7, 0.5),
+    ]
+    # When: 停止時刻 12.7 で変換する
+    steps = blockly_record.events_to_chord_steps(events, stop_at=12.7)
+    # Then: 最後の holdEnd の後に 2.0 秒の待ちが入る
+    assert steps[-1]["kind"] == "wait"
+    assert abs(float(steps[-1]["wait"]) - 2.0) <= 0.02
+    # Given: 重ならない単独押しだけでも同じ
+    single = blockly_record.events_to_chord_steps(
+        [
+            _event("PRESS", "button", "Button.A", 1.0),
+            _event("RELEASE", "button", "Button.A", 1.1, 0.1),
+        ],
+        stop_at=5.0,
+    )
+    # Then: 孤立 press の待ちが停止まで（5.0−1.1）になる
+    assert single[0]["wait"] == 3.9
+
+
 def test_chord_stale_release_dropped() -> None:
     """Given: 開始前押下の RELEASE / When: 変換する / Then: 捨てて残りを press にすること。"""
     # Given: PRESS の無い RELEASE＋通常操作
