@@ -301,3 +301,30 @@ def test_context_menu_items_are_hidden_on_toolbox_blocks() -> None:
         """
     )
     assert res == ["hidden", "hidden", "hidden"]
+
+
+def test_awaiting_input_is_polled_and_cancel_is_shown() -> None:
+    """引数ダイアログ待ちを状態行に出し、取消の結果も表示すること。"""
+    res = run_editor(
+        _SETUP
+        + """
+        routes.run = { ok: true, status: 'awaiting_input', runId: 5 };
+        routes['run/state'] = { ok: true, available: true, runId: 5, running: true,
+          paused: false, awaitingInput: true, inputStatus: 'awaiting', result: '',
+          blockId: '', error: '', errorBlock: '', logs: [], vars: [], busy: true,
+          otherBusy: false };
+        boot();
+        await flush(400);
+        els.runbtn.handlers.click();
+        await flush(500);
+        const waiting = els.status.textContent;
+        const active = { run: els.runbtn.disabled, stop: els.stopbtn.disabled };
+        routes['run/state'] = Object.assign({}, routes['run/state'],
+          { running: false, result: '停止', inputStatus: 'canceled', awaitingInput: false, busy: false });
+        await flush(700);
+        done({ waiting, active, canceled: els.status.textContent });
+        """
+    )
+    assert "入力を待っています" in res["waiting"]
+    assert res["active"] == {"run": True, "stop": False}
+    assert "取り消した" in res["canceled"]

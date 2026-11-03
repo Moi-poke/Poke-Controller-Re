@@ -24,7 +24,10 @@ CONTROLLER_DIR = ROOT / "SerialController"
 if str(CONTROLLER_DIR) not in sys.path:
     sys.path.insert(0, str(CONTROLLER_DIR))
 
-from core import blockly_headless  # noqa: E402
+from core import (  # noqa: E402
+    blockly_headless,
+    inputs as input_specs,
+)
 from services import blockly_author, blockly_save, blockly_templates  # noqa: E402
 
 EXIT_OK = 0
@@ -202,6 +205,11 @@ def _build_parser() -> argparse.ArgumentParser:
         "--expected-sha256",
         default=None,
         help="許可したコードの digest（preview の codeSha256）",
+    )
+    trial.add_argument(
+        "--answers",
+        default=None,
+        help="実行時引数の JSON ファイル（key → 値）",
     )
     trial.add_argument("--json", action="store_true", help="結果を JSON で出す")
 
@@ -381,6 +389,17 @@ def _cmd_catalog(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def _input_declaration(code: str, app_dir: str | Path) -> tuple[Any, list[str]]:
+    """生成コードの `POKECON_INPUTS` を読み、宣言と異常を返す。"""
+    raw, errors = input_specs.raw_spec_from_code(code)
+    if errors:
+        return None, errors
+    if raw is None:
+        return [], []
+    _, errors = input_specs.parse_spec(raw, app_dir)
+    return raw, errors
+
+
 def _cmd_check(args: argparse.Namespace) -> int:
     spec, error = _read_json(args.spec)
     if error is not None:
@@ -391,11 +410,13 @@ def _cmd_check(args: argparse.Namespace) -> int:
         result = blockly_author.check_workspace(spec, app_dir)
     else:
         result = blockly_author.check_spec(spec, app_dir)
+    raw_inputs, input_errors = _input_declaration(result.code, app_dir)
+    errors = list(result.errors) + input_errors
     if args.json:
         _print_json(
             {
-                "ok": result.ok,
-                "errors": result.errors,
+                "ok": result.ok and not input_errors,
+                "errors": errors,
                 "warnings": result.warnings,
                 "stem": result.stem,
                 "workspace": result.workspace,
@@ -405,17 +426,18 @@ def _cmd_check(args: argparse.Namespace) -> int:
                     else None
                 ),
                 "code": result.code,
+                "inputs": raw_inputs,
             }
         )
-    elif result.ok:
+    elif result.ok and not input_errors:
         sys.stdout.write(
             "検査に通りました" + (f": {result.stem}" if result.stem else "") + "\n"
         )
         for warning in result.warnings:
             sys.stderr.write(f"注意: {warning}\n")
     else:
-        _print_errors(result.errors, result.warnings)
-    return EXIT_OK if result.ok else _failure_exit(result.errors)
+        _print_errors(errors, result.warnings)
+    return EXIT_OK if result.ok and not input_errors else _failure_exit(errors)
 
 
 def _cmd_build(args: argparse.Namespace) -> int:
@@ -726,20 +748,23 @@ def _cmd_render(args: argparse.Namespace) -> int:
         sys.stderr.write(error + "\n")
         return EXIT_USAGE
     result = blockly_author.render_workspace(workspace, _app_dir(args))
+    raw_inputs, input_errors = _input_declaration(result.code, _app_dir(args))
+    errors = list(result.errors) + input_errors
     if args.json:
         _print_json(
             {
-                "ok": result.ok,
+                "ok": result.ok and not input_errors,
                 "code": result.code,
-                "errors": result.errors,
+                "errors": errors,
                 "warnings": result.warnings,
+                "inputs": raw_inputs,
             }
         )
-    elif result.ok:
+    elif result.ok and not input_errors:
         sys.stdout.write(result.code)
     else:
-        _print_errors(result.errors, result.warnings)
-    return EXIT_OK if result.ok else _failure_exit(result.errors)
+        _print_errors(errors, result.warnings)
+    return EXIT_OK if result.ok and not input_errors else _failure_exit(errors)
 
 
 def _editor_client(origin: str) -> Any:
@@ -1139,6 +1164,16 @@ def _cmd_trial(args: argparse.Namespace) -> int:
     if error is not None:
         sys.stderr.write(error + "\n")
         return EXIT_USAGE
+    answers: dict[str, Any] | None = None
+    if args.answers:
+        loaded, error = _read_json(args.answers)
+        if error is not None:
+            sys.stderr.write(error + "\n")
+            return EXIT_USAGE
+        if not isinstance(loaded, dict):
+            sys.stderr.write("--answers は key → 値のオブジェクトで書いてください\n")
+            return EXIT_USAGE
+        answers = loaded
     app_dir = _app_dir(args)
     if args.workspace:
         checked = blockly_author.check_workspace(spec, app_dir)
@@ -1184,11 +1219,15 @@ def _cmd_trial(args: argparse.Namespace) -> int:
             "preview の codeSha256 と現在の生成コードが違います。"
             "preview をやり直し、許可したコードを確認してください。",
         )
-    return _run_trial(args, trial_code, seconds, digest)
+    return _run_trial(args, trial_code, seconds, digest, answers)
 
 
 def _run_trial(
-    args: argparse.Namespace, trial_code: str, seconds: float, digest: str
+    args: argparse.Namespace,
+    trial_code: str,
+    seconds: float,
+    digest: str,
+    answers: dict[str, Any] | None = None,
 ) -> int:
     try:
         client = _editor_client(args.server)
@@ -1215,10 +1254,44 @@ def _run_trial(
         return _fail(
             args, "本体で別のコマンドが実行中です（終わってから試してください）"
         )
+    trial_specs, spec_errors = input_specs.spec_from_code(trial_code, _app_dir(args))
+    if spec_errors:
+        return _fail(args, "実行時引数が不正です: " + "; ".join(spec_errors))
+    if trial_specs and "inputAnswers" not in set(capabilities):
+        return _fail(
+            args,
+            "このエディタは実行時引数に対応していません"
+            "（本体を更新してから開き直してください）",
+        )
     try:
-        started = client.start_trial(trial_code, max_seconds=seconds)
+        started = client.start_trial(
+            trial_code,
+            max_seconds=seconds,
+            answers=answers,
+            input_policy="fail",
+        )
     except ValueError as e:
         return _fail(args, f"試し実行を開始できません: {e}")
+    if started.get("status") == "input_required":
+        required = started.get("inputRequired")
+        payload_required: dict[str, Any] = {
+            "ok": False,
+            "status": "input_required",
+            "inputRequired": required if isinstance(required, list) else [],
+        }
+        if args.json:
+            _print_json(payload_required)
+        else:
+            keys = [
+                str(item.get("key", ""))
+                for item in payload_required["inputRequired"]
+                if isinstance(item, dict)
+            ]
+            sys.stderr.write(
+                "実行時引数が足りません: " + ", ".join(keys) + "\n"
+                "`--answers` で値を渡してください\n"
+            )
+        return EXIT_CHECK
     run_id = started.get("runId")
     if not isinstance(run_id, int) or isinstance(run_id, bool) or run_id <= 0:
         return _fail(
@@ -1272,6 +1345,9 @@ def _run_trial(
         "errorBlock": str(last.get("errorBlock", "")),
         "timedOut": bool(last.get("timedOut")),
         "codeSha256": digest,
+        "inputs": last.get("inputs", {}),
+        "inputSources": last.get("inputSources", {}),
+        "inputStatus": str(last.get("inputStatus", "")),
     }
     if args.json:
         _print_json(payload)

@@ -181,14 +181,42 @@ class EditorClient:
             seq = 0
         return self._json(self._get(f"/run/state?since={seq}"))
 
-    def start_trial(self, code: str, *, max_seconds: float) -> dict[str, Any]:
-        """`/run` で時間上限つきの試し実行を始める。"""
+    def start_trial(
+        self,
+        code: str,
+        *,
+        max_seconds: float,
+        answers: dict[str, Any] | None = None,
+        input_policy: str = "fail",
+    ) -> dict[str, Any]:
+        """`/run` で時間上限つきの試し実行を始める。
+
+        `answers` は `POKECON_INPUTS` の key → 値。`input_policy` の既定は
+        無人向けの `fail`（足りなければ開始せず `input_required`）。
+        """
         seconds = float(max_seconds)
         if not (seconds > 0):
             raise ValueError("試し実行の上限は正の秒数で書いてください")
-        return self._post(
-            "/run", {"code": str(code), "breakpoints": [], "maxSeconds": seconds}
-        )
+        body: dict[str, Any] = {
+            "code": str(code),
+            "breakpoints": [],
+            "maxSeconds": seconds,
+            "inputPolicy": str(input_policy),
+        }
+        if answers is not None:
+            body["answers"] = dict(answers)
+        response = self._post_raw("/run", body)
+        if (
+            response.get("ok") is not True
+            and response.get("status") != "input_required"
+        ):
+            message = response.get("message")
+            raise ValueError(
+                str(message)
+                if isinstance(message, str) and message
+                else "エディタが失敗を返しました"
+            )
+        return response
 
     def control(self, run_id: int, action: str) -> dict[str, Any]:
         """`/run/control` を runId 付きで送る。"""

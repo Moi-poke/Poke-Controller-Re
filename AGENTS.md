@@ -34,6 +34,7 @@ python .\SerialController\Window.py
 
 ## Conventions / gotchas
 
+- UI は主ラベルだけで説明し、セカンダリラベル（`回数（1〜100）` のような範囲・単位・補足の重ね書き）を可能な限り避ける。範囲はスピンボックスの上下限、意味は配置・アイコン・プレースホルダ・ツールチップに持たせる。Blockly のフィールド名も同じ。
 - Absolute imports as if [`SerialController/`](SerialController) is on `sys.path` (e.g. `from Commands.Keys import Button`), never relative imports. Comments and user-visible strings are Japanese — match that.
 - Python floor is 3.12 (`requires-python >=3.12`): `X | None`, builtin generics, `super()`, `type` statements, `except*`, and `Self` are fine. Style and typing are enforced by ruff/mypy configured in [`pyproject.toml`](pyproject.toml) — don't restate those rules here.
 - Python version policy: floor = oldest version with >1 year of EOL runway left (review each October); pin = latest patch of a stable minor. Current pin: 3.12.15 (3.12 EOL 2028-10; 3.12.16 is released but not yet available as a uv-managed build). Next review Oct 2027: prefer 3.14 over 3.13 (3.13 is security-only since 2026-10; 3.14 on Windows uses Tcl/Tk 9.0.4, so GUI/hardware verification is required; free-threading is out until further notice).

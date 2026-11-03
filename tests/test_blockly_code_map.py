@@ -23,9 +23,9 @@ SAMPLE_DIR = (
 
 
 def _sample_states() -> list[tuple[str, dict[str, Any]]]:
-    """同梱の作例11個を（ファイル名・読込状態）で返す。"""
+    """同梱の作例12個を（ファイル名・読込状態）で返す。"""
     found = sorted(SAMPLE_DIR.glob("BlocklySample*.blockly.json"))
-    assert len(found) == 11, f"作例は11個のはずが {len(found)} 個"
+    assert len(found) == 12, f"作例は12個のはずが {len(found)} 個"
     out: list[tuple[str, dict[str, Any]]] = []
     for path in found:
         data = json.loads(path.read_text(encoding="utf-8"))
@@ -126,8 +126,8 @@ done({{ code: m.code, lines: m.lines, plain, ownScrub, allIds,
 
 
 def test_every_bundled_sample_maps_to_exactly_the_same_code_it_would_generate() -> None:
-    """作例11個のどれでも、対応付けの文字列は通常生成と1文字も違わないこと。"""
-    # Given: 同梱の作例11個
+    """作例12個のどれでも、対応付けの文字列は通常生成と1文字も違わないこと。"""
+    # Given: 同梱の作例12個
     for name, state in _sample_states():
         # When: 対応付けを取る
         out = _codemap(state)

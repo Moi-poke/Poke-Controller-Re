@@ -28,17 +28,23 @@ uv run --frozen python tools/blockly_agent.py patch --help
 | コマンド | 入力・主なオプション | 代表結果と用途 |
 | --- | --- | --- |
 | `catalog` | `--format json\|markdown`（既定 json）、`--output <path>` | ブロックの fields / inputs / 選択肢。Markdown はテンプレ一覧も含む。output はファイルを書き出す。 |
-| `check <spec>` | `--workspace` で保存済み workspace 入力 | `ok`, `errors`, `warnings`, `stem`, `workspace`, `code`。workspace 入力時は `workspaceSha256`。保存しない。 |
+| `check <spec>` | `--workspace` で保存済み workspace 入力 | `ok`, `errors`, `warnings`, `stem`, `workspace`, `code`, `inputs`（`POKECON_INPUTS` の宣言）。workspace 入力時は `workspaceSha256`。保存しない。 |
 | `build <spec>` | `--workspace`, `--write`, `--stem`, `--expect-current-sha256`, `--overwrite-external` | write なしは workspace。仕様入力の build 単体は組立てのみなので別途 check する。write は検査後に対保存し `status:"saved"`, `py`, `json`。 |
 | `patch <workspace>` | 必須 `--ops <file>`、`--dry-run` または `--write --stem <name>` または `--output <new-file>`、`--expect-current-sha256`, `--overwrite-external` | `workspace`, `workspaceSha256`, `code`, `changes`。status は `dry_run` / `saved` / `written` / `patched`。 |
 | `live status` | 必須 `--server <origin>`、`--output <new-file>`, `--json` | `revision`, `dirty`, `workspace`。output は workspace だけを新規ファイルに書く。 |
 | `live patch` | 必須 `--server <origin> --ops <file> --base-revision <revision>`、`--json` | `status:"applied"`, `revision`, `workspace`, `changes`, `code`。競合時は `status:"conflict"`。保存しない。 |
-| `render <workspace>` | 保存済み workspace 入力 | `ok`, `code`, `errors`, `warnings`。Python を再生成する。保存しない。 |
-| `trial <spec>` | 必須 `--server <origin> --max-seconds <seconds>`、`--workspace`, `--allow-input`, `--expected-sha256` | 既定は `status:"preview"`, `code`, `codeSha256`, `workspace`, `server`, `maxSeconds`。許可時だけ本体へ入力する。 |
+| `render <workspace>` | 保存済み workspace 入力 | `ok`, `code`, `errors`, `warnings`, `inputs`。Python を再生成する。保存しない。 |
+| `trial <spec>` | 必須 `--server <origin> --max-seconds <seconds>`、`--workspace`, `--allow-input`, `--expected-sha256`, `--answers <file>` | 既定は `status:"preview"`, `code`, `codeSha256`, `workspace`, `server`, `maxSeconds`。許可時だけ本体へ入力する。`--answers` は `POKECON_INPUTS` の key → 値。足りなければ開始せず `status:"input_required"`（終了コード1）。 |
 | `frame` | 必須 `--server <origin> --output <new.png>` | `/frame` の生 PNG と `width`, `height`。本体とエディタが必要。カメラを開き直さない。 |
 | `template` | 必須 `--image <file> --name <name> --rect x1 y1 x2 y2` | `Template/blockly/` に切出し画像を保存し、実名 `template` を返す。同名は連番。 |
 | `match` | 必須 `--image <file> --template <relative-name>`、`--threshold`（既定 0.7）、`--gray` / `--no-gray`（既定 gray）、`--crop x1 y1 x2 y2`, `--preview <new.png>` | `score`, `matched`, `rect`, `count`, `preview`。実画像を照合し注釈画像を確認する。 |
 | `color` | 必須 `--image <file> --lower H S V --upper H S V`、`--ratio`（既定 0.6）、`--crop x1 y1 x2 y2`, `--preview <new.png>` | 実測 `ratio` と合否。CLI の `--ratio` は基準であり実測値ではない。 |
+
+`--answers` の値は宣言の型に合わせる（choice 複数は文字列の配列、int は数値）。
+`inputPolicy` は CLI では常に `fail`（無人で止める）。`/run` の結果に
+`inputRequired`（`key`・`kind`・`title`・`options` など）が入るので、それを
+直して再実行する。`/run/state` には `inputs`・`inputSources`・`inputStatus` が
+入る（`dialog` のときは `awaitingInput`）。
 
 `build --write` の仕様入力には仕様の `stem` または `--stem` が必要。
 workspace 入力の保存には `--stem` が必要で、版ガードは workspace 保存でのみ使う。

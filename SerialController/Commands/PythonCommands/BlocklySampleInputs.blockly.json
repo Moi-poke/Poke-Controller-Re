@@ -1,0 +1,205 @@
+{
+  "blocks": {
+    "languageVersion": 0,
+    "blocks": [
+      {
+        "type": "pokecon_program",
+        "id": "P",
+        "fields": {
+          "NAME": "入力つき収集の例",
+          "TAGS": "blockly,Sample"
+        },
+        "inputs": {
+          "DO": {
+            "block": {
+              "type": "pokecon_repeat_limit",
+              "id": "for",
+              "fields": {
+                "VAR": {
+                  "id": "i",
+                  "name": "i"
+                }
+              },
+              "inputs": {
+                "LIMIT": {
+                  "block": {
+                    "type": "pokecon_input_get",
+                    "id": "g3",
+                    "fields": {
+                      "KEY": "max_rounds"
+                    }
+                  }
+                },
+                "DO": {
+                  "block": {
+                    "type": "pokecon_for_each",
+                    "id": "fe",
+                    "fields": {
+                      "VAR": {
+                        "id": "item",
+                        "name": "item"
+                      }
+                    },
+                    "inputs": {
+                      "LIST": {
+                        "block": {
+                          "type": "pokecon_input_get",
+                          "id": "g1",
+                          "fields": {
+                            "KEY": "targets"
+                          }
+                        }
+                      },
+                      "DO": {
+                        "block": {
+                          "type": "controls_if",
+                          "id": "if",
+                          "inputs": {
+                            "IF0": {
+                              "block": {
+                                "type": "pokecon_vision_contains",
+                                "id": "vc",
+                                "fields": {
+                                  "TEMPLATE": "",
+                                  "THRESHOLD": 0.7,
+                                  "CROP": "",
+                                  "USE_GRAY": "FALSE"
+                                },
+                                "inputs": {
+                                  "TEMPLATE_EXPR": {
+                                    "block": {
+                                      "type": "pokecon_option_template",
+                                      "id": "opt",
+                                      "fields": {
+                                        "SET": "controller_check"
+                                      },
+                                      "inputs": {
+                                        "VALUE": {
+                                          "block": {
+                                            "type": "variables_get",
+                                            "id": "vit",
+                                            "fields": {
+                                              "VAR": {
+                                                "id": "item",
+                                                "name": "item"
+                                              }
+                                            }
+                                          }
+                                        }
+                                      }
+                                    }
+                                  }
+                                }
+                              }
+                            },
+                            "DO0": {
+                              "block": {
+                                "type": "pokecon_press",
+                                "id": "press",
+                                "fields": {
+                                  "BUTTON": "A",
+                                  "DURATION": 0.1,
+                                  "WAIT": 0.1
+                                },
+                                "next": {
+                                  "block": {
+                                    "type": "pokecon_list_remove",
+                                    "id": "rm",
+                                    "inputs": {
+                                      "LIST": {
+                                        "block": {
+                                          "type": "pokecon_input_get",
+                                          "id": "g2",
+                                          "fields": {
+                                            "KEY": "targets"
+                                          }
+                                        }
+                                      },
+                                      "VALUE": {
+                                        "block": {
+                                          "type": "variables_get",
+                                          "id": "vit2",
+                                          "fields": {
+                                            "VAR": {
+                                              "id": "item",
+                                              "name": "item"
+                                            }
+                                          }
+                                        }
+                                      }
+                                    }
+                                  }
+                                }
+                              }
+                            },
+                            "ELSE": {
+                              "block": {
+                                "type": "pokecon_wait",
+                                "id": "wait",
+                                "fields": {
+                                  "SEC": 0.2
+                                }
+                              }
+                            }
+                          },
+                          "extraState": {
+                            "hasElse": true
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              "next": {
+                "block": {
+                  "type": "pokecon_print",
+                  "id": "pr",
+                  "fields": {
+                    "KIND": "print"
+                  },
+                  "inputs": {
+                    "TEXT": {
+                      "block": {
+                        "type": "pokecon_input_get",
+                        "id": "g4",
+                        "fields": {
+                          "KEY": "targets"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "type": "pokecon_input_choice",
+        "id": "in1",
+        "fields": {
+          "KEY": "targets",
+          "TITLE": "集める対象",
+          "SET": "controller_check",
+          "MULTI": "TRUE",
+          "DEFAULT": "btn_a,btn_b",
+          "LABELS": "btn_a=A;btn_b=B;btn_lclick=Lクリック;hat_top=十字キー上;header=ヘッダ"
+        }
+      },
+      {
+        "type": "pokecon_input_int",
+        "id": "in2",
+        "fields": {
+          "KEY": "max_rounds",
+          "TITLE": "上限周回",
+          "MIN": 1,
+          "MAX": 100,
+          "DEFAULT": 10,
+          "ALLOW_UNLIMITED": "TRUE",
+          "DEFAULT_UNLIMITED": "FALSE"
+        }
+      }
+    ]
+  }
+}

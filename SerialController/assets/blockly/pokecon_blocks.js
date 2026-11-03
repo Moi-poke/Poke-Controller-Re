@@ -818,6 +818,8 @@
       colour: 195,
       tooltip:
         "テンプレ画像が出るまで、ボタンを押し続ける（A連打で戦闘開始を待つ等）。上限の時間で打ち切る。",
+      message2: "画像名の式 %1",
+      args2: [{ type: "input_value", name: "TEMPLATE_EXPR", check: "String" }],
     },
     {
       type: "pokecon_vision_press_until_gone",
@@ -849,6 +851,8 @@
       colour: 195,
       tooltip:
         "テンプレ画像が消えるまで、ボタンを押し続ける。上限の時間で打ち切る。",
+      message2: "画像名の式 %1",
+      args2: [{ type: "input_value", name: "TEMPLATE_EXPR", check: "String" }],
     },
     {
       type: "pokecon_vision_wait_count",
@@ -880,6 +884,8 @@
       colour: 195,
       tooltip:
         "テンプレ画像が指定の個数見つかるまで待つ（卵の数え上げ等）。上限の時間で打ち切る。",
+      message2: "画像名の式 %1",
+      args2: [{ type: "input_value", name: "TEMPLATE_EXPR", check: "String" }],
     },
     {
       type: "pokecon_vision_count",
@@ -908,6 +914,115 @@
       colour: 195,
       tooltip:
         "画面内でテンプレ画像が見つかった個数（数値）。",
+      message2: "画像名の式 %1",
+      args2: [{ type: "input_value", name: "TEMPLATE_EXPR", check: "String" }],
+    },
+    {
+      type: "pokecon_option_template",
+      message0: "テンプレート セット %1 の値 %2",
+      args0: [
+        { type: "field_input", name: "SET", text: "mypack/items", tooltip: "Template/ からの相対フォルダ" },
+        { type: "input_value", name: "VALUE", check: "String" },
+      ],
+      output: "String",
+      colour: 195,
+      tooltip: "セットの値から、実在する画像のパス（拡張子込み）を返す。",
+    },
+    {
+      type: "pokecon_input_choice",
+      message0: "引数 選択 key %1 題 %2 セット %3 複数 %4 既定 %5 表示名 %6",
+      args0: [
+        { type: "field_input", name: "KEY", text: "targets", tooltip: "英小文字で始まる英数字と _" },
+        { type: "field_input", name: "TITLE", text: "対象" },
+        { type: "field_input", name: "SET", text: "mypack/items", tooltip: "Template/ からの相対フォルダ" },
+        { type: "field_checkbox", name: "MULTI", checked: true },
+        { type: "field_input", name: "DEFAULT", text: "*", tooltip: "* は全部。複数はカンマ区切り" },
+        { type: "field_input", name: "LABELS", text: "", tooltip: "任意: 値=表示名;値=表示名" },
+      ],
+      colour: 40,
+      tooltip: "Start 前に選ばせる引数。ワークスペースのどこに置いてもよい。",
+    },
+    {
+      type: "pokecon_input_int",
+      message0: "引数 数値 key %1 題 %2 最小 %3 最大 %4 既定 %5 上限なし可 %6 既定は上限なし %7",
+      args0: [
+        { type: "field_input", name: "KEY", text: "n", tooltip: "英小文字で始まる英数字と _" },
+        { type: "field_input", name: "TITLE", text: "回数" },
+        { type: "field_number", name: "MIN", value: 1 },
+        { type: "field_number", name: "MAX", value: 100 },
+        { type: "field_number", name: "DEFAULT", value: 1 },
+        { type: "field_checkbox", name: "ALLOW_UNLIMITED", checked: false, tooltip: "Start 時に「上限なし」を選べるようにする" },
+        { type: "field_checkbox", name: "DEFAULT_UNLIMITED", checked: false, tooltip: "最初から「上限なし」にしておく" },
+      ],
+      colour: 40,
+      tooltip: "Start 前に整数を聞く引数。",
+    },
+    {
+      type: "pokecon_input_get",
+      message0: "引数 %1",
+      args0: [{ type: "field_input", name: "KEY", text: "targets" }],
+      output: null,
+      colour: 40,
+      tooltip: "Start 前に確定した引数の値。",
+    },
+    {
+      type: "pokecon_for_each",
+      message0: "一覧 %1 の各 %2 について",
+      args0: [
+        { type: "input_value", name: "LIST" },
+        { type: "field_variable", name: "VAR", variable: "item" },
+      ],
+      message1: "%1",
+      args1: [{ type: "input_statement", name: "DO" }],
+      previousStatement: null,
+      nextStatement: null,
+      colour: 120,
+      tooltip: "一覧をコピーして順に処理する（ループ中に外しても飛ばさない）。",
+    },
+    {
+      type: "pokecon_list_has",
+      message0: "一覧 %1 に %2 を含む",
+      args0: [
+        { type: "input_value", name: "LIST" },
+        { type: "input_value", name: "VALUE" },
+      ],
+      output: "Boolean",
+      colour: 230,
+      tooltip: "一覧に値が入っているか（文字列の部分一致ではない）。",
+    },
+    {
+      type: "pokecon_list_remove",
+      message0: "一覧 %1 から %2 を外す",
+      args0: [
+        { type: "input_value", name: "LIST" },
+        { type: "input_value", name: "VALUE" },
+      ],
+      previousStatement: null,
+      nextStatement: null,
+      colour: 230,
+      tooltip: "一覧に値があれば外す（無ければ何もしない）。",
+    },
+    {
+      type: "pokecon_list_empty",
+      message0: "一覧 %1 は空",
+      args0: [{ type: "input_value", name: "LIST" }],
+      output: "Boolean",
+      colour: 230,
+      tooltip: "一覧が空か。",
+    },
+    {
+      type: "pokecon_repeat_limit",
+      message0: "上限 %1 まで繰り返す（未設定ならずっと） カウンタ %2",
+      args0: [
+        { type: "input_value", name: "LIMIT" },
+        { type: "field_variable", name: "VAR", variable: "i" },
+      ],
+      message1: "%1",
+      args1: [{ type: "input_statement", name: "DO" }],
+      previousStatement: null,
+      nextStatement: null,
+      colour: 120,
+      tooltip: "引数の上限まで繰り返す。上限が未設定（上限なし）なら止まらないので、中に待ちや終了条件を置く。カウンタは 1 から。",
     },
     {
       type: "pokecon_sub_def",
@@ -1512,6 +1627,8 @@
       colour: 195,
       tooltip:
         "画面にテンプレ画像があれば条件成立。「もし」の条件に使う。📷 調整で実画面を見ながら範囲・しきい値を決められる。",
+      message2: "画像名の式 %1",
+      args2: [{ type: "input_value", name: "TEMPLATE_EXPR", check: "String" }],
     },
     {
       type: "pokecon_vision_wait_appear",
@@ -1542,6 +1659,8 @@
       colour: 195,
       tooltip:
         "テンプレ画像が出るまで待つ。上限の時間で打ち切る。",
+      message2: "画像名の式 %1",
+      args2: [{ type: "input_value", name: "TEMPLATE_EXPR", check: "String" }],
     },
     {
       type: "pokecon_vision_wait_gone",
@@ -1572,6 +1691,8 @@
       colour: 195,
       tooltip:
         "テンプレ画像が消えるまで待つ。上限の時間で打ち切る。",
+      message2: "画像名の式 %1",
+      args2: [{ type: "input_value", name: "TEMPLATE_EXPR", check: "String" }],
     },
     {
       type: "pokecon_vision_position",
@@ -1600,6 +1721,8 @@
       colour: 195,
       tooltip:
         "テンプレ画像が見つかった位置。",
+      message2: "画像名の式 %1",
+      args2: [{ type: "input_value", name: "TEMPLATE_EXPR", check: "String" }],
     },
     {
       type: "pokecon_vision_wait_stable",
@@ -1646,8 +1769,10 @@
     return "./template_image?name=" + encodeURIComponent(v);
   }
   Blockly.Extensions.register("pokecon_template_preview", function () {
+    var block = this;
     var tpl = this.getField("TEMPLATE");
     var prev = this.getField("PREVIEW");
+    var expr = this.getInput("TEMPLATE_EXPR");
     if (!tpl || !prev) {
       return;
     }
@@ -1655,12 +1780,54 @@
       var b = this.getSourceBlock();
       if (b) {
         var p = b.getField("PREVIEW");
-        if (p) {
+        if (p && (!expr || !expr.connection || !expr.connection.targetBlock())) {
           p.setValue(v ? previewUrl(v) : PREVIEW_EMPTY);
         }
       }
       return v;
     });
+    var refreshing = false;
+    function linked() {
+      try {
+        return !!(expr && expr.connection && expr.connection.targetBlock());
+      } catch (e) {
+        return false;
+      }
+    }
+    function refresh() {
+      if (refreshing) {
+        return;
+      }
+      refreshing = true;
+      try {
+        var on = linked();
+        // 式がつながっている間は固定欄をグレーにし、プレビューも隠す。
+        tpl.setEnabled(!on);
+        if (typeof prev.setVisible === "function") {
+          prev.setVisible(!on);
+        }
+        if (on) {
+          prev.setValue(PREVIEW_EMPTY);
+        } else {
+          var v = "";
+          try {
+            v = String(tpl.getValue() || "");
+          } catch (e) {
+            v = "";
+          }
+          prev.setValue(v ? previewUrl(v) : PREVIEW_EMPTY);
+        }
+      } finally {
+        refreshing = false;
+      }
+    }
+    if (typeof block.setOnChange === "function") {
+      block.setOnChange(refresh);
+    }
+    // 保存物の読込はイベントを止めて行われるため、読込後に画面側から
+    // まとめて呼べるようにする（pokecon_editor の refreshTemplateFields）。
+    block._pokeconRefreshTemplate = refresh;
+    refresh();
   });
   // スティック欄の相互反映。PAD（パッド）とANGLE（数値）を同期する。
   // 角度は8方向へスナップし、強さは100%固定（PAD正規形 "角度,100"）。
@@ -1833,8 +2000,239 @@
     return tags;
   }
 
+  // -- 実行時引数・一覧 -------------------------------------------------
+  pythonGenerator.forBlock["pokecon_option_template"] = function (
+    block,
+    generator,
+  ) {
+    var value =
+      generator.valueToCode(block, "VALUE", generator.ORDER_NONE) || "''";
+    return [
+      "self.option_template(" +
+        pyStr(block.getFieldValue("SET")) +
+        ", " +
+        value +
+        ")",
+      generator.ORDER_ATOMIC,
+    ];
+  };
+
+  pythonGenerator.forBlock["pokecon_input_choice"] = function () {
+    return "";
+  };
+  pythonGenerator.forBlock["pokecon_input_int"] = function () {
+    return "";
+  };
+  pythonGenerator.forBlock["pokecon_input_get"] = function (
+    block,
+    generator,
+  ) {
+    return [
+      "self.input_value(" + pyStr(block.getFieldValue("KEY")) + ")",
+      generator.ORDER_ATOMIC,
+    ];
+  };
+  pythonGenerator.forBlock["pokecon_for_each"] = function (block, generator) {
+    var list =
+      generator.valueToCode(block, "LIST", generator.ORDER_NONE) || "[]";
+    var varName = generator.getVariableName(block.getFieldValue("VAR"));
+    var body = generator.statementToCode(block, "DO");
+    if (!body) {
+      body = generator.INDENT + "pass\n";
+    }
+    return (
+      "for " +
+      varName +
+      " in list(self.pokecon_list(" +
+      list +
+      ")):\n" +
+      body
+    );
+  };
+  pythonGenerator.forBlock["pokecon_list_has"] = function (block, generator) {
+    var list =
+      generator.valueToCode(block, "LIST", generator.ORDER_NONE) || "[]";
+    var value =
+      generator.valueToCode(block, "VALUE", generator.ORDER_NONE) || "None";
+    return [
+      value + " in self.pokecon_list(" + list + ")",
+      generator.ORDER_RELATIONAL,
+    ];
+  };
+  pythonGenerator.forBlock["pokecon_list_remove"] = function (
+    block,
+    generator,
+  ) {
+    var list =
+      generator.valueToCode(block, "LIST", generator.ORDER_NONE) || "[]";
+    var value =
+      generator.valueToCode(block, "VALUE", generator.ORDER_NONE) || "None";
+    return (
+      "self.pokecon_list_remove(" + list + ", " + value + ")\n"
+    );
+  };
+  pythonGenerator.forBlock["pokecon_list_empty"] = function (
+    block,
+    generator,
+  ) {
+    var list =
+      generator.valueToCode(block, "LIST", generator.ORDER_NONE) || "[]";
+    return [
+      "len(self.pokecon_list(" + list + ")) == 0",
+      generator.ORDER_EQUALITY,
+    ];
+  };
+
+  // 入力宣言ブロックをクラス属性 POKECON_INPUTS にまとめる。
+  // どこに置いても拾い、key 順に並べる（生成コードを安定させる）。
+  function inputDeclarations(block) {
+    var ws = block ? block.workspace : null;
+    if (!ws || typeof ws.getAllBlocks !== "function") {
+      return "";
+    }
+    var decls = ws.getAllBlocks(false).filter(function (b) {
+      if (
+        b.type !== "pokecon_input_choice" &&
+        b.type !== "pokecon_input_int"
+      ) {
+        return false;
+      }
+      try {
+        return typeof b.isEnabled !== "function" || b.isEnabled();
+      } catch (e) {
+        return true;
+      }
+    });
+    decls.sort(function (a, b) {
+      var ka = "",
+        kb = "";
+      try {
+        ka = String(a.getFieldValue("KEY") || "");
+        kb = String(b.getFieldValue("KEY") || "");
+      } catch (e) {
+        ka = "";
+        kb = "";
+      }
+      return ka < kb ? -1 : ka > kb ? 1 : 0;
+    });
+    if (!decls.length) {
+      return "";
+    }
+    function labelsLiteral(text) {
+      var pairs = String(text || "")
+        .split(";")
+        .map(function (part) {
+          var at = part.indexOf("=");
+          if (at <= 0) {
+            return null;
+          }
+          return [part.slice(0, at).trim(), part.slice(at + 1).trim()];
+        })
+        .filter(function (pair) {
+          return pair && pair[0];
+        });
+      if (!pairs.length) {
+        return "";
+      }
+      return (
+        ", \"labels\": {" +
+        pairs
+          .map(function (pair) {
+            return pyStr(pair[0]) + ": " + pyStr(pair[1]);
+          })
+          .join(", ") +
+        "}"
+      );
+    }
+    function choiceLiteral(b) {
+      var parts = [
+        "\"key\": " + pyStr(b.getFieldValue("KEY")),
+        "\"kind\": \"choice\"",
+        "\"set\": " + pyStr(b.getFieldValue("SET")),
+        "\"multi\": " +
+          (b.getFieldValue("MULTI") === "TRUE" ? "True" : "False"),
+        "\"title\": " + pyStr(b.getFieldValue("TITLE")),
+      ];
+      var def = String(b.getFieldValue("DEFAULT") || "").trim();
+      if (def) {
+        parts.push("\"default\": " + pyStr(def));
+      }
+      var labels = labelsLiteral(b.getFieldValue("LABELS"));
+      if (labels) {
+        parts.push(labels.replace(/^, /, ""));
+      }
+      return "{" + parts.join(", ") + "}";
+    }
+    function intLiteral(b) {
+      var allow = b.getFieldValue("ALLOW_UNLIMITED") === "TRUE";
+      var defaultUnlimited =
+        allow && b.getFieldValue("DEFAULT_UNLIMITED") === "TRUE";
+      var parts = [
+        "\"key\": " + pyStr(b.getFieldValue("KEY")),
+        "\"kind\": \"int\"",
+        "\"min\": " + String(Number(b.getFieldValue("MIN"))),
+        "\"max\": " + String(Number(b.getFieldValue("MAX"))),
+        "\"title\": " + pyStr(b.getFieldValue("TITLE")),
+      ];
+      if (defaultUnlimited) {
+        parts.push("\"default\": None");
+      } else {
+        var def = Number(b.getFieldValue("DEFAULT"));
+        if (isFinite(def)) {
+          parts.push("\"default\": " + String(def));
+        }
+      }
+      if (allow) {
+        parts.push("\"allow_unlimited\": True");
+      }
+      return "{" + parts.join(", ") + "}";
+    }
+    var lines = decls.map(function (b) {
+      var body =
+        b.type === "pokecon_input_choice" ? choiceLiteral(b) : intLiteral(b);
+      return "        " + body + ",\n";
+    });
+    return "    POKECON_INPUTS = [\n" + lines.join("") + "    ]\n";
+  }
+
+  pythonGenerator.forBlock["pokecon_repeat_limit"] = function (
+    block,
+    generator,
+  ) {
+    var limit =
+      generator.valueToCode(block, "LIMIT", generator.ORDER_NONE) || "None";
+    var varName = generator.getVariableName(block.getFieldValue("VAR"));
+    var body = generator.statementToCode(block, "DO");
+    if (!body) {
+      body = generator.INDENT + "pass\n";
+    }
+    var temp =
+      "_pokecon_limit_" +
+      String(block.id || "x").replace(/[^A-Za-z0-9_]/g, "_");
+    return (
+      temp +
+      " = " +
+      limit +
+      "\n" +
+      varName +
+      " = 0\n" +
+      "while " +
+      temp +
+      " is None or " +
+      varName +
+      " < " +
+      temp +
+      ":\n" +
+      "    " +
+      varName +
+      " += 1\n" +
+      body
+    );
+  };
+
   pythonGenerator.forBlock["pokecon_program"] = function (block, generator) {
     var name = block.getFieldValue("NAME");
+    var inputsLine = inputDeclarations(block);
     var tagsLine =
       "    TAGS = [" +
       programTags(block)
@@ -1944,6 +2342,7 @@
         pyStr(name) +
         "\n" +
         tagsLine +
+        inputsLine +
         "\n" +
         "    def __init__(self, cam, gui=None, audio=None):\n" +
         "        super().__init__(cam, gui, audio)\n" +
@@ -1957,6 +2356,7 @@
         pyStr(name) +
         "\n" +
         tagsLine +
+        inputsLine +
         "\n" +
         "    def __init__(self, audio=None):\n" +
         "        super().__init__(audio)\n" +
@@ -1970,6 +2370,7 @@
         pyStr(name) +
         "\n" +
         tagsLine +
+        inputsLine +
         "\n" +
         "    def __init__(self, cam, gui=None):\n" +
         "        super().__init__(cam, gui)\n" +
@@ -1982,6 +2383,7 @@
         pyStr(name) +
         "\n" +
         tagsLine +
+        inputsLine +
         "\n" +
         "    def do(self) -> None:\n";
     }
@@ -2452,13 +2854,33 @@
     return "";
   }
 
+  // TEMPLATE_EXPR がつながっていればその式、無ければ従来の固定欄。
+  // 未接続時の生成コードは変更前と完全に同じにする（テストで固定）。
+  function templateArg(block, generator) {
+    var expr = "";
+    try {
+      expr = generator.valueToCode(
+        block,
+        "TEMPLATE_EXPR",
+        generator.ORDER_NONE,
+      );
+    } catch (e) {
+      expr = "";
+    }
+    expr = String(expr || "").trim();
+    if (expr) {
+      return expr;
+    }
+    return pyStr(block.getFieldValue("TEMPLATE"));
+  }
+
   pythonGenerator.forBlock["pokecon_vision_contains"] = function (
     block,
     generator,
   ) {
     var code =
       "self.isContainTemplate(" +
-      pyStr(block.getFieldValue("TEMPLATE")) +
+      templateArg(block, generator) +
       ", threshold=" +
       block.getFieldValue("THRESHOLD") +
       visionCrop(block) +
@@ -2467,10 +2889,13 @@
     return [code, generator.ORDER_ATOMIC];
   };
 
-  pythonGenerator.forBlock["pokecon_vision_wait_appear"] = function (block) {
+  pythonGenerator.forBlock["pokecon_vision_wait_appear"] = function (
+    block,
+    generator,
+  ) {
     return (
       "self.waitTemplate(" +
-      pyStr(block.getFieldValue("TEMPLATE")) +
+      templateArg(block, generator) +
       ", timeout=" +
       block.getFieldValue("TIMEOUT") +
       ", threshold=" +
@@ -2481,10 +2906,13 @@
     );
   };
 
-  pythonGenerator.forBlock["pokecon_vision_wait_gone"] = function (block) {
+  pythonGenerator.forBlock["pokecon_vision_wait_gone"] = function (
+    block,
+    generator,
+  ) {
     return (
       "self.waitTemplateGone(" +
-      pyStr(block.getFieldValue("TEMPLATE")) +
+      templateArg(block, generator) +
       ", timeout=" +
       block.getFieldValue("TIMEOUT") +
       ", threshold=" +
@@ -2495,10 +2923,13 @@
     );
   };
 
-  pythonGenerator.forBlock["pokecon_vision_press_until"] = function (block) {
+  pythonGenerator.forBlock["pokecon_vision_press_until"] = function (
+    block,
+    generator,
+  ) {
     return (
       "self.press_until(" +
-      pyStr(block.getFieldValue("TEMPLATE")) +
+      templateArg(block, generator) +
       ", " +
       block.getFieldValue("TARGET") +
       ", timeout=" +
@@ -2513,10 +2944,11 @@
 
   pythonGenerator.forBlock["pokecon_vision_press_until_gone"] = function (
     block,
+    generator,
   ) {
     return (
       "self.press_until_gone(" +
-      pyStr(block.getFieldValue("TEMPLATE")) +
+      templateArg(block, generator) +
       ", " +
       block.getFieldValue("TARGET") +
       ", timeout=" +
@@ -2529,10 +2961,13 @@
     );
   };
 
-  pythonGenerator.forBlock["pokecon_vision_wait_count"] = function (block) {
+  pythonGenerator.forBlock["pokecon_vision_wait_count"] = function (
+    block,
+    generator,
+  ) {
     return (
       "self.wait_count(" +
-      pyStr(block.getFieldValue("TEMPLATE")) +
+      templateArg(block, generator) +
       ", " +
       block.getFieldValue("COUNT") +
       ", timeout=" +
@@ -2551,7 +2986,7 @@
   ) {
     var code =
       "self.countTemplate(" +
-      pyStr(block.getFieldValue("TEMPLATE")) +
+      templateArg(block, generator) +
       ", threshold=" +
       block.getFieldValue("THRESHOLD") +
       visionCrop(block) +
@@ -2566,7 +3001,7 @@
   ) {
     var code =
       "self.getTemplatePosition(" +
-      pyStr(block.getFieldValue("TEMPLATE")) +
+      templateArg(block, generator) +
       ", threshold=" +
       block.getFieldValue("THRESHOLD") +
       visionCrop(block) +
