@@ -26,8 +26,8 @@ from pathlib import Path
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 SERIAL_CONTROLLER = _REPO_ROOT / "SerialController"
-GUI_ASSETS_SOURCE = SERIAL_CONTROLLER / "GuiAssets.py"
-WINDOW_SOURCE = SERIAL_CONTROLLER / "Window.py"
+GUI_ASSETS_SOURCE = SERIAL_CONTROLLER / "pokecon" / "ui" / "GuiAssets.py"
+WINDOW_SOURCE = SERIAL_CONTROLLER / "pokecon" / "app" / "Window.py"
 HARNESS_SOURCE = _REPO_ROOT / "tests" / "preview_fps_support.py"
 
 

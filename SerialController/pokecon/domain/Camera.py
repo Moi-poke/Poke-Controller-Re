@@ -1,0 +1,1386 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""Camera.py - カメラ制御.
+
+cv2 でキャプチャし、別スレッド（Camera）または別プロセス（CameraQueue）で
+「最新の1枚だけ」を供給する。キューに積み上げないので遅延が溜まらない。
+
+Camera       : threading 版。通常はこちらを使う。
+CameraQueue  : multiprocessing + 共有メモリ版。GIL を避けたい場合に使う。
+"""
+
+from __future__ import annotations
+
+import datetime
+import multiprocessing
+import os
+import threading
+import time
+import traceback
+from dataclasses import dataclass
+from multiprocessing import Value, shared_memory
+from multiprocessing.sharedctypes import Synchronized
+from typing import Any
+
+import cv2
+import numpy as np
+from loguru import logger
+from pokecon import paths
+
+# ---------------------------------------------------------------------------
+# 定数
+# ---------------------------------------------------------------------------
+
+# アプリの場所。このファイルの位置から決める（起動場所に依存しない）。
+# WindowUtils.APP_DIR と同じ場所を __file__ から求める（core からは import 禁止のため）。
+# cwd 相対にしない。別場所から起動しても同じ Captures を指す。
+BASE_DIR = paths.BASE_DIR
+CAPTURE_DIR = os.path.normpath(os.path.join(BASE_DIR, "Captures"))
+CAPTURE_SIZE = (1280, 720)
+SHARED_MEMORY_NAME = "camera_image"
+
+THREAD_JOIN_TIMEOUT = 0.5  # GUI を止めずに待てる上限(秒)
+THREAD_RELEASE_TIMEOUT = 5.0  # 裏で取得スレッドの終了を待つ上限(秒)
+#: 解放を待つ合計の上限(秒)。1 回の join で諦めるとデバイスが開いたまま残り、
+#: 次の openCamera も失敗する（利用者からは「開き直せない」としか見えない）。
+RELEASE_RETRY_TOTAL_S = 20.0
+PROCESS_JOIN_TIMEOUT = 3.0
+
+# 取得失敗が続くときの待ちの下限(秒)。fps=0 では interval が 0 になり、
+# ret==False 経路の wait(0.0) が空転して CPU を食い潰すため floor を置く。
+READ_FAILURE_FLOOR_S = 0.005
+
+# 共有メモリの面数。ワーカーは未使用面へ書いてから face を差し替える。
+# N 面あれば読み手は N-1 フレームぶん安全に参照できる（3 で十分）。
+FACE_COUNT = 3
+
+
+def frame_shape(capture_size: tuple = CAPTURE_SIZE) -> tuple:
+    """(w, h) から numpy の (h, w, 3) を作る。共有メモリのサイズ計算に使う。"""
+    return (int(capture_size[1]), int(capture_size[0]), 3)
+
+
+@dataclass(frozen=True, slots=True)
+class CaptureDeviceReadback:
+    """要求した設定と、デバイスが実際に許可した設定の対。
+
+    MJPG を指定しても set() は効かずに False を返すだけで、YUY2 のまま
+    実測 5〜10fps で頭打ちになることがある。実測値だけを残すと要求と
+    取り違えられるため、要求側と実測側を別フィールドで持つ。不一致3本は
+    既存の warning と同じ式から作り、データとログが二度物語にならない
+    ようにする。
+    """
+
+    requested_width: int
+    requested_height: int
+    requested_fps: int
+    actual_width: int
+    actual_height: int
+    actual_fps: float
+    fourcc: str
+    fourcc_readable: bool
+    size_not_applied: bool
+    fourcc_not_mjpg: bool
+    fps_not_applied: bool
+
+
+def _configure_capture(
+    camera: Any, capture_size: tuple, fps: int = 0
+) -> CaptureDeviceReadback:
+    """解像度・FOURCC・FPS を設定し、実際に効いたか読み戻して確認する。
+
+    FOURCC を指定しないと CAP_DSHOW の既定は YUY2（非圧縮）になる。
+    1280x720 では USB2.0 の帯域を使い切るため、指定 fps に関係なく
+    実測 5〜10fps で頭打ちになるキャプチャボードが多い。MJPG を
+    「最初に」指定するのが要点で、後から変えると解像度が既定へ戻る
+    ドライバがある。
+
+    読み戻しの結果は CaptureDeviceReadback として返す。ログだけでは履歴
+    に残らないため、警告を見逃した呼び出し側にも後から渡せるようにする。
+    """
+    requested_w = int(capture_size[0])
+    requested_h = int(capture_size[1])
+    requested_fps = int(fps) if int(fps) > 0 else 0
+
+    # VideoWriter_fourcc は実行時に存在するが、opencv のスタブに無い。
+    camera.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))  # type: ignore[attr-defined]
+    camera.set(cv2.CAP_PROP_FRAME_WIDTH, capture_size[0])
+    camera.set(cv2.CAP_PROP_FRAME_HEIGHT, capture_size[1])
+    if fps and int(fps) > 0:
+        camera.set(cv2.CAP_PROP_FPS, float(fps))
+    camera.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # 遅延を溜めない
+
+    # set() は効かなくても False を返すだけで例外にならない。
+    # 「指定したのに効いていない」を見えるようにするため読み戻す。
+    actual_w = int(camera.get(cv2.CAP_PROP_FRAME_WIDTH))
+    actual_h = int(camera.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    actual_fps = float(camera.get(cv2.CAP_PROP_FPS))
+    code = int(camera.get(cv2.CAP_PROP_FOURCC))
+    # FOURCC はリトルエンディアンの4バイト。0 や負値、印字できない
+    # バイトは「読めない」なので、復号した文字列をそのまま公開しない。
+    # 4つのNUL文字は "MJPG" と違うので、MJPG への拒絶ではなく「読めなかった」
+    # と誤読される。読めたかどうかで両者を区別する。
+    raw = tuple((code >> (8 * i)) & 0xFF for i in range(4))
+    fourcc_readable = code > 0 and all(0x20 <= byte <= 0x7E for byte in raw)
+    fourcc = "".join(chr(byte) for byte in raw) if fourcc_readable else "unreadable"
+
+    readback = CaptureDeviceReadback(
+        requested_width=requested_w,
+        requested_height=requested_h,
+        requested_fps=requested_fps,
+        actual_width=actual_w,
+        actual_height=actual_h,
+        actual_fps=actual_fps,
+        fourcc=fourcc,
+        fourcc_readable=fourcc_readable,
+        # 以下3本は既存 warning と同一の式。別実装にしない。
+        size_not_applied=(actual_w, actual_h) != (requested_w, requested_h),
+        fourcc_not_mjpg=fourcc != "MJPG",
+        fps_not_applied=(
+            requested_fps > 0 and 0 < actual_fps and actual_fps + 1.0 < requested_fps
+        ),
+    )
+
+    logger.debug(
+        f"Capture: {readback.actual_width}x{readback.actual_height} "
+        f"{readback.fourcc} {readback.actual_fps:.1f}fps"
+    )
+    if readback.size_not_applied:
+        logger.warning(
+            f"Capture size {readback.requested_width}x{readback.requested_height} "
+            f"not applied (actual {readback.actual_width}x{readback.actual_height})"
+        )
+    if readback.fourcc_not_mjpg:
+        logger.warning(
+            f"MJPG not applied (actual {readback.fourcc!r}). "
+            "帯域が不足し fps が頭打ちになる可能性がある"
+        )
+    if readback.fps_not_applied:
+        logger.warning(
+            f"FPS {readback.requested_fps} not applied "
+            f"(actual {readback.actual_fps:.1f})"
+        )
+    return readback
+
+
+# ---------------------------------------------------------------------------
+# 画像の保存（Camera / CameraQueue 共通）
+# ---------------------------------------------------------------------------
+
+
+def imread(filename: str, flags: int = cv2.IMREAD_COLOR) -> np.ndarray | None:
+    """日本語を含むパスからも読める cv2.imread の代替。
+
+    cv2.imread は Windows で非 ASCII のパスを開けず、実在する画像でも
+    None を返す（このリポジトリのワークスペース名が日本語だと必ずなる）。
+    np.fromfile でバイト列を読んでから imdecode する。読めなければ None。
+    """
+    try:
+        buf: Any = np.fromfile(filename, dtype=np.uint8)
+        if not isinstance(buf, np.ndarray) or buf.size == 0:
+            return None
+        decoded: Any = cv2.imdecode(buf, flags)
+        return decoded if isinstance(decoded, np.ndarray) else None
+    except Exception as e:
+        logger.error(f"Image Read Error: {filename}: {e}")
+        return None
+
+
+def imwrite(filename: str, img: np.ndarray, params: Any = None) -> bool:
+    """日本語を含むパスへも書き込める cv2.imwrite の代替."""
+    try:
+        ext = os.path.splitext(filename)[1]
+        result, encoded = cv2.imencode(ext, img, params if params else [])
+        if not result:
+            logger.error(f"Image encode failed: {filename}")
+            return False
+
+        with open(filename, mode="w+b") as f:
+            encoded.tofile(f)
+        return True
+    except Exception as e:
+        logger.error(f"Image Write Error: {e}")
+        return False
+
+
+def _get_save_filespec(filename: str) -> str:
+    """保存パスを取得する。絶対パスならそのまま返す。"""
+    if os.path.isabs(filename):
+        return filename
+    return os.path.join(CAPTURE_DIR, filename)
+
+
+def _build_filename(filename: str | None) -> str:
+    """保存名を決める。未指定なら日時、拡張子が無ければ .png を補う。"""
+    if not filename:
+        stamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        return f"{stamp}.png"
+    if os.path.splitext(filename)[1]:
+        return filename
+    return f"{filename}.png"
+
+
+def _crop_image(image: np.ndarray, crop: Any, crop_ax: list | None) -> np.ndarray:
+    """crop 指定に従って切り出す。crop=1 は座標指定、crop=2 は幅高さ指定。"""
+    if crop is None:
+        return image
+
+    ax = crop_ax if crop_ax else [0, 0, CAPTURE_SIZE[0], CAPTURE_SIZE[1]]
+    if crop in (1, "1"):
+        # 範囲外の要求は numpy が黙って切り詰める。挙動は変えず、記録だけ
+        # 残す（テンプレートマッチや Blockly がその挙動に依存していないかを、
+        # 実際のログから後で判断できるようにする）。
+        try:
+            x0, y0, x1, y1 = int(ax[0]), int(ax[1]), int(ax[2]), int(ax[3])
+            if x0 < 0 or y0 < 0 or x1 > image.shape[1] or y1 > image.shape[0]:
+                logger.warning(
+                    "crop が画像の範囲外です: ax={} image={}x{}",
+                    [x0, y0, x1, y1],
+                    image.shape[1],
+                    image.shape[0],
+                )
+        except (IndexError, TypeError, ValueError):
+            logger.debug("crop の範囲検査を省きました", exc_info=True)
+        # ax = [x1, y1, x2, y2]
+        return image[ax[1] : ax[3], ax[0] : ax[2]]
+    if crop in (2, "2"):
+        # ax = [x, y, w, h]
+        return image[ax[1] : ax[1] + ax[3], ax[0] : ax[0] + ax[2]]
+    return image
+
+
+def save_capture(
+    image: np.ndarray | None,
+    filename: str | None = None,
+    crop: Any = None,
+    crop_ax: list | None = None,
+) -> bool:
+    """フレームをファイルへ保存する。成否を返す。"""
+    if image is None:
+        logger.error("Capture Failed: no frame")
+        return False
+
+    image = _crop_image(image, crop, crop_ax)
+    save_path = _get_save_filespec(_build_filename(filename))
+
+    save_dir = os.path.dirname(save_path)
+    if save_dir:
+        os.makedirs(save_dir, exist_ok=True)
+
+    try:
+        if not imwrite(save_path, image):
+            logger.error(f"Capture Failed: {save_path}")
+            return False
+    except cv2.error as e:
+        logger.error(f"Capture Failed: {e}")
+        return False
+
+    logger.info(f"Capture succeeded: {save_path}")
+    return True
+
+
+# ---------------------------------------------------------------------------
+# 最新フレーム保持
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True, eq=False)
+class FrameSnapshot:
+    """1 世代分の公開状態。mailbox の lock を掴んだまま撮る。
+
+    frame と seq、両スタンプを1つの immutable に束ねることで、消費者が
+    フレームと別世代のスタンプを対にする事故を型で防ぐ。
+
+    eq=False は必須。ndarray を包む dataclass 既定の __eq__ はタプル比較を
+    して bool() を呼ぶため、要素数2つ以上の配列だと ValueError になる。
+    """
+
+    frame: np.ndarray | None
+    seq: int
+    t_capture_ns: int
+    t_ready_ns: int
+
+
+class LatestFrame:
+    """最新の1枚だけを保持する箱。
+
+    queue.Queue(maxsize=1) を継承して get/put の意味を変える実装だったが、
+    標準の契約（block / timeout）を無視することになり誤用を招くのでやめた。
+    用途が「最新1枚の上書き」だけなら Lock + 変数1つで十分かつ速い。
+
+    seq は単調増加の世代番号。put でも clear でも進む。消費者
+    （_prepareSrc / _drawFrame / wait 系）は (seq, 条件) を鍵に
+    結果を使い回し、同じ seq では再計算しない。clear をまたいで
+    当ててはならないため、clear でも seq を進めて無効化する。
+
+    公開状態は FrameSnapshot 1個で持ち、差し替えのたびに作り直す。
+    get / get_with_seq / get_with_timing が同じ 1 個を参照するので、
+    読み取り口彼此が食い違うことがない。
+
+    公開のたびに購読者（``subscribe``）を呼ぶ。プレビューの描画スレッドは
+    これで「新しい1枚が来た瞬間」に起きる。時刻で刻むのではなく公開で
+    刻むことで、60fps の取込と 60fps の表示の位相がずれても空振り・
+    取りこぼしが出ない（core/preview_pump.py）。
+    """
+
+    def __init__(self) -> None:
+        # Condition は put の差し替えと購読者の起床を同じ錠で扱う。
+        # ``wait_for_change`` はこの錠の上で待つ。
+        self._cond = threading.Condition()
+        self._snapshot: FrameSnapshot = FrameSnapshot(None, 0, 0, 0)
+        self._listeners: list[Any] = []
+
+    @property
+    def seq(self) -> int:
+        """現在の世代番号。put / clear で単調に増える。"""
+        with self._cond:
+            return self._snapshot.seq
+
+    def subscribe(self, callback: Any) -> None:
+        """公開のたびに呼ぶ関数を登録する（描画スレッドの起床用）。
+
+        呼び出しは錠の外で行う。購読者が自分の錠を取るので、ここで
+        持ったまま呼ぶとロック順が絡む。二重登録はしない。
+        """
+        with self._cond:
+            if callback not in self._listeners:
+                self._listeners.append(callback)
+
+    def unsubscribe(self, callback: Any) -> None:
+        with self._cond:
+            try:
+                self._listeners.remove(callback)
+            except ValueError:
+                return
+
+    def _notify_listeners(self) -> None:
+        # 錠の外から呼ぶ前提。登録中の一覧を複製してから回す。
+        with self._cond:
+            listeners = tuple(self._listeners)
+        for callback in listeners:
+            try:
+                callback()
+            except Exception as exc:
+                logger.debug(f"LatestFrame の購読者で例外: {exc}")
+
+    def wait_for_change(self, after_seq: int, timeout: float) -> int:
+        """``after_seq`` と違う世代になるか timeout まで待ち、現在の seq を返す。"""
+        with self._cond:
+            self._cond.wait_for(
+                lambda: self._snapshot.seq != after_seq,
+                timeout if timeout > 0 else None,
+            )
+            return self._snapshot.seq
+
+    def put(self, frame: np.ndarray | None, t_capture_ns: int) -> None:
+        """最新フレームを差し替える。None では上書きしない。
+
+        t_capture_ns は取得スレッドが read() から戻った直後に測った
+        瞬間（perf_counter_ns の整数 ns）。公開より前なので呼び出し側の
+        責任で渡す。t_ready_ns は公開の瞬間をここで測る（lock 内）ので、
+        「読めた瞬間」ではなく「読めた状態になった瞬間」を表す。
+        """
+        if frame is None:
+            return
+        with self._cond:
+            # 参照の差し替えだけ。既に公開済みの配列へ書き込まない。
+            self._snapshot = FrameSnapshot(
+                frame,
+                self._snapshot.seq + 1,
+                t_capture_ns,
+                time.perf_counter_ns(),
+            )
+            # wait_for_change で待っている描画スレッドを起こす。購読者
+            # （LatestFrame.subscribe）とは別経路で、こちらはこの錠の上。
+            self._cond.notify_all()
+        self._notify_listeners()
+
+    def get(self) -> np.ndarray | None:
+        """最新フレームを返す。まだ1枚も来ていなければ None。"""
+        with self._cond:
+            return self._snapshot.frame
+
+    def get_with_seq(self) -> tuple[np.ndarray | None, int]:
+        """最新フレームと世代番号を原子的に返す。cache の鍵用。"""
+        with self._cond:
+            snapshot = self._snapshot
+            return snapshot.frame, snapshot.seq
+
+    def get_with_timing(self) -> FrameSnapshot:
+        """最新フレーム・世代番号・両スタンプを原子的に返す。
+
+        1 回の lock 取得で全部を読むので、フレームだけ新しい／スタンプ
+        だけ古いという取り違えが起きない。
+        """
+        with self._cond:
+            return self._snapshot
+
+    def clear(self) -> None:
+        """中身を捨て、seq を進めて既存 cache を無効化する。
+
+        スタンプは 0 のままにする。0 は「時刻の記録が無い」の印で、
+        ここで測ると clear 後の 0 を実測値と区別できなくなる。
+        """
+        with self._cond:
+            self._snapshot = FrameSnapshot(None, self._snapshot.seq + 1, 0, 0)
+            self._cond.notify_all()
+        self._notify_listeners()
+
+
+# 旧名との互換（外部から CustomQueue を import している箇所があるため）
+CustomQueue = LatestFrame
+
+
+# ---------------------------------------------------------------------------
+# スレッド版（本命）
+# ---------------------------------------------------------------------------
+
+
+class Camera:
+    """cv2.VideoCapture を別スレッドで回し、最新フレームを供給する。"""
+
+    def __init__(self, fps: int = 60, capture_size: tuple = CAPTURE_SIZE) -> None:
+        self.camera: cv2.VideoCapture | None = None
+        self.fps = int(fps)
+        self.capture_size = capture_size
+        self.capture_dir = CAPTURE_DIR
+        self.frame_queue: LatestFrame = LatestFrame()
+        #: 要求と違う解像度で届いていないかを、最初の 3 枚で 1 回だけ見る。
+        #: _capture_readback はドライバが要求値をそのまま返すことがあるため、
+        #: 実際に届いたフレームで見る。知らせ先はログと GUI の 1 行だけで、
+        #: 読者の居ない状態は持たない。
+        self._size_probe_left = 3
+        #: 裏で解放待ちをしているか / 断念したか。断念は開き直しの失敗原因に
+        #: なるので、openCamera で利用者へ 1 度知らせる。
+        self.release_pending = False
+        self.release_failed = False
+
+        self._thread: threading.Thread | None = None
+        self._stop_event = threading.Event()
+        # 世代番号。open/destroy ごとに進み、旧スレッドの蘇生を防ぐ。
+        # 共有 Event の clear 使い回しをやめ、世代ごとに Event を作り直す。
+        self._generation = 0
+        self._lock = threading.Lock()
+        self._stat_lock = threading.Lock()
+        self._error: str | None = None
+        # 直近の openCamera が実測した設定。開くまでは None のまま。
+        self._capture_readback: CaptureDeviceReadback | None = None
+        # 供給実測（getStats で読むたびに区切り直す）。
+        self._stat_puts = 0
+        self._stat_began_at: float | None = None
+        self._stat_avg_ms = 0.0
+
+    # -- 開閉 ---------------------------------------------------------------
+
+    def openCamera(self, cameraId: int) -> bool:
+        """カメラを開いて取得スレッドを起動する。成否を返す。
+
+        前回の解放が裏で続いている間は開かない。同じデバイスを二重に
+        開くと、失敗したり古い設定のまま掴んだりするため。
+        """
+        if self.release_pending:
+            self._report_release_pending()
+            return False
+        if self.release_failed:
+            # 前回の解放を断念している。開けない原因がこれだと分かるようにする
+            # （一度知らせたら消す。毎回は出さない）。
+            self.release_failed = False
+            message = (
+                "前回のカメラ解放に失敗しています。"
+                "USB キャプチャを挿し直してから開き直してください"
+            )
+            logger.warning(message)
+            print(message)
+        try:
+            if self.isOpened():
+                logger.debug("Camera is already opened")
+                if not self.destroy():
+                    # 解放待ち（または解放失敗）のまま二重オープンへ進まない。
+                    self._report_release_pending()
+                    return False
+        except Exception:
+            # 既存ハンドルが壊れていると isOpened() も destroy() も投げる。
+            # ここで漏らすと Tk コールバックまで例外が抜けるため bool 契約へ倒す。
+            logger.error(f"Camera ID {cameraId} cannot open.")
+            logger.error(traceback.format_exc())
+            # 壊れたハンドルを残すと次の open も同じ例外で失敗し続ける。
+            broken, self.camera = self.camera, None
+            if broken is not None:
+                try:
+                    broken.release()
+                except Exception:
+                    logger.error(traceback.format_exc())
+            return False
+
+        # 旧スレッドの Event を clear で蘇らせない。新世代の Event を作る。
+        # 世代の更新と clear を同じ錠で行う。旧スレッドの put 判定と公開の
+        # 間に clear が割り込むと、消したはずのフレームが残るため。
+        # 錠順は Camera._lock -> LatestFrame._lock（逆順の取得は無い）。
+        with self._lock:
+            self._generation += 1
+            self._stop_event = threading.Event()
+            self._error = None
+            self.frame_queue.clear()
+
+        camera: Any = None
+        try:
+            if os.name == "nt":
+                logger.debug("NT OS")
+                camera = cv2.VideoCapture(cameraId, cv2.CAP_DSHOW)
+            else:
+                logger.debug("Not NT OS")
+                camera = cv2.VideoCapture(cameraId)
+
+            if not camera.isOpened():
+                logger.error(f"Camera ID {cameraId} cannot open.")
+                camera.release()
+                return False
+
+            # 開き直したら検査をやり直す（2 台目、解像度を変えての再接続がある）。
+            self._size_probe_left = 3
+            # 実測値を設定後に残す。警告を見逃した側にも後から渡せる。
+            self._capture_readback = _configure_capture(
+                camera, self.capture_size, self.fps
+            )
+        except Exception:
+            # バックエンド例外は呼び出し元（Tk コールバック）へ漏らさない。
+            # 失敗は bool とログだけで伝えるという公開契約を守る。
+            logger.error(f"Camera ID {cameraId} cannot open.")
+            logger.error(traceback.format_exc())
+            if camera is not None:
+                try:
+                    camera.release()
+                except Exception:
+                    logger.error(traceback.format_exc())
+            return False
+
+        with self._lock:
+            self.camera = camera
+
+        logger.debug(f"Camera ID {cameraId} opened successfully.")
+        self._start_thread()
+        return True
+
+    def isOpened(self) -> bool:
+        camera = self.camera  # 参照を確保してから判定（destroy との競合対策）
+        if camera is None:
+            return False
+        return bool(camera.isOpened())
+
+    def isRunning(self) -> bool:
+        """取得スレッドが生きているか。映像が固まった時の切り分け用。"""
+        thread = self._thread
+        return thread is not None and thread.is_alive()
+
+    def getError(self) -> str | None:
+        """取得スレッドが異常終了した理由。正常なら None。"""
+        return self._error
+
+    def getCaptureDeviceReadback(self) -> CaptureDeviceReadback | None:
+        """直近の成功した openCamera が実測した設定。開く前は None。
+
+        ドライバが黙って MJPG を拒んだとき、警告を見逃しても実測値を
+        後から確認できる。0 で埋めた記録を返すと「0x0 で 0fps のデバイス」
+        と読めてしまうので、開く前には None のままにする。
+        """
+        return self._capture_readback
+
+    def getStats(self) -> dict[str, float]:
+        """供給実測を返す。呼ぶたびに区切り直す（期間fps方式）。
+
+        戻り値は {"fps": 実際にputした枚数/秒, "avg_ms": read所要の
+        移動平均(ms)}。まだ1枚も来ていない・区間が短すぎる場合は 0。
+        表示側の実測と並べると「機器が遅いか描画が遅いか」が分かる。
+
+        telemetry 用の参考値であり、厳密な同期はしない。取得スレッドの
+        書き込みと GUI スレッドの読み・リセットの競合に備え、lock で
+        保護する（欠けても表示が揺れるだけだが、0 除算や負値は避ける）。
+        """
+        now = time.perf_counter()
+        with self._stat_lock:
+            puts, began_at, avg_ms = (
+                self._stat_puts,
+                self._stat_began_at,
+                self._stat_avg_ms,
+            )
+            self._stat_puts = 0
+            self._stat_began_at = None
+        if began_at is None or puts <= 0:
+            return {"fps": 0.0, "avg_ms": round(avg_ms, 1)}
+        elapsed = now - began_at
+        if elapsed < 1e-6:
+            return {"fps": 0.0, "avg_ms": round(avg_ms, 1)}
+        return {"fps": round(puts / elapsed, 1), "avg_ms": round(avg_ms, 1)}
+
+    def destroy(self) -> bool:
+        """取得スレッドを止めてからカメラを解放する。
+
+        read() はカメラ1周期＋ドライバ待ちのぶんブロックするため、
+        ここで長く待つと「閉じるボタンが効かない」ように見える。
+        待つのは THREAD_JOIN_TIMEOUT までとし、間に合わなければ解放を
+        別スレッドへ委ねて呼び出し元（GUI スレッド）は即座に返す。
+        戻り値は「その場で解放しきれたか」。裏で解放待ちが続いている場合も
+        False を返す。
+
+        解放待ちが上限を超えたら、断念したことを状態に残して利用者へ 1 行
+        出す（黙って諦めると「開き直せない」だけが残って原因が分からない）。
+        """
+        if self.release_pending:
+            # 前回の解放がまだ裏で続いている（取得スレッドの停止待ち）。
+            logger.debug("解放待ちの最中に destroy が呼ばれました")
+        was_pending = self.release_pending
+        self._stop_event.set()
+        # 世代を進めて旧スレッドの蘇生を防ぐ（次 open が新 Event を作る）。
+        # _update の put 判定と同じ錠で進め、判定と公開の間に割り込まれない
+        # ようにする。
+        with self._lock:
+            self._generation += 1
+
+        thread, self._thread = self._thread, None
+        if thread is not None and thread.is_alive():
+            thread.join(timeout=THREAD_JOIN_TIMEOUT)
+            if thread.is_alive():
+                logger.warning(
+                    f"Camera thread did not stop within {THREAD_JOIN_TIMEOUT}s. "
+                    "Releasing the device in background."
+                )
+                self._release_later(thread)
+                return False
+
+        released = self._release()
+        return released and not was_pending
+
+    def _release_later(self, thread: threading.Thread) -> None:
+        """取得スレッドの終了を待ってから解放する見張りを裏で走らせる。
+
+        read() の最中に release() すると cv2 が落ちうるので、待たずに
+        解放してはいけない。かといって GUI スレッドで待つと固まるので、
+        「待つ役」だけを別スレッドへ切り出す。
+
+        camera が None でも thread の join は行う。join せずに返すと
+        渡されたスレッドが放置され、次 open の世代と混ざる。
+        """
+        with self._lock:
+            camera, self.camera = self.camera, None
+            self.release_pending = True
+
+        def waiter() -> None:
+            # 1 回で諦めず、合計の上限まで分割して待つ（遅れて止まるスレッドを
+            # 取りこぼすと、デバイスが開いたまま次回の open が失敗する）。
+            deadline = time.perf_counter() + RELEASE_RETRY_TOTAL_S
+            while True:
+                remaining = deadline - time.perf_counter()
+                if remaining <= 0.0:
+                    break
+                thread.join(timeout=min(THREAD_RELEASE_TIMEOUT, remaining))
+                if not thread.is_alive():
+                    break
+            if thread.is_alive():
+                # 待つのを止めたので「解放待ち」ではなくなる。
+                self.release_failed = True
+                logger.error(
+                    "Camera thread did not stop within "
+                    f"{RELEASE_RETRY_TOTAL_S}s. Skip releasing the device."
+                )
+                # 利用者の次の行動（挿し直し）が変わるので GUI にも出す。
+                self._report_release_failed()
+                self.release_pending = False
+                return
+            if camera is not None:
+                try:
+                    camera.release()
+                except Exception:
+                    # デバイスが抜けた等で release が投げても待ち役を落とさない。
+                    # 失敗を残さないと、次の open が原因不明の失敗に見える。
+                    self.release_failed = True
+                    logger.error("Camera release failed after thread stopped.")
+                    logger.error(traceback.format_exc())
+                    self._report_release_failed()
+                else:
+                    logger.debug("Camera destroyed (deferred)")
+            self.release_pending = False
+
+        threading.Thread(target=waiter, name="CameraReleaser", daemon=True).start()
+
+    def _release(self) -> bool:
+        """デバイスを解放する。取得スレッドが止まっていることが前提。
+
+        戻り値は「その場で解放しきれたか」。release() が投げても destroy の
+        bool 契約を守るため、失敗は release_failed に残して False を返す。
+        """
+        with self._lock:
+            camera, self.camera = self.camera, None
+        if camera is None:
+            return True
+        try:
+            camera.release()
+        except Exception:
+            self.release_failed = True
+            logger.error("Camera release failed.")
+            logger.error(traceback.format_exc())
+            self._report_release_failed()
+            return False
+        logger.debug("Camera destroyed")
+        return True
+
+    def _report_release_pending(self) -> None:
+        """解放待ちで開き直せないことを利用者へ伝える。"""
+        message = "前回のカメラ解放待ちです。少し待ってから開き直してください"
+        logger.warning(message)
+        print(message)
+
+    def _report_release_failed(self) -> None:
+        """解放失敗を利用者へ伝える（GUI は LogPane 経由で print を拾う）。"""
+        print(
+            "カメラの解放に失敗しました。"
+            "USB キャプチャを挿し直してから開き直してください"
+        )
+
+    # -- フレーム -----------------------------------------------------------
+
+    def readFrame(self, copy: bool = False) -> np.ndarray | None:
+        """最新フレームを返す。書き換えるなら copy=True を指定する。"""
+        frame = self.frame_queue.get()
+        if frame is None:
+            return None
+        return frame.copy() if copy else frame
+
+    def readFrameWithSeq(self, copy: bool = False) -> tuple[np.ndarray | None, int]:
+        """最新フレームと世代番号を原子的に返す。cache の鍵用。"""
+        frame, seq = self.frame_queue.get_with_seq()
+        if frame is None:
+            return None, seq
+        return (frame.copy() if copy else frame, seq)
+
+    def readFrameWithTiming(
+        self, copy: bool = False
+    ) -> tuple[np.ndarray | None, int, int, int]:
+        """最新フレーム・世代番号・取得/公開スタンプを原子的に返す。
+
+        readFrameWithSeq は凍結面なので 2 値のまま据え置く。時刻が要る
+        呼び出しだけがこの別名を使う。copy=True でもスタンプは
+        コピー元の公開時刻のままで、測り直さない。
+        """
+        snapshot = self.frame_queue.get_with_timing()
+        frame = snapshot.frame
+        return (
+            frame.copy() if copy and frame is not None else frame,
+            snapshot.seq,
+            snapshot.t_capture_ns,
+            snapshot.t_ready_ns,
+        )
+
+    def frame_seq(self) -> int:
+        """現在の世代番号。LatestFrame.seq の読み替え。"""
+        return int(self.frame_queue.seq)
+
+    def wait_for_frame(self, after_seq: int, timeout: float) -> int:
+        """``after_seq`` と違う世代が公開されるまで待つ（描画スレッド用）。
+
+        新しい1枚の公開で起きる。時刻で刻む描画だと取込と表示の位相が
+        ずれたぶんだけ空振り・飛ばしになるが、公開で起きればその差が
+        無い（core/preview_pump.py）。戻り値は待った後の世代番号。
+        """
+        return int(self.frame_queue.wait_for_change(after_seq, timeout))
+
+    def subscribe_frames(self, callback: Any) -> None:
+        """フレーム公開の購読。描画スレッドの起床に使う。"""
+        self.frame_queue.subscribe(callback)
+
+    def unsubscribe_frames(self, callback: Any) -> None:
+        self.frame_queue.unsubscribe(callback)
+
+    def saveCapture(
+        self,
+        filename: str | None = None,
+        crop: Any = None,
+        crop_ax: list | None = None,
+        img: np.ndarray | None = None,
+    ) -> bool:
+        image = img if img is not None else self.readFrame(copy=True)
+        return save_capture(image, filename, crop, crop_ax)
+
+    def setFps(self, fps: int) -> None:
+        """取得FPSを変更する。取得スレッドは次の周期から新しい間隔で回る。"""
+        self.fps = int(fps)
+        logger.info(f"Camera fps set to {self.fps}")
+
+    # -- 取得スレッド -------------------------------------------------------
+
+    def _start_thread(self) -> None:
+        # 起動時の Event・世代・カメラを捕まえて渡す。self 経由で毎回
+        # 読み直すと、次 open の新デバイスを旧スレッドが読んでしまう。
+        with self._lock:
+            stop_event = self._stop_event
+            generation = self._generation
+            camera = self.camera
+        self._thread = threading.Thread(
+            target=self._update,
+            args=(stop_event, generation, camera),
+            name="CameraThread",
+            daemon=True,
+        )
+        self._thread.start()
+        logger.debug("Camera thread started")
+
+    def _update(
+        self,
+        stop_event: threading.Event | None = None,
+        generation: int | None = None,
+        camera: Any | None = None,
+    ) -> None:
+        """最新フレームを取り続ける。失敗フレームは捨てる。
+
+        read() 自体がカメラの周期までブロックするため、経過時間を
+        差し引くだけの待ちは「カメラfps > 指定fps」のときしか効かない。
+        read の所要時間の移動平均を持ち、平均が interval より短いとき
+        （＝カメラのほうが速いとき）だけ待つ。取りこぼしは件数を数えて
+        logger.debug に出し、見えるようにする。
+
+        世代が違う（旧スレッド）なら即座に抜ける。共有 Event の clear
+        使い回しでは旧ループが蘇るため、起動時の Event・世代・カメラ
+        だけを見て、self の現在値には触らない。
+        """
+        if stop_event is None:
+            stop_event = self._stop_event
+        if generation is None:
+            generation = self._generation
+        if camera is None:
+            camera = self.camera
+        read_avg = 0.0  # read() 所要時間の指数移動平均(秒)
+        slow = 0  # 想定(interval)の2倍以上かかった回数
+        frames = 0
+        due: float | None = None  # 次の取込の期限（積み上げ式）
+
+        while not stop_event.is_set():
+            # 旧世代は即座に抜ける（次 open の新デバイスを読まない）。
+            if generation != self._generation:
+                break
+            started = time.perf_counter()
+            # setFps() で変更された値を毎周期反映する
+            interval = 1.0 / self.fps if self.fps > 0 else 0.0
+
+            if camera is None:
+                break
+
+            # release() との競合を狭めるため、read の直前にもう一度見る
+            if stop_event.is_set():
+                break
+
+            try:
+                ret, frame = camera.read()
+            except Exception:
+                # 黙って抜けると「映像が固まっただけ」に見えて原因に辿り着けない
+                self._error = "Camera Read Error"
+                logger.error(self._error)
+                logger.error(traceback.format_exc())
+                stop_event.set()
+                break
+
+            # 要求と違う解像度で届いていないかを最初の数枚で見る。1 枚だけ
+            # 違う大きさを返すデバイスがあるので、3 枚そろってから判定する。
+            # 合わないフレームは合成側が dimension_mismatch で捨てるため、
+            # 何も知らせないと「開けたのに映らない」だけが残る。
+            # 旧世代のスレッドが新しいカウンタを減らさないよう、世代も見る。
+            if (
+                self._size_probe_left > 0
+                and frame is not None
+                and generation == self._generation
+            ):
+                self._size_probe_left -= 1
+                if self._size_probe_left == 0:
+                    got = (int(frame.shape[1]), int(frame.shape[0]))
+                    if got != tuple(self.capture_size):
+                        logger.warning(
+                            "キャプチャ解像度が要求と違います: "
+                            f"要求={tuple(self.capture_size)} 実際={got}"
+                        )
+                        # print は LogPane の待ち行列経由なので裏からでも安全。
+                        print(
+                            f"カメラが {self.capture_size[0]}x"
+                            f"{self.capture_size[1]} で映像を出していません"
+                            f"（実際: {got[0]}x{got[1]}）。"
+                            "キャプチャボードの出力解像度を確認してください。"
+                        )
+
+            # 取得の瞬間。公開より前なので、ここで測って put へ渡す。
+            # 将来 resize をこのスレッドへ移しても、read 直後のこの値が
+            # そのまま「撮った瞬間」のままになる。
+            t_capture_ns = time.perf_counter_ns()
+
+            read_time = time.perf_counter() - started
+            if read_avg <= 0.0:
+                read_avg = read_time
+            else:
+                read_avg = read_avg * 0.9 + read_time * 0.1
+
+            frames += 1
+            if interval > 0.0 and read_time > interval * 2.0:
+                slow += 1
+            if frames >= 300:
+                if slow:
+                    logger.debug(
+                        f"Camera read: avg {read_avg * 1000:.1f} ms, "
+                        f"slow {slow}/{frames} frames "
+                        f"(interval {interval * 1000:.1f} ms)"
+                    )
+                frames, slow = 0, 0
+
+            if not ret or frame is None:
+                # 取得失敗。最新フレームを None で上書きはしない。
+                # fps=0 では interval が 0 になり wait(0.0) で空転する
+                # ため floor を置く（連続失敗時の CPU 100% 化防止）。
+                floor = (
+                    interval
+                    if interval > READ_FAILURE_FLOOR_S
+                    else READ_FAILURE_FLOOR_S
+                )
+                due = None  # 復帰後に溜まった期限ぶん連射しない
+                if stop_event.wait(floor):
+                    break
+                continue
+
+            # read() から戻った時点で世代・停止が変わっていないかを、公開と
+            # 同じ錠の中で確認する。destroy 後の旧 read が新世代のフレームを
+            # 上書きするのを防ぐ最後の関門。
+            with self._lock:
+                # read() 中に停止が立つことがある（テストの最終フレームも同じ）。
+                # 世代が同じなら今のセッションのフレームなので公開する。
+                # 混ぜてはいけないのは「別世代」のフレームだけ。
+                if generation != self._generation:
+                    break
+                self.frame_queue.put(frame, t_capture_ns)
+            with self._stat_lock:
+                if self._stat_began_at is None:
+                    self._stat_began_at = started
+                self._stat_puts += 1
+                self._stat_avg_ms = read_avg * 1000.0
+
+            # read がカメラ周期ぶん待っている場合、その上さらに待つと
+            # 取りこぼす。カメラのほうが速いときだけ差分を待つ。
+            # 期限は「前回の期限 + interval」で積み上げる。「今回の開始 +
+            # interval」だと待機の寝過ごし（Windows で 1ms 前後）が毎周期
+            # 足され、fps=60 が 57fps 程度に落ちていた（実測 2026-10-04）。
+            if read_avg < interval:
+                due = started + interval if due is None else due + interval
+                now = time.perf_counter()
+                # 大きく遅れたら基準を取り直す。追いつこうと連射しない。
+                if due < now - interval:
+                    due = now
+                rest = due - now
+                if rest > 0 and stop_event.wait(rest):
+                    break
+            else:
+                due = None
+
+        logger.debug("Camera thread stopped")
+
+    # -- 旧APIとの互換 ------------------------------------------------------
+
+    def camera_thread_start(self) -> None:
+        if not self.isOpened():
+            logger.error("Camera is not opened")
+            return
+        if self.isRunning():
+            return
+        # 共有 Event の clear 使い回しをやめ、新世代で開始する。
+        with self._lock:
+            self._generation += 1
+            self._stop_event = threading.Event()
+            self._error = None
+        self._start_thread()
+
+    def camera_thread_stop(self) -> None:
+        self.destroy()
+
+
+# ---------------------------------------------------------------------------
+# プロセス版（共有メモリ経由）
+# ---------------------------------------------------------------------------
+
+
+class CameraController:
+    """別プロセスで動くキャプチャワーカー。共有メモリへ最新フレームを書く。
+
+    共有メモリは FACE_COUNT 面ぶん確保してある。ワーカーは「いま公開して
+    いない面」へ書き込んでから公開面の番号(face)を差し替える方式（多面
+    バッファ）。読み手は face が指す面を読むだけでよく、Lock もコピーも
+    要らない。書き込み中の面を読むことが無いので絵が混ざる(tearing)
+    ことも起きない。毎フレーム 2.7MB を copy する案は 30fps で 80MB/s の
+    複製になるため採らなかった。
+    """
+
+    def __init__(
+        self,
+        stop_event: Any,
+        camera_process_status: Synchronized,
+        fps: Synchronized,
+        face: Synchronized,
+        shm_name: str,
+        shape: tuple,
+        cameraId: int = 0,
+        capture_size: tuple = CAPTURE_SIZE,
+        seq: Synchronized | None = None,
+    ) -> None:
+        self.camera: cv2.VideoCapture | None = None
+        self.cameraId = cameraId
+        self.fps = fps
+        self.capture_size = capture_size
+        self.stop_event = stop_event
+        self.camera_process_status = camera_process_status
+        self.face = face
+        # 単調増加の世代番号。face は 0..2 を回るため cache の鍵に使えない。
+        # 公開のたびに進め、消費者は (seq, 条件) で使い回す。
+        self.seq = seq
+        self.shape = shape
+
+        self.shared_memory = shared_memory.SharedMemory(name=shm_name)
+        # (FACE_COUNT, h, w, 3) の1本の配列として持つ。面は images[i]。
+        self.images: np.ndarray | None = np.ndarray(
+            (FACE_COUNT, *shape), dtype=np.uint8, buffer=self.shared_memory.buf
+        )
+
+    def run(self) -> None:
+        """開く → 回す → 必ず片付ける。"""
+        try:
+            self.openCamera()
+            self.processCamera()
+        finally:
+            self.closeCamera()
+            self.closeSharedMemory()
+
+    def openCamera(self) -> None:
+        try:
+            if self.camera is not None and self.camera.isOpened():
+                logger.debug("Camera is already opened")
+                return
+        except Exception:
+            # 既存ハンドルが壊れていても子プロセスを落とさない。
+            logger.error(f"Camera ID {self.cameraId} cannot open.")
+            logger.error(traceback.format_exc())
+            # 壊れたハンドルを残すと次の open も同じ例外で失敗し続ける。
+            broken, self.camera = self.camera, None
+            if broken is not None:
+                try:
+                    broken.release()
+                except Exception:
+                    logger.error(traceback.format_exc())
+            self.camera_process_status.value = False
+            return
+
+        self.camera = None
+        try:
+            if os.name == "nt":
+                self.camera = cv2.VideoCapture(self.cameraId, cv2.CAP_DSHOW)
+            else:
+                self.camera = cv2.VideoCapture(self.cameraId)
+
+            if not self.camera.isOpened():
+                logger.error(f"Camera ID {self.cameraId} cannot open.")
+                self.camera_process_status.value = False
+                return
+
+            _configure_capture(self.camera, self.capture_size, self.fps.value)
+        except Exception:
+            # 子プロセスを落とさず、失敗は status=False とログで伝える。
+            logger.error(f"Camera ID {self.cameraId} cannot open.")
+            logger.error(traceback.format_exc())
+            camera, self.camera = self.camera, None
+            if camera is not None:
+                try:
+                    camera.release()
+                except Exception:
+                    logger.error(traceback.format_exc())
+            self.camera_process_status.value = False
+            return
+
+        logger.debug(f"Camera ID {self.cameraId} opened successfully.")
+        self.camera_process_status.value = True
+
+    def _fit(self, frame: np.ndarray) -> np.ndarray:
+        """共有メモリの形に合わせる。合わないと代入時に ValueError で即死する。"""
+        if frame.shape == self.shape:
+            return frame
+        return cv2.resize(
+            frame, (self.shape[1], self.shape[0]), interpolation=cv2.INTER_AREA
+        )
+
+    def processCamera(self) -> None:
+        """停止要求は Event で受ける。
+
+        time.sleep は停止フラグを見ないため、停止の反映が最大 interval
+        ぶん遅れていた（fps=5 なら 200ms）。Event.wait なら待機中でも
+        set() で即座に抜けられ、join のタイムアウトに掛かりにくい。
+        """
+        while not self.stop_event.is_set():
+            started = time.perf_counter()
+            succeeded = False
+
+            try:
+                if self.camera is None or not self.camera.isOpened():
+                    break
+                ret, frame = self.camera.read()
+                if ret and frame is not None and self.images is not None:
+                    # 公開中でない面へ書いてから公開を切り替える。
+                    # 読み手は公開面しか見ないので重なりようがない。
+                    nxt = (int(self.face.value) + 1) % FACE_COUNT
+                    self.images[nxt] = self._fit(frame)
+                    self.face.value = nxt
+                    if self.seq is not None:
+                        self.seq.value += 1
+                    succeeded = True
+            except Exception:
+                logger.error("Camera Process Error")
+                logger.error(traceback.format_exc())
+                break
+
+            fps = self.fps.value
+            interval = 1.0 / fps if fps > 0 else 0.0
+            rest = interval - (time.perf_counter() - started)
+            # 取得失敗が続くと rest が 0 以下で空転するため floor を置く。
+            if not succeeded and rest < READ_FAILURE_FLOOR_S:
+                rest = READ_FAILURE_FLOOR_S
+            if rest > 0 and self.stop_event.wait(rest):
+                break
+
+    def closeCamera(self) -> None:
+        self.stop_event.set()
+        self.camera_process_status.value = False
+        if self.camera is not None:
+            self.camera.release()
+            self.camera = None
+
+    def closeSharedMemory(self) -> None:
+        """buf を参照する ndarray を先に手放す。残すと close() で BufferError。"""
+        self.images = None
+        try:
+            self.shared_memory.close()
+        except BufferError:
+            logger.warning("shared memory still exported; close skipped")
+
+
+def _camera_worker(
+    stop_event: Any,
+    camera_process_status: Synchronized,
+    fps: Synchronized,
+    face: Synchronized,
+    shm_name: str,
+    shape: tuple,
+    cameraId: int,
+    capture_size: tuple,
+    seq: Synchronized | None = None,
+) -> None:
+    """子プロセスの入口。Process(target=クラス) だと生成＝実行で分かりにくい。"""
+    CameraController(
+        stop_event,
+        camera_process_status,
+        fps,
+        face,
+        shm_name,
+        shape,
+        cameraId,
+        capture_size,
+        seq,
+    ).run()
+
+
+class CameraQueue:
+    """CameraController を別プロセスで回し、共有メモリ経由で受け取る。"""
+
+    def __init__(
+        self,
+        fps: int,
+        cameraId: int,
+        capture_size: tuple = CAPTURE_SIZE,
+        shm_name: str = SHARED_MEMORY_NAME,
+    ):
+        logger.debug("CameraQueue initializing")
+        self.cameraId = cameraId
+        self.capture_size = capture_size
+        self.shape = frame_shape(capture_size)
+        self._fps = int(fps)
+        self.capture_dir = CAPTURE_DIR
+        # 並列起動時に衝突しないよう、共有メモリ名は呼び出し側から変えられる
+        self.shm_name = shm_name or SHARED_MEMORY_NAME
+        self.camera_process: multiprocessing.Process | None = None
+        self.shm: shared_memory.SharedMemory | None = None
+        self.images: np.ndarray | None = None
+
+        self.init_shared_memory()
+        self.openCamera(self.cameraId)
+
+    def init_shared_memory(self) -> None:
+        # dtype を変えても壊れないよう nbytes から求める。FACE_COUNT 面ぶん確保する
+        size = int(np.zeros((FACE_COUNT, *self.shape), dtype=np.uint8).nbytes)
+        try:
+            self.shm = shared_memory.SharedMemory(
+                create=True, size=size, name=self.shm_name
+            )
+        except FileExistsError:
+            # 前回の異常終了で残っている場合は掴み直して作り直す
+            stale = shared_memory.SharedMemory(name=self.shm_name)
+            stale.close()
+            stale.unlink()
+            self.shm = shared_memory.SharedMemory(
+                create=True, size=size, name=self.shm_name
+            )
+
+        self.images = np.ndarray(
+            (FACE_COUNT, *self.shape), dtype=np.uint8, buffer=self.shm.buf
+        )
+
+        self.fps: Synchronized = Value("i", self._fps)
+        # いま読んでよい面の番号。ワーカーが書き終えてから差し替える
+        self.face: Synchronized = Value("i", 0)
+        # 単調増加の世代番号。face は環状のため cache の鍵は seq を使う。
+        self.seq: Synchronized = Value("Q", 0)
+        self.stop_event = multiprocessing.Event()
+        self.camera_process_status: Synchronized = Value("b", False)
+
+    @property
+    def finish_flag(self) -> bool:
+        """旧APIとの互換。停止要求の有無を返す。"""
+        return self.stop_event.is_set()
+
+    def openCamera(self, camera_id: int) -> None:
+        """ワーカープロセスを作り直して起動する（旧APIに合わせた名前）。
+
+        旧プロセスの Event を clear で使い回さない。新世代の Event を
+        作り直す。作り直さないと、終了待ちの旧プロセスが蘇って新旧
+        2 プロセスが1つの共有メモリへ書く。
+        """
+        self.cameraId = camera_id
+        self._stop_process()
+        self.stop_event = multiprocessing.Event()
+        # 旧版から引き継いだ個体には seq が無いことがある。無ければ作る。
+        seq = getattr(self, "seq", None)
+        if seq is None:
+            seq = Value("Q", 0)
+            self.seq = seq
+
+        self.camera_process = multiprocessing.Process(
+            target=_camera_worker,
+            args=(
+                self.stop_event,
+                self.camera_process_status,
+                self.fps,
+                self.face,
+                self.shm_name,
+                self.shape,
+                self.cameraId,
+                self.capture_size,
+                self.seq,
+            ),
+            name="CameraController",
+            daemon=True,
+        )
+        self.startCamera()
+
+    def startCamera(self) -> None:
+        if self.camera_process is None:
+            logger.error("Camera Process is not initialized")
+            return
+        if self.camera_process.is_alive():
+            return
+        self.camera_process.start()
+        logger.debug("Camera process started")
+
+    def isOpened(self) -> bool:
+        return bool(self.camera_process_status.value)
+
+    def setFps(self, fps: int) -> None:
+        self.fps.value = int(fps)
+
+    def readFrame(self, copy: bool = False) -> np.ndarray | None:
+        """公開中の面（最新フレーム）を返す。
+
+        ワーカーは公開面以外へ書いてから face を差し替えるので、ここで
+        返したビューが書き換えられることはない（FACE_COUNT 面あるので
+        FACE_COUNT-1 フレームぶんの猶予がある）。Lock もコピーも不要。
+        フレームを長く持ち回る・書き換えるなら copy=True を指定する。
+
+        初フレーム前の契約（権威ある定義）:
+          Camera（スレッド版）はまだ1枚も来ていなければ None を返す。
+          CameraQueue（プロセス版）は共有メモリの初期値である黒画像
+          （zeros, black）を返す。shm 未作成時のみ None を返す。
+        呼び出し側は両方を扱うこと。意味を変えず文書だけに留める。
+        """
+        if self.shm is None or self.images is None:
+            return None
+        frame = self.images[int(self.face.value)]
+        return frame.copy() if copy else frame
+
+    def readFrameWithSeq(self, copy: bool = False) -> tuple[np.ndarray | None, int]:
+        """公開中の面と世代番号を返す。cache の鍵用。"""
+        seq_obj = getattr(self, "seq", None)
+        seq_val = int(seq_obj.value) if seq_obj is not None else 0
+        if self.shm is None or self.images is None:
+            return None, seq_val
+        frame = self.images[int(self.face.value)]
+        return (frame.copy() if copy else frame, seq_val)
+
+    def frame_seq(self) -> int:
+        """現在の世代番号。face（環状）ではなく seq（単調増加）を返す。"""
+        seq_obj = getattr(self, "seq", None)
+        return int(seq_obj.value) if seq_obj is not None else 0
+
+    def saveCapture(
+        self,
+        filename: str | None = None,
+        crop: Any = None,
+        crop_ax: list | None = None,
+        img: np.ndarray | None = None,
+    ) -> bool:
+        image = img if img is not None else self.readFrame(copy=True)
+        return save_capture(image, filename, crop, crop_ax)
+
+    def _stop_process(self) -> None:
+        if self.camera_process is None:
+            return
+        if self.camera_process.is_alive():
+            self.stop_event.set()
+            self.camera_process.join(timeout=PROCESS_JOIN_TIMEOUT)
+            if self.camera_process.is_alive():
+                logger.warning("Camera process did not stop. terminating.")
+                self.camera_process.terminate()
+                # terminate 後の join を省くと資源を掴んだまま残ることがある
+                self.camera_process.join(timeout=PROCESS_JOIN_TIMEOUT)
+        self.camera_process = None
+
+    def destroy(self) -> None:
+        self._stop_process()
+
+        # 解放済みメモリを指したままのビューを残すとクラッシュする
+        self.images = None
+        if self.shm is not None:
+            try:
+                self.shm.close()
+            except BufferError:
+                logger.warning("shared memory still exported; close skipped")
+            try:
+                self.shm.unlink()
+            except FileNotFoundError:
+                pass
+            self.shm = None
+        logger.debug("Camera destroyed")
+
+
+if __name__ == "__main__":
+    import argparse
+
+    # freeze_support() は「実行の入口となるモジュール」で呼ぶもの。
+    # import されただけの Camera.py のトップレベルで呼ぶのは誤り。
+    multiprocessing.freeze_support()
+
+    parser = argparse.ArgumentParser(description="カメラの動作確認")
+    parser.add_argument("--id", type=int, default=0, help="カメラID")
+    parser.add_argument("--fps", type=int, default=60, help="取得FPS")
+    args = parser.parse_args()
+
+    cam = Camera(args.fps)
+    if cam.openCamera(args.id):
+        try:
+            time.sleep(1.0)
+            cam.saveCapture("test")
+        finally:
+            cam.destroy()

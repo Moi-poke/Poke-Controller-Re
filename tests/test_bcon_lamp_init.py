@@ -2,8 +2,8 @@
 
 from dataclasses import replace
 
-from BconSetup import PLAYER_LAMP_OFF_COLOR, PLAYER_LAMP_ON_COLOR
 from bcon_ui_support import Service, setup
+from pokecon.ui.BconSetup import PLAYER_LAMP_OFF_COLOR, PLAYER_LAMP_ON_COLOR
 
 
 def test_snapshot_seeds_lamps_without_transport_getters() -> None:

@@ -10,7 +10,7 @@ from Commands.PythonCommandBase import (
     RecoveryAborted,
     RecoveryAdvice,
 )
-from core.recovery import TemplateImageError
+from pokecon.domain.recovery import TemplateImageError
 
 
 class Recovering(PythonCommand):

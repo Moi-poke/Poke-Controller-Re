@@ -13,8 +13,8 @@ from typing import Any
 
 import numpy as np
 import pytest
-from core.Camera import Camera, CameraQueue, LatestFrame
-from core.camera_backend import CameraBackend, TimedFrameSource
+from pokecon.domain.Camera import Camera, CameraQueue, LatestFrame
+from pokecon.domain.camera_backend import CameraBackend, TimedFrameSource
 
 #: The members ``VideoRenderer``'s read path relies on. Kept as a literal so a
 #: silently renamed method on a backend is a per-test failure. ``capture_size``

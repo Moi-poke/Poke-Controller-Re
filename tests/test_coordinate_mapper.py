@@ -3,7 +3,7 @@ approved brief requires one module per contract group, and the shared double
 vocabulary this file needs lives in ``tests/gdi_present_doubles.py``, which the
 brief forbids touching.
 
-The layer is ``SerialController/core/coordinates.py`` -- tkinter-free and
+The layer is ``SerialController/pokecon/domain/coordinates.py`` -- tkinter-free and
 numpy-free, so it satisfies ``task bounds``. It exists to close one latent bug:
 ``CaptureArea._captureRatio`` (removed) scaled by ``camera.capture_size``, the
 *requested* size, while the three consumers clamped by the *delivered* frame's
@@ -203,7 +203,7 @@ def _printed_integers_in_order(text: str, expected: list[int]) -> bool:
 
 def _mapper_type() -> Any:
     """``CoordinateMapper``, imported at call time so absence is a per-test RED."""
-    from core.coordinates import CoordinateMapper
+    from pokecon.domain.coordinates import CoordinateMapper
 
     return CoordinateMapper
 
@@ -250,7 +250,7 @@ def _fit_rect() -> Any:
     Same seam as ``_mapper_type``: a module-level import would turn every
     placement test red for the same reason and hide which one actually broke.
     """
-    from core.coordinates import fit_rect
+    from pokecon.domain.coordinates import fit_rect
 
     return fit_rect
 
@@ -315,7 +315,7 @@ def _self_camera_attributes(node: ast.AST) -> set[str]:
 
 def _gui_capture_area() -> Any:
     """The real ``CaptureArea`` class, reached through the ``Any`` boundary."""
-    import GuiAssets as module
+    import pokecon.ui.GuiAssets as module
 
     return module.CaptureArea
 
@@ -907,7 +907,7 @@ def test_mouse_ctrl_left_press_probes_the_pixel_at_the_identity_coordinate() -> 
 
 def test_img_rect_keeps_the_recognition_box_in_capture_coordinates() -> None:
     # Given: a bare area at the fixed operating assumption.
-    from core.preview_renderer import ImgRectState, RectState
+    from pokecon.domain.preview_renderer import ImgRectState, RectState
 
     area = _area_at_fixed_size(
         np.zeros((CAPTURE_HEIGHT, CAPTURE_WIDTH, 3), np.uint8), CAPTURE_SIZE

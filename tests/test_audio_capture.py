@@ -4,7 +4,7 @@ from typing import Any
 
 import numpy as np
 import pytest
-from core import AudioCapture as AC, audio_dsp
+from pokecon.domain import AudioCapture as AC, audio_dsp
 
 
 def test_unavailable_without_backend(monkeypatch: pytest.MonkeyPatch) -> None:

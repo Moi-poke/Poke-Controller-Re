@@ -108,7 +108,7 @@ console.log('=== GENERATED END ===');
 @NEEDS_NODE
 def test_browser_press_dpad_codegen() -> None:
     """十字キーpressの生成コードが実行可能形であること。"""
-    from core import blockly_validate
+    from pokecon.domain import blockly_validate
 
     proc = subprocess.run(
         ["node", "-e", PROBE_PRESS_DPAD_JS, str(BLOCKLY)],

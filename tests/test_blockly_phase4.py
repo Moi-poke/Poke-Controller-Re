@@ -15,8 +15,7 @@ import pytest
 
 tkinter = pytest.importorskip("tkinter")
 
-import WindowUtils  # noqa: E402
-from ui import blockly_editor  # noqa: E402
+from pokecon.ui import WindowUtils, blockly_editor  # noqa: E402
 
 
 def test_url_copy_button_exists() -> None:
@@ -24,6 +23,7 @@ def test_url_copy_button_exists() -> None:
     src = (
         Path(__file__).resolve().parent.parent
         / "SerialController"
+        / "pokecon"
         / "ui"
         / "blockly_editor.py"
     ).read_text(encoding="utf-8")

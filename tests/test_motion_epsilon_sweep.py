@@ -7,7 +7,7 @@ import random
 from typing import Any
 
 import pytest
-from core import motion
+from pokecon.domain import motion
 
 
 def _random_tracks(

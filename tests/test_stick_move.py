@@ -13,8 +13,8 @@ import threading
 import time
 from typing import Any
 
-from core.CommandOperate import OperateMixin
-from core.Keys import Direction, Stick
+from pokecon.domain.CommandOperate import OperateMixin
+from pokecon.domain.Keys import Direction, Stick
 
 
 class _FakeKeys:
@@ -163,7 +163,7 @@ def test_stick_move2_static_side_is_not_sent() -> None:
 
 def test_release_direction_covers_both_axes() -> None:
     """Given: 固定の斜め Direction(218, 218) / When: tilt を見る / Then: 両軸が対象になること。"""
-    from core.Keys import Tilt
+    from pokecon.domain.Keys import Tilt
 
     d = Direction(Stick.LEFT, (218, 218))
     tilts = d.getTilting()
@@ -187,7 +187,7 @@ class _FakeKeys2:
 
 def test_stick_move_stops_on_alive_false() -> None:
     """Given: 再生の途中で停止要求が来る / When: stick_move を回す / Then: StopThread で止まり刻みが途切れること。"""
-    from core.CommandOperate import StopThread
+    from pokecon.domain.CommandOperate import StopThread
 
     # Given: 最初の刻みで停止要求が来る台
     host = _Host()
@@ -212,7 +212,7 @@ def test_stick_move_stops_on_alive_false() -> None:
 
 def test_gate_raises_stop_when_keys_released() -> None:
     """Given: 後始末で keys を捨てた台 / When: 関所を通す / Then: StopThread になること。"""
-    from core.CommandOperate import StopThread
+    from pokecon.domain.CommandOperate import StopThread
 
     host = _Host()
     host.keys = None
@@ -226,7 +226,7 @@ def test_gate_raises_stop_when_keys_released() -> None:
 
 def test_stick_release_calls_inputEnd_once_with_both_axes() -> None:
     """Given: 左スティックの解放 / When: stick_release を呼ぶ / Then: inputEnd が1回で両軸を含むこと。"""
-    from core.Keys import Tilt
+    from pokecon.domain.Keys import Tilt
 
     host = _Host()
     host.keys = _FakeKeys2()
@@ -242,7 +242,7 @@ def test_stick_release_calls_inputEnd_once_with_both_axes() -> None:
 
 def test_stick_release_both_calls_inputEnd_once_with_both_sides() -> None:
     """Given: 両スティックの解放 / When: stick_release_both を呼ぶ / Then: inputEnd が1回で両側を含むこと。"""
-    from core.Keys import Tilt
+    from pokecon.domain.Keys import Tilt
 
     host = _Host()
     host.keys = _FakeKeys2()
@@ -261,9 +261,9 @@ def test_stick_release_both_calls_inputEnd_once_with_both_sides() -> None:
 
 def test_inputEnd_left_keeps_right_posture() -> None:
     """Given: 左右のスティックを倒す / When: 左だけ離す / Then: 右の姿勢が残ること。"""
-    from core import Sender
-    from core.Keys import CENTER, KeyPress
     from fakes import FakeTransport
+    from pokecon.domain.Keys import CENTER, KeyPress
+    from pokecon.domain.serial import sender as Sender
 
     transport = FakeTransport()
     sender = Sender.Sender(is_show_serial=False, transport=transport)
@@ -282,9 +282,9 @@ def test_inputEnd_left_keeps_right_posture() -> None:
 
 def test_hold_hat_survives_unrelated_inputEnd() -> None:
     """Given: 十字キーを押しっぱなし / When: 関係ないボタンを離す / Then: Hat が中立に落ちないこと。"""
-    from core import Sender
-    from core.Keys import Button, Hat, KeyPress
     from fakes import FakeTransport
+    from pokecon.domain.Keys import Button, Hat, KeyPress
+    from pokecon.domain.serial import sender as Sender
 
     transport = FakeTransport()
     sender = Sender.Sender(is_show_serial=False, transport=transport)
@@ -301,7 +301,7 @@ def test_hold_hat_survives_unrelated_inputEnd() -> None:
 
 def test_polar_dir_four_quadrants() -> None:
     """Given: 上下左右の極座標 / When: Direction へ直す / Then: 各象限になること。"""
-    from core.Keys import Stick as _Stick
+    from pokecon.domain.Keys import Stick as _Stick
 
     up = OperateMixin._polar_dir(_Stick.LEFT, 127, 90)
     assert up.y > 200 and abs(up.x - 128) <= 2
@@ -315,7 +315,7 @@ def test_polar_dir_four_quadrants() -> None:
 
 def test_move2_down_right_roundtrip() -> None:
     """Given: L=下・R=右への同時移動 / When: 再生 / Then: 各側がその方向になること。"""
-    from core.Keys import Stick as _Stick
+    from pokecon.domain.Keys import Stick as _Stick
 
     host = _Host()
     host.stick_move2(

@@ -4,7 +4,7 @@ import threading
 from typing import Any
 
 from fakes import FakeCommand, FakeScheduler, FakeSer, FakeThread, StuckThread
-from services.command_runner import STOP_NOTIFY_MS, STOP_WATCH_MS, CommandRunner
+from pokecon.runtime.command_runner import STOP_NOTIFY_MS, STOP_WATCH_MS, CommandRunner
 
 
 def make_runner(

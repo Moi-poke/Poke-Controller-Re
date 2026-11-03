@@ -30,7 +30,7 @@ def _report_30(ax=0, ay=0, az=4096, gx=0, gy=0, gz=0, timer=0):
 
 
 def test_nintendo_hid_parses_latest_sample():
-    import core.nintendo_hid as nh
+    import pokecon.domain.nintendo_hid as nh
 
     s1 = struct.pack("<6h", 1, 2, 3, 4, 5, 6)
     s2 = struct.pack("<6h", 7, 8, 9, 10, 11, 12)
@@ -54,7 +54,7 @@ def test_read_next_always_returns_latest_slot():
     import threading
     import time
 
-    import core.nintendo_hid as nh
+    import pokecon.domain.nintendo_hid as nh
 
     s1 = struct.pack("<6h", 1, 2, 3, 4, 5, 6)
     s2 = struct.pack("<6h", 7, 8, 9, 10, 11, 12)
@@ -74,7 +74,7 @@ def test_read_next_follows_latest_poller_report():
     """複数の0x30を受けても、read_nextは最後の最新値だけを返し続ける。"""
     import time
 
-    import core.nintendo_hid as nh
+    import pokecon.domain.nintendo_hid as nh
 
     first = _report_30(1, 1, 1, 1, 1, 1, timer=1)
     second = _report_30(2, 2, 2, 2, 2, 2, timer=2)
@@ -97,7 +97,7 @@ def test_same_030_content_does_not_replace_latest():
     import threading
     import time
 
-    import core.nintendo_hid as nh
+    import pokecon.domain.nintendo_hid as nh
 
     now = time.monotonic()
     first = _report_30(1, 0, 0, 0, 0, 0, timer=7)
@@ -117,7 +117,7 @@ def test_fixed_timer_still_updates_changed_samples():
     import threading
     import time
 
-    import core.nintendo_hid as nh
+    import pokecon.domain.nintendo_hid as nh
 
     now = time.monotonic()
     before = _report_30(1, 2, 3, 4, 5, 6, timer=0)
@@ -137,7 +137,7 @@ def test_newer_030_timer_updates_changed_samples():
     import threading
     import time
 
-    import core.nintendo_hid as nh
+    import pokecon.domain.nintendo_hid as nh
 
     now = time.monotonic()
     before = _report_30(1, 2, 3, 4, 5, 6, timer=7)
@@ -156,7 +156,7 @@ def test_read_pad_packet_advances_only_on_content_change():
     import threading
     import time
 
-    import core.nintendo_hid as nh
+    import pokecon.domain.nintendo_hid as nh
 
     reader = nh.NintendoHidReader.__new__(nh.NintendoHidReader)
     reader._lock = threading.Lock()
@@ -180,7 +180,7 @@ def test_read_pad_packet_advances_only_on_content_change():
 
 def test_nintendo_hid_ignores_non_30_cache():
     """読み取りスレッドは0x30以外を_cacheへ入れない。念のためIDでも弾く。"""
-    import core.nintendo_hid as nh
+    import pokecon.domain.nintendo_hid as nh
 
     reader = nh.NintendoHidReader.__new__(nh.NintendoHidReader)
     import threading
@@ -195,7 +195,7 @@ def test_nintendo_hid_poller_caches_latest_30():
     """専用スレッドが0x30だけを保持し、read()はそれを返す。"""
     import time
 
-    import core.nintendo_hid as nh
+    import pokecon.domain.nintendo_hid as nh
 
     other = bytes([0x21] + [0] * 63)
     good = _report_30(1, 2, 4096, 3, 4, 5)
@@ -212,7 +212,7 @@ def test_nintendo_hid_poller_caches_latest_30():
 
 
 def test_nintendo_hid_closed_returns_none():
-    import core.nintendo_hid as nh
+    import pokecon.domain.nintendo_hid as nh
 
     reader = nh.NintendoHidReader()
     assert reader.read() is None
@@ -252,7 +252,7 @@ def test_close_does_not_close_device_while_read_blocked():
     """読み取り中の dev.close() をしない（ネイティブuse-after-freeの回避）。"""
     import threading
 
-    import core.nintendo_hid as nh
+    import pokecon.domain.nintendo_hid as nh
 
     dev = _BlockingReadHidDevice()
     reader = nh.NintendoHidReader()
@@ -286,7 +286,7 @@ def test_close_does_not_close_device_while_read_blocked():
 
 def test_nintendo_hid_shared_reader_is_singleton():
     """パッド読みとIMU送出は同一ハンドルを共有する（二重open防止）。"""
-    import core.nintendo_hid as nh
+    import pokecon.domain.nintendo_hid as nh
 
     nh._shared_reader = None
     first = nh.get_shared_reader()
@@ -297,7 +297,7 @@ def test_nintendo_hid_shared_reader_is_singleton():
 
 def test_nintendo_hid_stick_y_polarity() -> None:
     """Switch生値は上が大きい。XInputへは反転しない（上下逆の回帰防止）。"""
-    import core.nintendo_hid as nh
+    import pokecon.domain.nintendo_hid as nh
 
     assert nh._stick12_to_short(0x800) == 0
     assert nh._stick12_to_short(0xFFF) > 0  # 上 = 正
@@ -364,7 +364,7 @@ def _install_fake_hid(monkeypatch):
 
 def test_nintendo_hid_open_exposes_probe_to_first_read_pad(monkeypatch):
     """openの成功判定に使った0x30を捨てない（直後のread_padが接続扱い）。"""
-    import core.nintendo_hid as nh
+    import pokecon.domain.nintendo_hid as nh
 
     factory = _install_fake_hid(monkeypatch)
     reader = nh.NintendoHidReader()
@@ -385,7 +385,7 @@ def test_nintendo_hid_concurrent_open_keeps_one_handle(monkeypatch):
     """並行openでも動いているハンドルを閉じ合わない。"""
     import threading
 
-    import core.nintendo_hid as nh
+    import pokecon.domain.nintendo_hid as nh
 
     factory = _install_fake_hid(monkeypatch)
     reader = nh.NintendoHidReader()
@@ -447,7 +447,7 @@ def test_open_does_not_block_readers(monkeypatch):
     import time
     import types
 
-    import core.nintendo_hid as nh
+    import pokecon.domain.nintendo_hid as nh
 
     dev = _SlowOpenHidDevice()
     fake = types.ModuleType("hid")
@@ -479,7 +479,7 @@ def test_nintendo_hid_stale_030_is_not_returned():
     """0x30が途絶えたら古い値を返さない（connected=False）。"""
     import time
 
-    import core.nintendo_hid as nh
+    import pokecon.domain.nintendo_hid as nh
 
     reader = nh.NintendoHidReader()
     with reader._lock:
@@ -514,7 +514,7 @@ def test_nintendo_hid_poller_closes_when_030_stops():
     """0x3fが流れ続けても0x30が途絶えたらハンドルを閉じる。"""
     import time
 
-    import core.nintendo_hid as nh
+    import pokecon.domain.nintendo_hid as nh
 
     reader = nh.NintendoHidReader()
     dev = _ChatterHidDevice()
@@ -530,9 +530,9 @@ def test_nintendo_hid_poller_closes_when_030_stops():
 
 def test_pad_source_hid_first_read_after_open_is_connected(monkeypatch):
     """PadSource経由でもopen直後の初回readが未接続にならない。"""
-    import core.nintendo_hid as nh
-    from core.pad_source import PadSource
-    from core.xinput import PadState
+    import pokecon.domain.nintendo_hid as nh
+    from pokecon.domain.pad_source import PadSource
+    from pokecon.domain.xinput import PadState
 
     class _NoPad:
         available = False
@@ -567,7 +567,7 @@ def test_pad_source_hid_first_read_after_open_is_connected(monkeypatch):
 
 def test_ensure_live_fresh_does_not_open(monkeypatch):
     """0x30が新鮮ならopenを呼ばない。"""
-    import core.nintendo_hid as nh
+    import pokecon.domain.nintendo_hid as nh
 
     factory = _install_fake_hid(monkeypatch)
     reader = nh.NintendoHidReader()
@@ -584,7 +584,7 @@ def test_ensure_live_stale_calls_open_with_two_retries():
     """0x30が古ければ open(retries=2) で再武装する。"""
     import time
 
-    import core.nintendo_hid as nh
+    import pokecon.domain.nintendo_hid as nh
 
     reader = nh.NintendoHidReader()
     reader._dev = object()
@@ -606,7 +606,7 @@ def test_ensure_live_stale_rearms_real_handle(monkeypatch):
     """開いたまま0x30が止まったハンドルを開き直して復帰する。"""
     import time
 
-    import core.nintendo_hid as nh
+    import pokecon.domain.nintendo_hid as nh
 
     factory = _install_fake_hid(monkeypatch)
     reader = nh.NintendoHidReader()
@@ -697,7 +697,7 @@ def _install_arming_hid(monkeypatch, device_cls=_ArmingHidDevice, **kwargs):
     import sys
     import types
 
-    import core.nintendo_hid as nh
+    import pokecon.domain.nintendo_hid as nh
 
     fake = types.ModuleType("hid")
     factory = _ArmingHidModule(device_cls=device_cls, **kwargs)
@@ -711,7 +711,7 @@ def _install_arming_hid(monkeypatch, device_cls=_ArmingHidDevice, **kwargs):
 
 def test_open_arms_imu_and_verifies_ack(monkeypatch):
     """openが 0x40 01 → 0x03 30 を送り、0x21応答でIMU有効を確定する。"""
-    import core.nintendo_hid as nh
+    import pokecon.domain.nintendo_hid as nh
 
     factory = _install_arming_hid(monkeypatch)
     reader = nh.NintendoHidReader()
@@ -726,7 +726,7 @@ def test_open_arms_imu_and_verifies_ack(monkeypatch):
 
 def test_open_without_ack_and_zero_imu_is_not_armed(monkeypatch):
     """0x30が流れてもIMU未有効なら「準備完了」にしない（従来の誤認の回帰）。"""
-    import core.nintendo_hid as nh
+    import pokecon.domain.nintendo_hid as nh
 
     factory = _install_arming_hid(monkeypatch, ack=False, imu_after_arm=False)
     reader = nh.NintendoHidReader()
@@ -746,7 +746,7 @@ def test_open_without_ack_and_zero_imu_is_not_armed(monkeypatch):
 
 def test_open_treats_nonzero_imu_without_ack_as_armed(monkeypatch):
     """応答が取れない個体（Steam初期化済み等）でもIMU値が非0なら有効。"""
-    import core.nintendo_hid as nh
+    import pokecon.domain.nintendo_hid as nh
 
     factory = _install_arming_hid(monkeypatch, ack=False, start_armed=True)
     reader = nh.NintendoHidReader()
@@ -761,7 +761,7 @@ def test_open_treats_nonzero_imu_without_ack_as_armed(monkeypatch):
 
 def test_ensure_live_rearms_fresh_unarmed_handle_without_reopen(monkeypatch):
     """0x30が新鮮でも未武装なら、同じハンドルへ送り直して復帰する。"""
-    import core.nintendo_hid as nh
+    import pokecon.domain.nintendo_hid as nh
 
     factory = _install_arming_hid(monkeypatch, ack=False, imu_after_arm=False)
     reader = nh.NintendoHidReader()
@@ -781,7 +781,7 @@ def test_ensure_live_rearms_fresh_unarmed_handle_without_reopen(monkeypatch):
 
 def test_arm_imu_resends_even_when_030_is_fresh(monkeypatch):
     """arm_imuは0x30の鮮度に関係なく必ず 0x40 → 0x03 を送る。"""
-    import core.nintendo_hid as nh
+    import pokecon.domain.nintendo_hid as nh
 
     factory = _install_arming_hid(monkeypatch)
     reader = nh.NintendoHidReader()
@@ -798,7 +798,7 @@ def test_arm_imu_resends_even_when_030_is_fresh(monkeypatch):
 
 def test_open_rearms_fresh_handle_that_is_unarmed(monkeypatch):
     """openの再利用経路でも、未武装のハンドルは送り直す。"""
-    import core.nintendo_hid as nh
+    import pokecon.domain.nintendo_hid as nh
 
     factory = _install_arming_hid(monkeypatch)
     reader = nh.NintendoHidReader()
@@ -817,7 +817,7 @@ def test_open_rearms_fresh_handle_that_is_unarmed(monkeypatch):
 
 def test_arm_reply_accepts_ack_byte_conventions() -> None:
     """0x21応答の判定: byte13=ACK(0x80|sub or 0x80)、byte14=sub。"""
-    import core.nintendo_hid as nh
+    import pokecon.domain.nintendo_hid as nh
 
     reply = bytearray(64)
     reply[0] = 0x21
@@ -836,7 +836,7 @@ def test_arm_reply_accepts_ack_byte_conventions() -> None:
 
 def test_has_imu_payload_distinguishes_zero_slots() -> None:
     """IMU未有効の0x30は全スロット0。accel z の重力で非0になる。"""
-    import core.nintendo_hid as nh
+    import pokecon.domain.nintendo_hid as nh
 
     assert nh.NintendoHidReader._has_imu_payload(_report_30(0, 0, 0, 0, 0, 0)) is False
     assert (
@@ -862,7 +862,7 @@ class _ScriptedHidDevice:
 
 def test_handshake_skips_mixed_030_and_still_sends_8004():
     """80応答待ちに0x30が混ざっても読み飛ばし、80 04まで送る。"""
-    import core.nintendo_hid as nh
+    import pokecon.domain.nintendo_hid as nh
 
     def _81(sub: int) -> bytes:
         return bytes([0x81, sub]) + bytes(62)
@@ -883,7 +883,7 @@ def test_handshake_skips_mixed_030_and_still_sends_8004():
 
 def test_ensure_live_falls_back_to_nonzero_imu_without_ack(monkeypatch):
     """応答なしの個体でも、0x30のIMU値が非0なら再武装成功とみなす。"""
-    import core.nintendo_hid as nh
+    import pokecon.domain.nintendo_hid as nh
 
     factory = _install_arming_hid(monkeypatch, ack=False, start_armed=True)
     reader = nh.NintendoHidReader()
@@ -914,7 +914,7 @@ class _Delayed030HidDevice(_ArmingHidDevice):
 
 def test_open_waits_for_delayed_first_030(monkeypatch):
     """ハンドル直後0x30が来ない個体でも、1回の空読みで諦めない。"""
-    import core.nintendo_hid as nh
+    import pokecon.domain.nintendo_hid as nh
 
     monkeypatch.setattr(nh, "_FIRST_030_TIMEOUT_S", 0.3)
     factory = _install_arming_hid(
@@ -950,7 +950,7 @@ def test_read_pad_learns_stick_range() -> None:
     """
     import time
 
-    import core.nintendo_hid as nh
+    import pokecon.domain.nintendo_hid as nh
 
     reader = nh.NintendoHidReader()
     try:

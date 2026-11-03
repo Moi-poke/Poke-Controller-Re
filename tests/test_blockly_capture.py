@@ -4,7 +4,7 @@ from typing import Any
 import cv2
 import numpy as np
 import pytest
-from services import blockly_capture, blockly_templates
+from pokecon.runtime import blockly_capture, blockly_templates
 
 
 def test_name_rejects_bad_names() -> None:
@@ -126,7 +126,7 @@ def test_get_frame_refreshes_after_clear_with_seq() -> None:
 
 def test_get_frame_seq_key_expiry_bounded(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     """seq 鍵でも陳腐化は FRAME_CACHE_SEC に有界（期限切れは符号化し直す）。"""
-    import services.blockly_capture as bc
+    import pokecon.runtime.blockly_capture as bc
 
     red = np.zeros((10, 10, 3), dtype=np.uint8)
     red[:] = (0, 0, 255)

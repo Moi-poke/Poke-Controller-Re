@@ -2,7 +2,7 @@
 
 
 def test_accel_1g_is_4096():
-    from core.sdl_sensor import accel_to_raw
+    from pokecon.domain.sdl_sensor import accel_to_raw
 
     # 1/0.000244 = 4098.36 -> 4098（純正実測≒4104と整合）
     assert accel_to_raw(9.80665) == 4098
@@ -11,7 +11,7 @@ def test_accel_1g_is_4096():
 
 
 def test_gyro_1rad_is_938():
-    from core.sdl_sensor import gyro_to_raw
+    from pokecon.domain.sdl_sensor import gyro_to_raw
 
     # 1rad/s = 57.2958dps / 0.06103 = 938.7 -> 939
     assert gyro_to_raw(1.0) == 939
@@ -19,7 +19,7 @@ def test_gyro_1rad_is_938():
 
 
 def test_conversion_saturates_and_rejects_nonfinite():
-    from core.sdl_sensor import accel_to_raw, gyro_to_raw
+    from pokecon.domain.sdl_sensor import accel_to_raw, gyro_to_raw
 
     assert accel_to_raw(1e9) == 32767
     assert accel_to_raw(-1e9) == -32768
@@ -31,7 +31,7 @@ def test_conversion_saturates_and_rejects_nonfinite():
 
 
 def test_default_map_is_sdl_inverse():
-    from core.sdl_sensor import SdlSensorReader
+    from pokecon.domain.sdl_sensor import SdlSensorReader
 
     # SDLのSwitch→SDL変換（SDL_X=-Sw_Y・SDL_Y=+Sw_Z・SDL_Z=-Sw_X）の逆写像。
     # Sw_X=-SDL_Z・Sw_Y=-SDL_X・Sw_Z=+SDL_Y。
@@ -39,7 +39,7 @@ def test_default_map_is_sdl_inverse():
     reader.read_raw = lambda: ((1.0, 2.0, 3.0), (0.1, 0.2, 0.3))  # type: ignore[method-assign]
     got = reader.read()
     assert got is not None
-    from core.sdl_sensor import accel_to_raw, gyro_to_raw
+    from pokecon.domain.sdl_sensor import accel_to_raw, gyro_to_raw
 
     assert got[0] == accel_to_raw(-3.0)
     assert got[1] == accel_to_raw(-1.0)
@@ -50,7 +50,7 @@ def test_default_map_is_sdl_inverse():
 
 
 def test_axis_map_and_bias_applied():
-    from core.sdl_sensor import SdlSensorReader
+    from pokecon.domain.sdl_sensor import SdlSensorReader
 
     reader = SdlSensorReader()
     calls = {"n": 0}
@@ -66,7 +66,7 @@ def test_axis_map_and_bias_applied():
     reader.set_axis_map((0, 1, 2), (1, 1, 1), (0, 1, 2), (1, 1, 1))
     mapped = reader.read()
     assert mapped is not None
-    from core.sdl_sensor import accel_to_raw, gyro_to_raw
+    from pokecon.domain.sdl_sensor import accel_to_raw, gyro_to_raw
 
     assert mapped[0] == accel_to_raw(1.0)
     assert mapped[3] == gyro_to_raw(0.1)
@@ -79,7 +79,7 @@ def test_axis_map_and_bias_applied():
 
 
 def test_axis_map_rejects_invalid():
-    from core.sdl_sensor import SdlSensorReader
+    from pokecon.domain.sdl_sensor import SdlSensorReader
 
     reader = SdlSensorReader()
     reader.read_raw = lambda: ((9.80665, 0.0, 0.0), (0.0, 0.0, 0.0))  # type: ignore[method-assign]
@@ -93,7 +93,7 @@ def test_axis_map_rejects_invalid():
 
 
 def test_closed_reader_returns_none():
-    from core.sdl_sensor import SdlSensorReader
+    from pokecon.domain.sdl_sensor import SdlSensorReader
 
     reader = SdlSensorReader()
     assert reader.read() is None
@@ -102,7 +102,7 @@ def test_closed_reader_returns_none():
 
 
 def _sensor_with_lib(lib):
-    from core.sdl_sensor import SdlSensorReader
+    from pokecon.domain.sdl_sensor import SdlSensorReader
 
     reader = SdlSensorReader()
     reader._ready = True
@@ -175,7 +175,7 @@ def test_sensor_sdl_ensure_failure_logs_once(monkeypatch):
     monkeypatch.setitem(sys.modules, "pygame._sdl2", fake_sdl2)
     monkeypatch.setitem(sys.modules, "pygame._sdl2.controller", fake_gc)
 
-    from core.sdl_sensor import SdlSensorReader
+    from pokecon.domain.sdl_sensor import SdlSensorReader
 
     reader = SdlSensorReader()
     messages: list[str] = []

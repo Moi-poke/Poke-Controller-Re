@@ -6,7 +6,7 @@ import math
 import random
 from typing import Any
 
-from core import motion
+from pokecon.domain import motion
 
 _T0 = 1000.0
 

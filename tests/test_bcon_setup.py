@@ -10,16 +10,16 @@ def test_bcon_setup_imports_without_touching_wake():
     import importlib.util
     from pathlib import Path
 
-    assert Path("SerialController/BconSetup.py").exists()
-    assert Path("SerialController/WakeSetup.py").exists()
+    assert Path("SerialController/pokecon/ui/BconSetup.py").exists()
+    assert Path("SerialController/pokecon/ui/WakeSetup.py").exists()
     spec = importlib.util.spec_from_file_location(
-        "bcon_setup", "SerialController/BconSetup.py"
+        "bcon_setup", "SerialController/pokecon/ui/BconSetup.py"
     )
     assert spec is not None and spec.loader is not None
 
 
 def test_parse_capture_seconds() -> None:
-    from BconSetup import parse_capture_seconds
+    from pokecon.ui.BconSetup import parse_capture_seconds
 
     assert parse_capture_seconds("15") == 15
     assert parse_capture_seconds(1) == 1
@@ -33,7 +33,7 @@ def test_parse_capture_seconds() -> None:
 
 
 def test_parse_color_hex_and_build_payload() -> None:
-    from BconSetup import build_color_payload, parse_color_hex
+    from pokecon.ui.BconSetup import build_color_payload, parse_color_hex
 
     assert parse_color_hex("ff0000") == (255, 0, 0)
     assert parse_color_hex("#00FF00") == (0, 255, 0)
@@ -53,7 +53,7 @@ def test_parse_color_hex_and_build_payload() -> None:
 
 
 def test_describe_bcon_errcode() -> None:
-    from BconSetup import config_reject_type, describe_bcon_errcode
+    from pokecon.ui.BconSetup import config_reject_type, describe_bcon_errcode
 
     assert "正常" in describe_bcon_errcode(0x00)
     assert "CRC" in describe_bcon_errcode(0x02)
@@ -69,7 +69,7 @@ def test_describe_bcon_errcode() -> None:
 
 
 def test_format_status_flags() -> None:
-    from BconSetup import format_status_flags
+    from pokecon.ui.BconSetup import format_status_flags
 
     assert "有線" in format_status_flags(0x20)
     wired_off = format_status_flags(0x03)
@@ -81,7 +81,7 @@ def test_format_status_flags() -> None:
 
 def test_decode_player_lamp_bitmask() -> None:
     """プレイヤーLEDの下位4bitをそのまま4つの真偽へ（並べ替え無し）。"""
-    from BconSetup import decode_player_lamp
+    from pokecon.ui.BconSetup import decode_player_lamp
 
     # bit0=LED1, bit1=LED2, bit2=LED3, bit3=LED4。0x00-0x0Fを総当たり。
     for value in range(0x10):
@@ -104,7 +104,7 @@ def test_decode_player_lamp_bitmask() -> None:
 
 def test_decode_player_flags_imu_vib() -> None:
     """プレイヤーflagsはbit0=IMU・bit1=振動のみ。予約上位bitは無視。"""
-    from BconSetup import decode_player_flags
+    from pokecon.ui.BconSetup import decode_player_flags
 
     assert decode_player_flags(0x00) == (False, False)
     assert decode_player_flags(0x01) == (True, False)
@@ -117,7 +117,7 @@ def test_decode_player_flags_imu_vib() -> None:
 
 def test_decode_player_imu_range_bits() -> None:
     """flags bit3-4=gyro・bit5-6=accel の要求レンジ復号。"""
-    from BconSetup import decode_player_imu_range
+    from pokecon.ui.BconSetup import decode_player_imu_range
 
     assert decode_player_imu_range(0x00) == ("±250dps", "±8G")
     assert decode_player_imu_range(0x18) == ("±2000dps", "±8G")  # gyro sel=3
@@ -134,7 +134,7 @@ def test_player_lamp_s2_edge_no_raise() -> None:
     予約値は「据え置き or 全消灯」で例外にしない契約にする。ここでは
     その手前の復号段が全byteで例外を出さないことだけ固める。
     """
-    from BconSetup import decode_player_flags, decode_player_lamp
+    from pokecon.ui.BconSetup import decode_player_flags, decode_player_lamp
 
     for value in range(0x100):
         lamp = decode_player_lamp(value)
@@ -146,7 +146,7 @@ def test_player_lamp_s2_edge_no_raise() -> None:
 
 
 def test_is_bcon_transport() -> None:
-    from BconSetup import is_bcon_transport
+    from pokecon.ui.BconSetup import is_bcon_transport
 
     class Bcon:
         name = "bcon"
@@ -163,7 +163,7 @@ def test_is_bcon_transport() -> None:
 
 
 def test_send_config_frame_uses_session_mouth() -> None:
-    from BconSetup import send_config_frame
+    from pokecon.ui.BconSetup import send_config_frame
 
     class Fake:
         def __init__(self) -> None:

@@ -5,7 +5,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 from typing import Any
 
-from ui.serial_panel import SerialPanelMixin
+from pokecon.ui.serial_panel import SerialPanelMixin
 
 
 class _Var:

@@ -25,7 +25,6 @@ import configparser
 from types import SimpleNamespace
 from typing import Any
 
-import Settings
 from gdi_source_readers import (
     SERIAL_CONTROLLER,
     WINDOW_SOURCE,
@@ -36,11 +35,12 @@ from gdi_source_readers import (
     enclosing_function,
     module_tree,
 )
+from pokecon.app import Settings
+from pokecon.ui.camera_panel import CameraPanelMixin
 from pytest import CaptureFixture, MonkeyPatch
-from ui.camera_panel import CameraPanelMixin
 
-SETTINGS_SOURCE = SERIAL_CONTROLLER / "Settings.py"
-CAMERA_PANEL_SOURCE = SERIAL_CONTROLLER / "ui" / "camera_panel.py"
+SETTINGS_SOURCE = SERIAL_CONTROLLER / "pokecon" / "app" / "Settings.py"
+CAMERA_PANEL_SOURCE = SERIAL_CONTROLLER / "pokecon" / "ui" / "camera_panel.py"
 
 # 既定（"auto"）と違う値。保存されなければ「保存できていない」ことに気づけない。
 RENDERER_CHOICE = "photo"

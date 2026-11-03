@@ -125,7 +125,7 @@ console.log('=== GENERATED END ===');
 
 @NEEDS_NODE
 def test_browser_globals_and_codegen() -> None:
-    from core import blockly_validate
+    from pokecon.domain import blockly_validate
 
     proc = subprocess.run(
         ["node", "-e", PROBE_JS, str(BLOCKLY)],
@@ -345,8 +345,8 @@ console.log('=== GENERATED END ===');
 
 @NEEDS_NODE
 def test_browser_vision_codegen_switches_base() -> None:
-    from core import blockly_validate
-    from services import blockly_templates
+    from pokecon.domain import blockly_validate
+    from pokecon.runtime import blockly_templates
 
     proc = subprocess.run(
         ["node", "-e", PROBE_VISION_JS, str(BLOCKLY)],
@@ -1191,7 +1191,7 @@ console.log('=== GENERATED END ===');
 
 @NEEDS_NODE
 def test_browser_audio_codegen() -> None:
-    from core import blockly_validate
+    from pokecon.domain import blockly_validate
 
     proc = subprocess.run(
         ["node", "-e", PROBE_AUDIO_JS, str(BLOCKLY)],
@@ -1310,7 +1310,7 @@ console.log('=== GENERATED END ===');
 
 @NEEDS_NODE
 def test_browser_hold_codegen() -> None:
-    from core import blockly_validate
+    from pokecon.domain import blockly_validate
 
     proc = subprocess.run(
         ["node", "-e", PROBE_HOLD_JS, str(BLOCKLY)],
@@ -1412,7 +1412,7 @@ console.log('=== GENERATED END ===');
 
 @NEEDS_NODE
 def test_browser_output_codegen() -> None:
-    from core import blockly_validate
+    from pokecon.domain import blockly_validate
 
     proc = subprocess.run(
         ["node", "-e", PROBE_OUTPUT_JS, str(BLOCKLY)],
@@ -1579,7 +1579,7 @@ console.log('=== GENERATED END ===');
 
 @NEEDS_NODE
 def test_browser_stick_codegen() -> None:
-    from core import blockly_validate
+    from pokecon.domain import blockly_validate
 
     proc = subprocess.run(
         ["node", "-e", PROBE_STICK_JS, str(BLOCKLY)],
@@ -1789,7 +1789,7 @@ console.log('=== GENERATED END ===');
 
 @NEEDS_NODE
 def test_browser_subroutine_codegen() -> None:
-    from core import blockly_validate
+    from pokecon.domain import blockly_validate
 
     proc = subprocess.run(
         ["node", "-e", PROBE_SUB_JS, str(BLOCKLY)],
@@ -1881,7 +1881,7 @@ console.log('=== GENERATED END ===');
 
 @NEEDS_NODE
 def test_browser_subroutine_vision_switches_base() -> None:
-    from core import blockly_validate
+    from pokecon.domain import blockly_validate
 
     proc = subprocess.run(
         ["node", "-e", PROBE_SUB_VISION_JS, str(BLOCKLY)],
@@ -1994,7 +1994,7 @@ console.log('=== GENERATED END ===');
 
 @NEEDS_NODE
 def test_browser_subroutine_return_codegen() -> None:
-    from core import blockly_validate
+    from pokecon.domain import blockly_validate
 
     proc = subprocess.run(
         ["node", "-e", PROBE_SUBRET_JS, str(BLOCKLY)],
@@ -2114,7 +2114,7 @@ console.log('=== GENERATED END ===');
 
 @NEEDS_NODE
 def test_browser_standard_core_codegen() -> None:
-    from core import blockly_validate
+    from pokecon.domain import blockly_validate
 
     proc = subprocess.run(
         ["node", "-e", PROBE_STD_JS, str(BLOCKLY)],
@@ -2269,7 +2269,7 @@ console.log('=== GENERATED END ===');
 
 @NEEDS_NODE
 def test_browser_vision_helper_codegen() -> None:
-    from core import blockly_validate
+    from pokecon.domain import blockly_validate
 
     proc = subprocess.run(
         ["node", "-e", PROBE_VISION_HELP_JS, str(BLOCKLY)],
@@ -2469,7 +2469,7 @@ console.log('=== GENERATED END ===');
 
 @NEEDS_NODE
 def test_browser_elapsed_codegen() -> None:
-    from core import blockly_validate
+    from pokecon.domain import blockly_validate
 
     proc = subprocess.run(
         ["node", "-e", PROBE_ELAPSED_JS, str(BLOCKLY)],
@@ -2581,7 +2581,7 @@ console.log('=== GENERATED END ===');
 
 @NEEDS_NODE
 def test_browser_dialog_codegen() -> None:
-    from core import blockly_validate
+    from pokecon.domain import blockly_validate
 
     proc = subprocess.run(
         ["node", "-e", PROBE_DIALOG_JS, str(BLOCKLY)],
@@ -2759,7 +2759,7 @@ console.log('=== GENERATED END ===');
 
 @NEEDS_NODE
 def test_browser_program_tags_codegen() -> None:
-    from core import blockly_validate
+    from pokecon.domain import blockly_validate
 
     proc = subprocess.run(
         ["node", "-e", PROBE_TAGS_JS, str(BLOCKLY)],
@@ -3049,7 +3049,7 @@ def test_browser_motion_e2e_motion_release_passes_validation() -> None:
     """Given motion(END=RELEASE)の実生成コード / When Python側で検証する / Then 空エラーになること。"""
     import json
 
-    from core import blockly_validate
+    from pokecon.domain import blockly_validate
 
     state = "const state = " + json.dumps(MOTION_RELEASE_PY_STATE) + ";\n"
     code = _run_motion_probe_js(_motion_probe_js(state))
@@ -3064,7 +3064,7 @@ def test_browser_motion_e2e_motion2_cont_and_release_pass_validation() -> None:
     """Given motion2(END=CONT/RELEASE)の実生成コード / When Python側で検証する / Then 空エラーになること。"""
     import json
 
-    from core import blockly_validate
+    from pokecon.domain import blockly_validate
 
     state = "const state = " + json.dumps(MOTION_E2E_PY_STATE) + ";\n"
     code = _run_motion_probe_js(_motion_probe_js(state))

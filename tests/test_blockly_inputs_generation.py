@@ -9,8 +9,8 @@ from typing import Any
 
 import pytest
 from blockly_node import NEEDS_NODE, run_blockly
-from core import blockly_validate
-from services import blockly_templates
+from pokecon.domain import blockly_validate
+from pokecon.runtime import blockly_templates
 
 pytestmark = NEEDS_NODE
 

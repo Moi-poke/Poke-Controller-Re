@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import threading
 
-from core import Sender
 from fakes import FakeTransport
-from services import blockly_run
+from pokecon.domain.serial import sender as Sender
+from pokecon.runtime import blockly_run
 
 _CODE = """
 from Commands.PythonCommandBase import PythonCommand, RecoverableError

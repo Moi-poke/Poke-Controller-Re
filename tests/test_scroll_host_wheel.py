@@ -10,7 +10,7 @@ from __future__ import annotations
 import tkinter as tk
 
 import pytest
-from ui.scroll_host import ScrollHost
+from pokecon.ui.scroll_host import ScrollHost
 
 
 @pytest.fixture

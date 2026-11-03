@@ -18,7 +18,7 @@ sys.path.insert(0, str(REPO_ROOT / "SerialController"))
 
 def reset_queues() -> Any:
     """キューを作り直した LogPane を返す（前のシナリオの残りを持ち込まない）。"""
-    import LogPane
+    from pokecon.ui import LogPane
 
     LogPane.text_queue = LogPane.DropOldestQueue()
     LogPane.sub_log_queue = LogPane.ResultForwardQueue()
@@ -28,7 +28,7 @@ def reset_queues() -> Any:
 
 def make_host(root: tk.Tk) -> Any:
     """ログ欄を組み立てた宿主を返す。"""
-    from ui.log_panel import LogPanelMixin
+    from pokecon.ui.log_panel import LogPanelMixin
 
     class _Host(LogPanelMixin):
         pass

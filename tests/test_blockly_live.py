@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from services import blockly_live
+from pokecon.runtime import blockly_live
 
 
 class FakeClock:

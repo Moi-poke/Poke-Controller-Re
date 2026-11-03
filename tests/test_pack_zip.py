@@ -7,7 +7,7 @@ import zipfile
 from pathlib import Path
 
 import pytest
-from core import pack_zip
+from pokecon.domain import pack_zip
 
 
 def make_staged(base: Path) -> dict:

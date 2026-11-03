@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from core import CommandTags
+from pokecon.domain import CommandTags
 
 
 def _fake_cls(name: str, module: str) -> type:

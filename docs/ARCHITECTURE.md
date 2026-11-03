@@ -12,7 +12,7 @@ Poke-Controller Re: の構成メモ。詳細な開発手順は [`AGENTS.md`](../
 実行制御・操作・画像認識・音声検知 (Commands/PythonCommandBase.py ほか)
         │  press / hold / wait / isContainTemplate / waitTone / waitSound
         ▼
-core/  …… GUI 非依存の純粋ロジック（tkinter・アプリ層の import 禁止）
+pokecon/domain/  …… GUI 非依存の純粋ロジック（tkinter・アプリ層の import 禁止）
         │  serial/: Sender 本体・Arbiter（入力調停）・encoding（行書式）
         │  transport/: base（抽象）・text_serial・registry（名前から選択）
         │  Keys: Button/Direction/Hat/Stick（行組み立ては encoding へ一本化）
@@ -25,29 +25,37 @@ core/  …… GUI 非依存の純粋ロジック（tkinter・アプリ層の imp
 ファーム (Arduino Leonardo / Pico 2 W。Pico 2 WはSwitch-bconファーム、詳細は docs/BCON_TRANSPORT.md)
 ```
 
-エントリは [`SerialController/__main__.py`](../SerialController/__main__.py)（`python -m SerialController`）と
-[`Window.py`](../SerialController/Window.py) 直起動（[`launcher.py`](../SerialController/launcher.py) が使う従来経路）の2口で、どちらも
-`Window.main()` へ集まる。利用者スクリプトの公開面（`Commands.Keys` /
-`Commands.PythonCommandBase` / `Commands.McuCommandBase` /
-`Commands.WakeLink` / `Commands.CommandVision` /
-`Commands.CommandAudio`）と `settings*.ini` の
-書式は凍結。公開面の正本は [`core/user_api_allowlist.py`](../SerialController/core/user_api_allowlist.py)。深刻度は表面で
-違い、検査（[`tools/check_user_api.py`](../tools/check_user_api.py)）は違反、保存時
-（[`core/blockly_validate.py`](../SerialController/core/blockly_validate.py)）は異常、配布時（[`core/pack_zip.py`](../SerialController/core/pack_zip.py)）は
-未知を注意に留める（意図的な使い分け）。書式知識の実体は [`config.py`](../SerialController/config.py)（Tk なし）にあり、
+本体は [`SerialController/pokecon/`](../SerialController/pokecon) パッケージで、
+`app/`（組立・設定・入口）・`domain/`（tkinter 非依存）・`runtime/`（手順）・
+`ui/`（Tk 部品）・`plugins/`（transport の manifest 読み込み）に分かれる。
+`SerialController/` は実行時の根で、`settings*.ini`・`Template/`・`db/`・`Commands/` を置く。
+エントリは [`pokecon/__main__.py`](../SerialController/pokecon/__main__.py)（`python -m pokecon`）、
+[`SerialController/__main__.py`](../SerialController/__main__.py)（`python -m SerialController`）、
+[`Window.py`](../SerialController/Window.py) 直起動（[`launcher.py`](../SerialController/launcher.py) が使う従来経路）の3口で、
+どれも `pokecon.app.Window.main()` へ集まる。利用者スクリプトの公開面と `settings*.ini` の書式は凍結で、
+基準は公開済みの Poke-Controller Modified（`Moi-poke/Poke-Controller-Modified` の `master`）に
+あったかどうか。2段に分かれる。凍結は Modified にあった7経路（`Commands.CommandBase` /
+`Keys` / `McuCommandBase` / `PythonCommandBase` / `Sender` / `StickCommand` /
+`UnitCommand`）で、名前の一覧は [`pokecon/domain/api_surface.py`](../SerialController/pokecon/domain/api_surface.py)
+（`task api` が欠落を落とす）。暫定は v4 で増えた経路（`WakeLink` / `CommandVision` /
+`CommandAudio` / `CommandColor`）で、v4.0 の公開までは統合・改名してよい。
+区分の正本は [`pokecon/domain/user_api_allowlist.py`](../SerialController/pokecon/domain/user_api_allowlist.py)。深刻度は表面で
+違い、検査（[`tools/gates/check_user_api.py`](../tools/gates/check_user_api.py)）は違反、保存時
+（[`pokecon/domain/blockly_validate.py`](../SerialController/pokecon/domain/blockly_validate.py)）は異常、配布時（[`pokecon/domain/pack_zip.py`](../SerialController/pokecon/domain/pack_zip.py)）は
+未知を注意に留める（意図的な使い分け）。書式知識の実体は [`config.py`](../SerialController/pokecon/domain/config.py)（Tk なし）にあり、
 `Settings.GuiSettings` は Tk との鏡と入出力の手順だけを持つ。
 
-GUI 層（[`Window.py`](../SerialController/Window.py)・[`GuiAssets.py`](../SerialController/GuiAssets.py)・[`Settings.py`](../SerialController/Settings.py) ほか）は [`core/`](../SerialController/core) の利用者。
+GUI 層（[`Window.py`](../SerialController/Window.py)・[`GuiAssets.py`](../SerialController/pokecon/ui/GuiAssets.py)・[`Settings.py`](../SerialController/pokecon/app/Settings.py) ほか）は [`pokecon/domain/`](../SerialController/pokecon/domain) の利用者。
 [`Window.py`](../SerialController/Window.py) は起動の組立・設定の出し入れ・終了処理だけを持ち、画面の
-部品ごとの手順は [`ui/`](../SerialController/ui) の Mixin（`camera_panel` / `serial_panel` /
+部品ごとの手順は [`pokecon/ui/`](../SerialController/pokecon/ui) の Mixin（`camera_panel` / `serial_panel` /
 `command_panel` / `history_panel` / `log_panel` / `audio_panel` / `bcon_panel`）に分かれる。`history_panel` は実行履歴の一覧・再実行のタブを持ち、`bcon_panel` は
 通信方式が bcon 系のときだけ「シリアル」の隣へ Bcon タブ（中身は `BconSetup`）を出し入れする。Mixin は `self` 越しに触る
-属性を宣言しておく（mypy のため）。[`ui/`](../SerialController/ui) から `Window` 本体の import は
-禁止（循環になる）。実行の手順は [`services/`](../SerialController/services)（`command_runner.py`: 起動・
+属性を宣言しておく（mypy のため）。[`pokecon/ui/`](../SerialController/pokecon/ui) から `Window` 本体の import は
+禁止（循環になる）。実行の手順は [`pokecon/runtime/`](../SerialController/pokecon/runtime)（`command_runner.py`: 起動・
 停止・見張り・後始末の状態機械、`serial_service.py`: Sender の所有・
 接続・切替・キーボードの寿命管理、`audio_service.py`: 取込口の所有・
-切替・モニター再生の手順）へ委ねる。[`services/`](../SerialController/services) は tkinter を
-import しない。逆向きの依存は [`tools/check_core.py`](../tools/check_core.py)（`task bounds`）で
+切替・モニター再生の手順）へ委ねる。[`pokecon/runtime/`](../SerialController/pokecon/runtime) は tkinter を
+import しない。逆向きの依存は [`tools/gates/check_core.py`](../tools/gates/check_core.py)（`task bounds`）で
 禁止している。
 
 ## プレビュー（映像）の描画
@@ -56,13 +64,13 @@ import しない。逆向きの依存は [`tools/check_core.py`](../tools/check_
 積み上がらない）。
 
 ```
-CameraBackend (core/camera_backend.py)      … core.Camera / core.CameraQueue
+CameraBackend (pokecon/domain/camera_backend.py)      … core.Camera / core.CameraQueue
         │  readFrameWithSeq()（seq は上書きごとに進む）
         ▼
-VideoRenderer (core/preview_renderer.py)    … アプリが知る唯一の描画面
-        ├─ core/sdl_surface.py    GPU（SDL_Renderer: Windows=D3D11 / Linux=OpenGL）
-        ├─ core/gdi_surface.py    Windows の CPU 描画（BitBlt）
-        └─ ui/photo_surface.py    Canvas + PhotoImage（最終手段）
+VideoRenderer (pokecon/domain/preview_renderer.py)    … アプリが知る唯一の描画面
+        ├─ pokecon/domain/sdl_surface.py    GPU（SDL_Renderer: Windows=D3D11 / Linux=OpenGL）
+        ├─ pokecon/domain/gdi_surface.py    Windows の CPU 描画（BitBlt）
+        └─ pokecon/ui/photo_surface.py    Canvas + PhotoImage（最終手段）
 ```
 
 `settings.ini` の `renderer`（`auto`/`sdl`/`gdi`/`photo`）で選ぶ。`auto` は
@@ -72,12 +80,12 @@ SDL を第一候補にし、組み立てられない・接続できない場合�
 映像の解像度にテクスチャを追従させるので 1080p のカメラでもそのまま通る。
 設計・実測・zero-copy の拡張点: [`superpowers/specs/2026-10-30-gpu-preview-renderer-design.md`](superpowers/specs/2026-10-30-gpu-preview-renderer-design.md)。
 
-## core/ への移し方
+## pokecon/domain/ への移し方
 
-- 同名ファイルで [`core/`](../SerialController/core) へ移動し、旧位置には再公開シムだけ残す
+- 同名ファイルで [`pokecon/domain/`](../SerialController/pokecon/domain) へ移動し、旧位置には再公開シムだけ残す
   （`from core.X import Y as Y` 形式）。`from Commands.X import ...` は
   そのまま動く。新規コードは `core` から読む
-- [`core/`](../SerialController/core) 内の相互参照は `core.*` の絶対 import にする（相対 import 禁止）
+- [`pokecon/domain/`](../SerialController/pokecon/domain) 内の相互参照は `core.*` の絶対 import にする（相対 import 禁止）
 
 ## 送信の経路（2系統）
 
@@ -90,6 +98,19 @@ SDL を第一候補にし、組み立てられない・接続できない場合�
   未送出の中立は異状態への遷移で落とす（レガシー同等）。
   200ms watchdog は 24ms 再送で十分賄う
 
+## 仮想コントローラの操作盤
+
+- ボタンの並び・当たり判定・論理サイズは [`pokecon/domain/pad_layout.py`](../SerialController/pokecon/domain/pad_layout.py)
+  が持つ（`procon` / `joycon_l` / `joycon_r`）。描画は
+  [`pokecon/ui/controller_pad.py`](../SerialController/pokecon/ui/controller_pad.py) が倍率を掛けるだけ。
+- コントローラタブの「操作盤」で `auto` / プロコン / Joy-Con (L) / Joy-Con (R) を選ぶ。
+  `auto` は選んでいるゲームパッドの表示名（例: `Joy-Con (L)`）から左右を決め、
+  判別できなければプロコンにする。BCON の種別切替が成功したときは、その
+  種別（ProCon / Joy-Con L / R）へ明示的に合わせる。設定は
+  `[General Setting] controller_layout`。
+- 種類を変えるときは押しっぱなしをすべて解除してから描き直す（消えたボタンの
+  解放が届かず Switch 側に残るのを防ぐ）。埋め込みと別窓は同じ種類を共有する。
+
 ## コマンドの発見と実行
 
 `CommandLoader` が `PythonCommands/`・`McuCommands/` 配下を import し、
@@ -101,7 +122,7 @@ SDL を第一候補にし、組み立てられない・接続できない場合�
 
 利用者のスクリプトは任意の Python なので、例外が出た位置から
 フレームを再開することはできない。復帰できるのは「同じ操作をもう一度
-呼べる」場所だけである。そこで [`core/recovery.py`](../SerialController/core/recovery.py)
+呼べる」場所だけである。そこで [`pokecon/domain/recovery.py`](../SerialController/pokecon/domain/recovery.py)
 が例外を型で分類し、2層で回復する。
 
 - 操作単位（画像テンプレートの読み込み・カメラのフレーム取得）:
@@ -136,7 +157,7 @@ SDL を第一候補にし、組み立てられない・接続できない場合�
 ここへ寄せる。内部レートは44.1kHz monoに統一し、デバイス自レート
 （48kHz等）との差はリサンプルで吸収する。録音テンプレートは
 `Template/audio/<pack>/*.wav`、録音クリップは `AudioClips/`。
-設定は `[Audio]`（[`config.py`](../SerialController/config.py) の既定＋補正に乗せる）。利用者向けの
+設定は `[Audio]`（[`config.py`](../SerialController/pokecon/domain/config.py) の既定＋補正に乗せる）。利用者向けの
 操作手順は [`docs/AUDIO.md`](AUDIO.md) を参照。
 
 ## 設定と並列起動
@@ -155,7 +176,7 @@ ERROR 以上は GUI のログ欄にも流す（`LogPane.logger_sink`）。print 
 
 ## 検証の考え方
 
-`task ci`（ruff check / format --check / mypy / bounds / userapi / test）が
+`task ci`（ruff check / format --check / mypy / bounds / userapi / api / docs / test）が
 緑であること。実機なしで回せる純粋ロジックは [`tests/`](../tests) の pytest で
 確認する（例: Transport の間引き、`CommandRunner` の状態遷移、
 未知 capability の legacy 等価動作）。
@@ -165,7 +186,7 @@ COM ポート・キャプチャボードが要る動作は実機でのみ確認�
 ## ワーカーと GUI の受け渡し
 
 ワーカースレッドから Tk の widget・Tk 変数・`after()` を触らない。渡したい処理は
-[core/ui_inbox.py](SerialController/core/ui_inbox.py) の `UiInbox` へ積み、GUI スレッドが
+[pokecon/domain/ui_inbox.py](SerialController/pokecon/domain/ui_inbox.py) の `UiInbox` へ積み、GUI スレッドが
 16ms 周期（`Window._pump_inbox`）で取り出す。
 
 - 必達（`post`）は閉じるまで届ける。表示の更新（`post_latest`）は同じ key の最新 1 件だけ。

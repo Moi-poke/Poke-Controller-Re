@@ -9,7 +9,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 import pytest
-from core import dialog_gallery
+from pokecon.domain import dialog_gallery
 
 
 def _write(path: Path, image: np.ndarray) -> None:

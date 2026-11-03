@@ -7,7 +7,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from core import option_sets
+from pokecon.domain import option_sets
 
 
 def _touch(path: Path, data: bytes = b"not-a-real-image") -> None:
@@ -119,7 +119,7 @@ def test_pokecon_list_helpers() -> None:
 
 def test_list_image_templates_excludes_set_icons_only(tmp_path: Path) -> None:
     """セット直下の icons だけを候補から外し、他の icons は残す。"""
-    from services import blockly_templates
+    from pokecon.runtime import blockly_templates
 
     root = Path(tmp_path) / "SerialController"
     for rel in (

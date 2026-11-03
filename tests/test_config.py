@@ -2,7 +2,7 @@
 
 import configparser
 
-import config
+from pokecon.domain import config
 
 
 def make_parser() -> configparser.ConfigParser:
@@ -87,7 +87,7 @@ def test_existing_fixed_and_45_survive_the_backfill() -> None:
 
 def test_renderer_default_and_sanitize() -> None:
     """renderer の既定値と、不正値を候補値へ戻す動きの検証。"""
-    import WindowUtils
+    from pokecon.ui import WindowUtils
 
     assert config.default_sections()["General Setting"]["renderer"] == "auto"
     # GPU 面（sdl）が既定の第一候補として表に入る。順序は選択の優先順でもある。
@@ -114,7 +114,7 @@ def test_renderer_default_and_sanitize() -> None:
 
 def test_show_mode_default_and_sanitize() -> None:
     """show_mode の既定値と、不正値を候補値へ戻す動きの検証。"""
-    from core.display_mode import DEFAULT_SHOW_MODE, SHOW_MODES
+    from pokecon.domain.display_mode import DEFAULT_SHOW_MODE, SHOW_MODES
 
     defaults = config.default_sections()["General Setting"]
     assert defaults["show_mode"] == DEFAULT_SHOW_MODE
@@ -138,7 +138,7 @@ def test_show_mode_default_and_sanitize() -> None:
 
 def test_show_size_accepts_the_960x540_preset() -> None:
     """固定サイズのプリセットに 960x540 が加わった（補正で潰されない）。"""
-    from core.display_mode import SHOW_SIZES
+    from pokecon.domain.display_mode import SHOW_SIZES
 
     assert "960x540" in SHOW_SIZES
     parser = make_parser()
@@ -156,7 +156,7 @@ def test_show_size_accepts_the_960x540_preset() -> None:
 
 def test_layout_default_and_sanitize() -> None:
     """layout の既定値と、不正値を候補値へ戻す動きの検証。"""
-    from core.display_mode import DEFAULT_LAYOUT, LAYOUTS
+    from pokecon.domain.display_mode import DEFAULT_LAYOUT, LAYOUTS
 
     defaults = config.default_sections()["Window"]
     assert defaults["layout"] == DEFAULT_LAYOUT
@@ -181,7 +181,7 @@ def test_layout_default_and_sanitize() -> None:
 
 def test_layout_keeps_every_candidate_value() -> None:
     """候補3つ（standard / compact / preview）は補正で潰されない。"""
-    from core.display_mode import LAYOUTS
+    from pokecon.domain.display_mode import LAYOUTS
 
     assert LAYOUTS == ("standard", "compact", "preview")
     parser = make_parser()
@@ -194,7 +194,7 @@ def test_layout_keeps_every_candidate_value() -> None:
 
 def test_profile_color_default_and_sanitize() -> None:
     """profile_color の既定値（色なし）と、壊れた値を空へ戻す動きの検証。"""
-    from core.display_mode import normalize_profile_color
+    from pokecon.domain.display_mode import normalize_profile_color
 
     defaults = config.default_sections()["Window"]
     assert defaults["profile_color"] == ""
@@ -305,7 +305,7 @@ def test_pane_arrangement_defaults_and_sanitize() -> None:
     既存の settings.ini にキーが無い場合は、新しい既定（タブを右）で
     補完されること。
     """
-    from core.pane_arrangement import DEFAULT_ARRANGEMENT
+    from pokecon.domain.pane_arrangement import DEFAULT_ARRANGEMENT
 
     defaults = config.default_sections()["Window"]
     assert defaults["arrangement"] == DEFAULT_ARRANGEMENT == "tabs_right"
@@ -339,3 +339,22 @@ def test_pane_sashes_default_empty_and_broken_text_is_cleared() -> None:
     assert "Window.pane_sashes" in changed
     window["pane_sashes"] = '{"V[preview,tabs]": [0.5]}'
     assert config.complete_missing(parser) == []
+
+
+def test_controller_layout_defaults_to_auto_and_resets_unknown_values() -> None:
+    from pokecon.domain.pad_layout import AUTO, LAYOUTS
+
+    defaults = config.default_sections()["General Setting"]
+    assert defaults["controller_layout"] == AUTO
+    parser = make_parser()
+    config.complete_missing(parser)
+    general = parser["General Setting"]
+    assert general["controller_layout"] == AUTO
+    for candidate in LAYOUTS:
+        general["controller_layout"] = candidate
+        assert config.complete_missing(parser) == []
+
+    general["controller_layout"] = "joycon_x"
+    changed = config.complete_missing(parser)
+    assert general["controller_layout"] == AUTO
+    assert "General Setting.controller_layout" in changed

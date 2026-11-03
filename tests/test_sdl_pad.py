@@ -7,9 +7,9 @@ Switch Pro コンなど XInput に対応していないパッドは SDL（pygame
 
 from __future__ import annotations
 
-from core.gamepad_map import stick_to_xy
-from core.sdl_pad import SdlPadReader, _axis_to_short, _trigger_to_byte
-from core.xinput import DEADZONE_LEFT, PadState
+from pokecon.domain.gamepad_map import stick_to_xy
+from pokecon.domain.sdl_pad import SdlPadReader, _axis_to_short, _trigger_to_byte
+from pokecon.domain.xinput import DEADZONE_LEFT, PadState
 
 
 def test_axis_conversion() -> None:
@@ -24,7 +24,7 @@ def test_axis_conversion() -> None:
 
 def test_normalize_axis_sint16() -> None:
     """pygame 2.6 の int 軸値を -1.0〜1.0 へ直す。"""
-    from core.sdl_pad import _normalize_axis
+    from pokecon.domain.sdl_pad import _normalize_axis
 
     assert _normalize_axis(0) == 0.0
     assert _normalize_axis(32767) == 1.0
@@ -37,7 +37,7 @@ def test_normalize_axis_sint16() -> None:
 
 def test_normalize_axis_int_one_is_not_full_scale() -> None:
     """int の ±1 は Sint16 の1LSB。全倒れへ増幅しない。"""
-    from core.sdl_pad import _normalize_axis
+    from pokecon.domain.sdl_pad import _normalize_axis
 
     assert _normalize_axis(1) == 1 / 32767
     assert _normalize_axis(-1) == -1 / 32767
@@ -168,7 +168,7 @@ def test_ensure_retries_after_failure(monkeypatch) -> None:
     import sys
     import types
 
-    import core.sdl_pad as sdl_pad
+    import pokecon.domain.sdl_pad as sdl_pad
 
     monkeypatch.setattr(sdl_pad, "ENSURE_RETRY_S", 0.0)
     attempts = {"n": 0}
@@ -196,7 +196,7 @@ def test_ensure_retries_after_failure(monkeypatch) -> None:
 
 def test_missing_pad_does_not_quit_sdl(monkeypatch) -> None:
     """未接続が続いても SDL 全体は落とさない（共有ハンドルを壊さない）。"""
-    import core.sdl_pad as sdl_pad
+    import pokecon.domain.sdl_pad as sdl_pad
 
     monkeypatch.setattr(sdl_pad, "RESET_MISSING_S", 0.0)
     quits = {"n": 0}
@@ -506,7 +506,7 @@ class _FakeHidPad:
 
 def test_pad_source_hid_opens_once() -> None:
     """probe保持で初回から接続扱いになり、開き直さない。"""
-    from core.pad_source import PadSource
+    from pokecon.domain.pad_source import PadSource
 
     hid = _FakeHidPad()
     source = PadSource(xinput=_NoPad(), sdl=_NoPad(), hid=hid)
@@ -523,7 +523,7 @@ def test_pad_source_hid_never_reopens_open_handle() -> None:
     route が "hid" のまま未接続だと同一tickで _read_hid が2回呼ばれる。
     その両方で open を呼ぶと close→open が繰り返される。
     """
-    from core.pad_source import PadSource
+    from pokecon.domain.pad_source import PadSource
 
     hid = _FakeHidPad(connected=False)
     hid.opened = True  # IMU側が開いた直後（まだ0x30が無い）
@@ -537,7 +537,7 @@ def test_pad_source_hid_never_reopens_open_handle() -> None:
 
 def test_pad_source_hid_reopens_after_external_close() -> None:
     """USB再列挙でハンドルが閉じたら次の読みで開き直す。"""
-    from core.pad_source import PadSource
+    from pokecon.domain.pad_source import PadSource
 
     hid = _FakeHidPad()
     source = PadSource(xinput=_NoPad(), sdl=_NoPad(), hid=hid)
@@ -549,7 +549,7 @@ def test_pad_source_hid_reopens_after_external_close() -> None:
 
 def test_pad_source_hid_open_failure_backs_off() -> None:
     """open失敗は1回だけ試し、0.5秒は次のopenを呼ばない。"""
-    from core.pad_source import PadSource
+    from pokecon.domain.pad_source import PadSource
 
     hid = _FakeHidPad(open_ok=False)
     source = PadSource(xinput=_NoPad(), sdl=_NoPad(), hid=hid)
@@ -565,7 +565,7 @@ def test_pad_source_hid_open_failure_backs_off() -> None:
 
 def test_pad_source_does_not_wait_for_an_opening_handle() -> None:
     """open処理中は open を呼ばず、未接続を即返す。"""
-    from core.pad_source import PadSource
+    from pokecon.domain.pad_source import PadSource
 
     class _OpeningHid:
         def __init__(self) -> None:
@@ -592,8 +592,8 @@ def test_pad_source_does_not_wait_for_an_opening_handle() -> None:
 
 def test_pad_source_logs_hid_fallback_once() -> None:
     """SDL→HIDへ切り替えたことを1回だけ出す（巡回ごとに洪水にしない）。"""
-    from core.pad_source import PadSource
     from loguru import logger
+    from pokecon.domain.pad_source import PadSource
 
     messages: list[str] = []
     handler = logger.add(lambda m: messages.append(str(m)), level="WARNING")
@@ -702,7 +702,7 @@ class _CountingPad:
 
 def test_pad_source_invalidate_drops_route_and_retries_sdl() -> None:
     """手動再接続は経路の記憶を捨て、SDL から選び直す。"""
-    from core.pad_source import PadSource
+    from pokecon.domain.pad_source import PadSource
 
     sdl = _CountingPad(connected=False)
     hid = _FakeHidPad()
@@ -719,7 +719,7 @@ def test_pad_source_invalidate_drops_route_and_retries_sdl() -> None:
 
 def test_pad_source_does_not_reread_a_failed_route() -> None:
     """経路が失敗した回に同じ口を読み直さない（open待ちの二重化を防ぐ）。"""
-    from core.pad_source import PadSource
+    from pokecon.domain.pad_source import PadSource
 
     sdl = _CountingPad(connected=False)
     source = PadSource(xinput=_NoPad(), sdl=sdl, hid=_FakeHidPad(open_ok=False))
@@ -729,7 +729,7 @@ def test_pad_source_does_not_reread_a_failed_route() -> None:
 
 
 def test_pad_source_invalidate_resets_hid_backoff() -> None:
-    from core.pad_source import PadSource
+    from pokecon.domain.pad_source import PadSource
 
     hid = _FakeHidPad(open_ok=False)
     source = PadSource(xinput=_NoPad(), sdl=_NoPad(), hid=hid)
@@ -742,7 +742,7 @@ def test_pad_source_invalidate_resets_hid_backoff() -> None:
 
 def test_pad_source_returns_to_sdl_from_hid() -> None:
     """起動直後に SDL が間に合わず HID へ落ちても、後から SDL へ戻る。"""
-    from core.pad_source import PadSource
+    from pokecon.domain.pad_source import PadSource
 
     sdl = _CountingPad(connected=False)
     hid = _FakeHidPad()
@@ -816,7 +816,7 @@ class _SdlAxesOnly:
 
 def test_pad_source_uses_sdl_axes_on_the_hid_route() -> None:
     """HID の未校正スティックを SDL の校正済み軸で置き換える。"""
-    from core.pad_source import PadSource
+    from pokecon.domain.pad_source import PadSource
 
     class _HidWithButtons(_FakeHidPad):
         def read_pad(self) -> PadState:
@@ -930,8 +930,8 @@ def test_raw_open_failure_warns_once(monkeypatch) -> None:
 
 def test_pad_source_warns_once_when_sdl_axes_are_unavailable() -> None:
     """HID補正に使うSDL軸が無いことを、巡回ごとに洪水にしない。"""
-    from core.pad_source import PadSource
     from loguru import logger
+    from pokecon.domain.pad_source import PadSource
 
     class _NoAxes(_SdlAxesOnly):
         def read_axes(self, index: int, *, name_hint: str = ""):
@@ -973,7 +973,7 @@ def test_pad_source_hid_open_does_not_block_read() -> None:
     """HID openのhandshake待ちで8msの読み取りを止めない。"""
     import time
 
-    from core.pad_source import PadSource
+    from pokecon.domain.pad_source import PadSource
 
     class _SlowHid:
         def __init__(self) -> None:
@@ -1008,7 +1008,7 @@ def test_pad_source_hid_open_does_not_block_read() -> None:
 
 def test_pad_source_hid_only_does_not_touch_sdl() -> None:
     """通常はHID有線に固定し、SDLを初期化・読み取りしない。"""
-    from core.pad_source import PadSource
+    from pokecon.domain.pad_source import PadSource
 
     sdl = _CountingPad(connected=True)
     hid = _FakeHidPad()
@@ -1024,7 +1024,7 @@ def test_pad_source_hid_only_does_not_touch_sdl() -> None:
 
 def test_pad_source_hid_disabled_uses_sdl() -> None:
     """HidHide未設定時はHIDを開かず、SDL/XInputだけを使う。"""
-    from core.pad_source import PadSource
+    from pokecon.domain.pad_source import PadSource
 
     sdl = _CountingPad(connected=True)
     hid = _FakeHidPad()

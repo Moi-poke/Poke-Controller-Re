@@ -6,7 +6,7 @@ import time
 
 
 def test_imu_frame_build_len12():
-    from core.transport.bcon_protocol import T_IMU_SAMPLE, frame_build
+    from pokecon.domain.transport.bcon_protocol import T_IMU_SAMPLE, frame_build
 
     assert T_IMU_SAMPLE == 0x04
     payload = struct.pack("<6h", 0, 0, 4096, 0, 0, 0)
@@ -19,13 +19,17 @@ def test_imu_frame_build_len12():
 
 
 def test_imu_expected_len():
-    from core.transport.bcon_protocol import T_IMU_SAMPLE, proto_expected_len
+    from pokecon.domain.transport.bcon_protocol import T_IMU_SAMPLE, proto_expected_len
 
     assert proto_expected_len(T_IMU_SAMPLE) == 12
 
 
 def test_imu_parser_accepts_len12():
-    from core.transport.bcon_protocol import T_IMU_SAMPLE, BconParser, frame_build
+    from pokecon.domain.transport.bcon_protocol import (
+        T_IMU_SAMPLE,
+        BconParser,
+        frame_build,
+    )
 
     payload = struct.pack("<6h", 1, -2, 4096, 100, -100, 0)
     frame = frame_build(T_IMU_SAMPLE, payload, 0x09)
@@ -35,7 +39,11 @@ def test_imu_parser_accepts_len12():
 
 
 def test_imu_parser_rejects_bad_len():
-    from core.transport.bcon_protocol import T_IMU_SAMPLE, BconParser, frame_build
+    from pokecon.domain.transport.bcon_protocol import (
+        T_IMU_SAMPLE,
+        BconParser,
+        frame_build,
+    )
 
     frame = frame_build(T_IMU_SAMPLE, b"\x00" * 8, 0x0A)
     parser = BconParser()
@@ -55,7 +63,7 @@ class _FakeSerial:
 
 
 def _open_transport():
-    import core.transport.bcon as bcon_mod
+    import pokecon.domain.transport.bcon as bcon_mod
 
     made = bcon_mod.BconTransport()
     made.ser = _FakeSerial()
@@ -67,7 +75,7 @@ def _open_transport():
 def test_send_imu_writes_one_frame():
     import struct
 
-    from core.transport.bcon_protocol import T_IMU_SAMPLE
+    from pokecon.domain.transport.bcon_protocol import T_IMU_SAMPLE
 
     made = _open_transport()
     try:
@@ -98,7 +106,7 @@ def test_send_imu_saturates_i16():
 
 
 def test_send_imu_closed_returns_false():
-    import core.transport.bcon as bcon_mod
+    import pokecon.domain.transport.bcon as bcon_mod
 
     made = bcon_mod.BconTransport()
     assert made.send_imu(0, 0, 4096, 0, 0, 0) is False
@@ -107,7 +115,7 @@ def test_send_imu_closed_returns_false():
 def test_imu_loop_sends_periodic():
     made = _open_transport()
     try:
-        from core.imu_wave import StaticRest
+        from pokecon.domain.imu_wave import StaticRest
 
         assert made.start_imu_loop(StaticRest(), interval_s=0.005) is True
         assert made.imu_loop_running() is True
@@ -145,7 +153,7 @@ def test_imu_loop_restart_after_stuck_stop_uses_new_source():
     """停止joinが0.5秒で諦めた直後の開始でも、新しいsourceで送出する。"""
     import struct
 
-    from core.transport.bcon_protocol import T_IMU_SAMPLE
+    from pokecon.domain.transport.bcon_protocol import T_IMU_SAMPLE
 
     made = _open_transport()
     release = threading.Event()
@@ -187,7 +195,7 @@ def test_imu_loop_restart_after_stuck_stop_uses_new_source():
 
 
 def test_imu_wave_sine_static():
-    from core.imu_wave import SineWave, StaticRest, StepWave
+    from pokecon.domain.imu_wave import SineWave, StaticRest, StepWave
 
     rest = StaticRest()
     assert rest() == (0, 0, 4096, 0, 0, 0)
@@ -228,7 +236,7 @@ def test_imu_loop_replace_switches_source():
     """replace=True は動いているloopのsourceを差し替える。"""
     import struct
 
-    from core.transport.bcon_protocol import T_IMU_SAMPLE
+    from pokecon.domain.transport.bcon_protocol import T_IMU_SAMPLE
 
     made = _open_transport()
     try:

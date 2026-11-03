@@ -99,8 +99,8 @@ class _FakeSetup:
 
 def _make_app(monkeypatch: pytest.MonkeyPatch, transport: str) -> Any:
     """Tk を作らず BconPanelMixin の殻だけ用意する。"""
-    import ui.bcon_panel as bcon_panel
-    from ui.bcon_panel import BconPanelMixin
+    import pokecon.ui.bcon_panel as bcon_panel
+    from pokecon.ui.bcon_panel import BconPanelMixin
 
     _FakeSetup.made = []
     monkeypatch.setattr(bcon_panel, "BconSetup", _FakeSetup)
@@ -138,8 +138,8 @@ def test_Given_通信方式名_When_能力を引く_Then_bcon系だけがBCON_ST
     name: str, expected: bool
 ) -> None:
     # Given/When: 登録簿から能力を引く（名前の直書きで判定しない）
-    from core.transport import transport_capability
-    from core.transport.base import BCON_STATE
+    from pokecon.domain.transport import transport_capability
+    from pokecon.domain.transport.base import BCON_STATE
 
     # Then
     assert (transport_capability(name) == BCON_STATE) is expected
@@ -149,7 +149,7 @@ def test_Given_未知の通信方式名_When_能力を引く_Then_画面へ何�
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     # Given: 画面更新のたびに呼ぶ判定なので、警告の print を出してはいけない
-    from core.transport import transport_capability
+    from pokecon.domain.transport import transport_capability
 
     # When
     transport_capability("no-such-transport")
@@ -159,7 +159,7 @@ def test_Given_未知の通信方式名_When_能力を引く_Then_画面へ何�
 
 
 def test_Given_サービス_When_bcon方式かを問う_Then登録簿の能力で答える() -> None:
-    from services.serial_service import SerialService
+    from pokecon.runtime.serial_service import SerialService
 
     assert SerialService.uses_bcon("switch-bcon") is True
     assert SerialService.uses_bcon("switch-bcon-proc") is True
@@ -265,7 +265,7 @@ def test_Given_作成が失敗_When_タブを更新_Then_タブを出さず例�
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # Given: 公開操作は例外を外へ出さない（規約）
-    import ui.bcon_panel as bcon_panel
+    import pokecon.ui.bcon_panel as bcon_panel
 
     app = _make_app(monkeypatch, "switch-bcon")
 

@@ -85,7 +85,7 @@ def _shape_calls(overlay: Any) -> list[tuple[str, int, int, int, int]]:
 
 def _composed_api(overlay: Any) -> Any:
     """A ``RecordingGdiApi`` that has composed ``overlay`` once, at 1280x720."""
-    from core import gdi_surface
+    from pokecon.domain import gdi_surface
     from test_gdi_surface_contract import RecordingGdiApi
 
     api = RecordingGdiApi()
@@ -477,7 +477,7 @@ def _badge_of(bare: Any) -> Any:
 
 def test_the_default_overlay_carries_a_badge_that_draws_nothing() -> None:
     # Given: a bare area nobody has reported a state for.
-    from core import preview_renderer
+    from pokecon.domain import preview_renderer
 
     bare = bare_capture_area()
 
@@ -591,7 +591,7 @@ def test_clearing_a_visible_badge_puts_the_all_default_state_back() -> None:
 
     # Then: the badge is the all-default one again, i.e. the overlay is equal to
     # a freshly constructed OverlayState rather than a half-cleared state.
-    from core import preview_renderer
+    from pokecon.domain import preview_renderer
 
     badge = _badge_of(bare)
     assert badge == preview_renderer.BadgeState()

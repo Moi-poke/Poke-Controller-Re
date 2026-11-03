@@ -27,7 +27,10 @@ PythonCommandBase.py から対話部を切り出したもの。
 from __future__ import annotations
 
 import base64
+import os
 import queue
+import subprocess
+import sys
 import threading
 import tkinter as tk
 import tkinter.ttk as ttk
@@ -35,9 +38,9 @@ import traceback
 from collections.abc import Callable
 from typing import Any, cast
 
-from core import dialog_gallery
-from core.recovery import RecoveryAdvice
 from loguru import logger
+from pokecon.domain import dialog_gallery
+from pokecon.domain.recovery import RecoveryAdvice
 
 # 作業側→GUI側の委譲待ち行列。作業スレッドはTkを触らず積むだけにし、
 # GUI側がafterで取り出して走らせる（LogPane/WakeSetup式）。root.afterを
@@ -232,8 +235,16 @@ class DialogMixin:
             except Exception:
                 box["error"] = traceback.format_exc()
             finally:
+                # 生成の途中で失敗すると、空の Toplevel が画面に残る
+                # （mode0 の重複ラベルなど）。成否によらず片付ける。
+                top = holder.pop("top", None)
+                if top is not None:
+                    try:
+                        if bool(top.winfo_exists()):
+                            top.destroy()
+                    except Exception:
+                        logger.debug("対話の後始末で例外を握りました")
                 self.message_dialogue = None
-                holder.pop("top", None)
                 done.set()
 
         def closeOnGui() -> None:
@@ -411,30 +422,34 @@ class DialogMixin:
 
                 frame = ttk.Frame(top)
                 frame.pack(fill="both", expand=True, padx=14, pady=12)
-                ttk.Label(
+
+                def copy_report() -> None:
+                    try:
+                        _copy_to_clipboard(top, advice.copy_text)
+                        panel["copy_button"].configure(text="コピーしました")
+                        top.after(
+                            1500,
+                            lambda: panel["copy_button"].configure(
+                                text="エラー内容をコピー"
+                            ),
+                        )
+                    except Exception:
+                        logger.warning("診断テキストをコピーできませんでした")
+
+                def open_folder() -> None:
+                    if not _open_folder(advice.open_path):
+                        logger.warning(
+                            f"フォルダを開けませんでした: {advice.open_path}"
+                        )
+
+                panel = build_recovery_panel(
                     frame,
-                    text=advice.title,
-                    font=("", 11, "bold"),
-                    anchor="w",
-                    justify="left",
-                ).pack(fill="x")
-                body = advice.body()
-                if body:
-                    ttk.Label(
-                        frame,
-                        text=body,
-                        anchor="w",
-                        justify="left",
-                        wraplength=560,
-                    ).pack(fill="x", pady=(6, 12))
-                buttons = ttk.Frame(frame)
-                buttons.pack()
-                ttk.Button(
-                    buttons, text=advice.retry_label, command=lambda: close(True)
-                ).pack(side="left", padx=4)
-                ttk.Button(
-                    buttons, text=advice.abort_label, command=lambda: close(False)
-                ).pack(side="left", padx=4)
+                    advice,
+                    on_retry=lambda: close(True),
+                    on_abort=lambda: close(False),
+                    on_copy=copy_report,
+                    on_open=open_folder,
+                )
 
                 top.update_idletasks()
                 try:
@@ -827,6 +842,120 @@ class _IntLimitValue:
         return self._minimum <= number <= self._maximum
 
 
+def _copy_to_clipboard(widget: tk.Misc, text: str) -> None:
+    """診断テキストをクリップボードへ入れる（GUI スレッドから呼ぶ）。"""
+    top = widget.winfo_toplevel()
+    top.clipboard_clear()
+    top.clipboard_append(text)
+    top.update_idletasks()
+
+
+def _open_folder(path: str) -> bool:
+    """OS のファイルマネージャでフォルダを開く。開けたら True。
+
+    失敗しても例外にしない。ダイアログの副ボタンなので、開けない環境
+    （ヘッドレス・権限なし）ではログだけ残して本体の判断を妨げない。
+    """
+    if not path or not os.path.isdir(path):
+        return False
+    try:
+        if sys.platform == "win32":
+            os.startfile(path)  # type: ignore[attr-defined]
+        elif sys.platform == "darwin":
+            subprocess.Popen(["open", path])
+        else:
+            subprocess.Popen(["xdg-open", path])
+        return True
+    except Exception:
+        return False
+
+
+def build_recovery_panel(
+    parent: Any,
+    advice: RecoveryAdvice,
+    *,
+    on_retry: Callable[[], None],
+    on_abort: Callable[[], None],
+    on_copy: Callable[[], None] | None = None,
+    on_open: Callable[[], None] | None = None,
+) -> dict[str, Any]:
+    """回復ダイアログの中身（本文・パス・ボタン）を組む。
+
+    パスは本文に混ぜず、選択できる独立した行（読み取り専用の Entry）に
+    出す。長いパスは折り返せず読めないうえ、利用者がそのままコピーして
+    開発者へ渡したいため。Tk のスレッド制約は呼び出し側の責任。
+    """
+    ttk.Label(
+        parent,
+        text=advice.title,
+        font=("", 11, "bold"),
+        anchor="w",
+        justify="left",
+    ).pack(fill="x")
+    body = advice.body()
+    if body:
+        ttk.Label(
+            parent,
+            text=body,
+            anchor="w",
+            justify="left",
+            wraplength=560,
+        ).pack(fill="x", pady=(6, 10))
+    path_entry: Any = None
+    if advice.path:
+        ttk.Label(parent, text="パス", anchor="w").pack(fill="x")
+        # Entry は折り返さないので、長いパスは右で切れて読めない。
+        # Text を wrap="char" で置き、選択とコピーだけ許す（編集は止める）。
+        path_entry = tk.Text(
+            parent,
+            height=2,
+            wrap="char",
+            font=("TkFixedFont", 9),
+            relief="solid",
+            borderwidth=1,
+            padx=4,
+            pady=2,
+        )
+        path_entry.insert("1.0", advice.path)
+        try:
+            background = ttk.Style().lookup("TFrame", "background") or "#f0f0f0"
+        except Exception:
+            background = "#f0f0f0"
+        path_entry.configure(background=background)
+
+        def _keep_copyable_only(event: Any) -> str | None:
+            if (event.state & 0x4) and event.keysym.lower() in {"a", "c"}:
+                return None
+            return "break"
+
+        path_entry.bind("<Key>", _keep_copyable_only)
+        path_entry.bind("<<Paste>>", lambda _e: "break")
+        path_entry.bind("<<Cut>>", lambda _e: "break")
+        path_entry.pack(fill="x", pady=(2, 10))
+    buttons = ttk.Frame(parent)
+    buttons.pack()
+    ttk.Button(buttons, text=advice.retry_label, command=on_retry).pack(
+        side="left", padx=4
+    )
+    ttk.Button(buttons, text=advice.abort_label, command=on_abort).pack(
+        side="left", padx=4
+    )
+    open_button: Any = None
+    if advice.open_path and on_open is not None:
+        open_button = ttk.Button(buttons, text="フォルダを開く", command=on_open)
+        open_button.pack(side="left", padx=4)
+    copy_button: Any = None
+    if advice.copy_text and on_copy is not None:
+        copy_button = ttk.Button(buttons, text="エラー内容をコピー", command=on_copy)
+        copy_button.pack(side="left", padx=4)
+    return {
+        "buttons": buttons,
+        "path_entry": path_entry,
+        "open_button": open_button,
+        "copy_button": copy_button,
+    }
+
+
 class PokeConDialogue:
     def __init__(
         self, parent: Any, title: str, message: int | str | list, mode: int = 0
@@ -941,7 +1070,42 @@ class PokeConDialogue:
             label.grid(column=0, row=i, sticky="nsew", padx=3, pady=3)
             entry.grid(column=1, row=i, sticky="nsew", padx=3, pady=3)
 
+    #: mode=1 で受け付ける widget 種別と、必要な要素数（先頭の種別名を含む）。
+    _WIDGET_SPECS = {
+        "check": 3,
+        "entry": 3,
+        "colorentry": 3,
+        "combo": 4,
+        "radio": 4,
+        "spin": 4,
+        "scale": 6,
+        "choice": 3,
+        "int_limit": 3,
+    }
+
+    @classmethod
+    def _checkWidgetSpecs(cls, dialogue_list: list) -> None:
+        """widget の設定リストを検証する。誤りは作る前に断る。
+
+        未知の種別は従来どちらにも当たらず、その欄だけ黙って消えていた。
+        設定の数と戻り値の数が食い違い、利用者は「入力したのに空」と
+        なる。要素不足も同じ結果になるため、ここで名前を挙げて止める。
+        """
+        for index, spec in enumerate(dialogue_list):
+            if not isinstance(spec, (list, tuple)) or not spec:
+                raise ValueError(f"{index + 1}番目の widget 設定が空です: {spec!r}")
+            kind = str(spec[0]).casefold()
+            need = cls._WIDGET_SPECS.get(kind)
+            if need is None:
+                allowed = " / ".join(sorted(cls._WIDGET_SPECS))
+                raise ValueError(
+                    f"未知の widget 種別です: {spec[0]!r}（使えるのは {allowed}）"
+                )
+            if len(spec) < need:
+                raise ValueError(f"{kind} には {need} 要素が必要です: {spec!r}")
+
     def mode1(self, dialogue_list: list) -> None:
+        self._checkWidgetSpecs(dialogue_list)
         n = len(dialogue_list)
         frame: list[Any] = []
 

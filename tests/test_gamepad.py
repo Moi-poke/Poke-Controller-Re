@@ -15,8 +15,8 @@ from __future__ import annotations
 import threading
 
 from Commands.Keys import Button
-from Gamepad import SOURCE, SwitchGamepadController, hat_value_for
-from core.xinput import PadState
+from pokecon.domain.xinput import PadState
+from pokecon.runtime.Gamepad import SOURCE, SwitchGamepadController, hat_value_for
 
 
 class FakeSender:
@@ -171,7 +171,7 @@ def test_stick_reports_changes_only() -> None:
 
 def test_same_packet_skips_declare() -> None:
     """同じパケット番号なら申告の計算を省く（変化の取りこぼしは無い）。"""
-    from core.xinput import PadState as RealPadState
+    from pokecon.domain.xinput import PadState as RealPadState
 
     sender = FakeSender()
 
@@ -314,7 +314,7 @@ def test_requires_sender() -> None:
 
 
 def test_service_gamepad_lifecycle() -> None:
-    from services.serial_service import SerialService
+    from pokecon.runtime.serial_service import SerialService
 
     service = SerialService(
         notify_user=lambda _m: None, base_dir=".", input_log_emit=lambda _l: None
@@ -350,7 +350,7 @@ def test_service_gamepad_lifecycle() -> None:
 
 
 def test_gamepad_is_human_source() -> None:
-    from core.serial.arbitration import Arbiter
+    from pokecon.domain.serial.arbitration import Arbiter
 
     assert Arbiter.is_human_source("gamepad") is True
     assert Arbiter.is_human_source("GAMEPAD") is True

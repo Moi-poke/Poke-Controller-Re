@@ -9,11 +9,11 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-from BconSetup import BconSetup
-from core.connection_state import ConnectionSnapshot
-from core.transport.bcon_baud import baud_label_for_index
-from core.ui_inbox import UiInbox
-from ui.serial_panel import SerialPanelMixin
+from pokecon.domain.connection_state import ConnectionSnapshot
+from pokecon.domain.transport.bcon_baud import baud_label_for_index
+from pokecon.domain.ui_inbox import UiInbox
+from pokecon.ui.BconSetup import BconSetup
+from pokecon.ui.serial_panel import SerialPanelMixin
 
 
 class Value:
@@ -258,7 +258,7 @@ def test_switch_details_live_in_the_bcon_tab_and_the_serial_tab_keeps_a_summary(
     detail = detail_view(service)
     host._apply_connection_snapshot(service.snapshot)
     detail._apply_snapshot(service.snapshot)
-    from BconSetup import PLAYER_LAMP_ON_COLOR
+    from pokecon.ui.BconSetup import PLAYER_LAMP_ON_COLOR
 
     assert set(detail._lamp_canvas.colors.values()) == {PLAYER_LAMP_ON_COLOR}
     assert "L=255 R=255" in detail._vib_label["text"]
@@ -278,7 +278,7 @@ def test_switch_details_live_in_the_bcon_tab_and_the_serial_tab_keeps_a_summary(
 def test_status_freshness_is_display_only(
     monkeypatch: pytest.MonkeyPatch, flags: int, mode: str
 ) -> None:
-    monkeypatch.setattr("ui.serial_panel.time.monotonic", lambda: 100.0)
+    monkeypatch.setattr("pokecon.ui.serial_panel.time.monotonic", lambda: 100.0)
     service = SnapshotService(
         ready_snapshot(status=(flags, 7, 0, 0, 0), status_received_at=99.0)
     )
@@ -288,7 +288,7 @@ def test_status_freshness_is_display_only(
     detail._apply_snapshot(service.snapshot)
     fresh = detail._summary["text"]
     assert "STATUS:" in fresh
-    monkeypatch.setattr("ui.serial_panel.time.monotonic", lambda: 104.0)
+    monkeypatch.setattr("pokecon.ui.serial_panel.time.monotonic", lambda: 104.0)
     host._render_connection_summary()
     detail._render_summary()
     assert detail._summary["text"] != fresh
@@ -344,8 +344,12 @@ def test_refresh_never_replaces_missing_saved_port_or_opens_another(
 ) -> None:
     service = SnapshotService(ConnectionSnapshot())
     host = serial_view(service)
-    monkeypatch.setattr("ui.serial_panel.WindowUtils.listComPorts", lambda: ports)
-    monkeypatch.setattr("ui.serial_panel.fit_combo_width", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        "pokecon.ui.serial_panel.WindowUtils.listComPorts", lambda: ports
+    )
+    monkeypatch.setattr(
+        "pokecon.ui.serial_panel.fit_combo_width", lambda *args, **kwargs: None
+    )
     host.refreshComPorts()
     host.activateSerial()
     assert host.settings.com_port_name.get() == "test-port"
@@ -386,10 +390,10 @@ def test_worker_snapshot_delivery_waits_for_gui_drain_and_drops_after_close() ->
 def test_transport_switch_reopens_using_destination_saved_baud(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from core import Sender
-    from core.transport.bcon_protocol import T_HELLO, T_HELLO_ACK
-    from core.transport.text_serial import TextSerialTransport
-    from services.serial_service import SerialService
+    from pokecon.domain.serial import sender as Sender
+    from pokecon.domain.transport.bcon_protocol import T_HELLO, T_HELLO_ACK
+    from pokecon.domain.transport.text_serial import TextSerialTransport
+    from pokecon.runtime.serial_service import SerialService
     from test_bcon_connection_lifecycle import ControlledWire
 
     class ReplyWire(ControlledWire):
@@ -406,7 +410,7 @@ def test_transport_switch_reopens_using_destination_saved_baud(
         opened_rates.append(rate)
         return ReplyWire(rate)
 
-    monkeypatch.setattr("core.transport.bcon.serial.Serial", open_wire)
+    monkeypatch.setattr("pokecon.domain.transport.bcon.serial.Serial", open_wire)
     service = SerialService(
         notify_user=lambda text: None, base_dir=".", input_log_emit=None
     )

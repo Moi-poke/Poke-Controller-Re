@@ -8,8 +8,8 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from core import inputs
-from ui import input_dialog
+from pokecon.domain import inputs
+from pokecon.ui import input_dialog
 
 pytest.importorskip("tkinter")
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from core.serial.live_scheduler import LiveScheduler
+from pokecon.domain.serial.live_scheduler import LiveScheduler
 
 
 def _snap(rev: int) -> dict[str, Any]:
@@ -31,8 +31,8 @@ def test_clear_keeps_the_current_state_so_the_line_is_not_silent() -> None:
 
 def test_start_worker_pushes_the_initial_state_under_the_posture_lock() -> None:
     """Given: live 対応の送信器 / When: worker を起こす / Then: 初期姿勢の投入が錠の中であること。"""
-    from core.serial.sender import Sender
     from fakes import FakeTransport
+    from pokecon.domain.serial.sender import Sender
 
     sender = Sender(is_show_serial=False, transport=FakeTransport())
     # live 対応の判定だけを差し替える（worker は起こすが送り先は偽物）。

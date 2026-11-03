@@ -25,7 +25,7 @@ class _StubCapture:
 
 
 def _service_with_stub() -> tuple[Any, _StubCapture]:
-    from services.audio_service import AudioService
+    from pokecon.runtime.audio_service import AudioService
 
     service = AudioService(notify_user=lambda _msg: None)
     stub = _StubCapture()
@@ -51,7 +51,7 @@ def test_set_volume_clamps_range() -> None:
 
 def test_format_volume_label_db() -> None:
     """%表示にdB換算を添える。線形80%は約-1.9dB。」"""
-    from ui.audio_panel import format_volume_label
+    from pokecon.ui.audio_panel import format_volume_label
 
     assert format_volume_label(1.0) == "100% (0.0 dB)"
     assert format_volume_label(0.8) == "80% (-1.9 dB)"

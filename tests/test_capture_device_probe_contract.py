@@ -40,7 +40,7 @@ def _probe_module() -> Any:
 
 
 def _readback_type() -> Any:
-    module: Any = importlib.import_module("core.Camera")
+    module: Any = importlib.import_module("pokecon.domain.Camera")
     return module.CaptureDeviceReadback
 
 
@@ -368,7 +368,7 @@ def test_the_artifact_pins_camera_py_so_a_reading_can_name_its_revision() -> Non
     # request is the variable under test: a driver honouring MJPG says nothing if
     # the run never asked for MJPG.
     pins = {row["path"]: row for row in artifact["source_pins"]}
-    camera = pins["SerialController/core/Camera.py"]
+    camera = pins["SerialController/pokecon/domain/Camera.py"]
     assert camera["bytes"] > 0
     assert len(camera["sha256"]) == 64
     assert artifact["schema_version"] == module.SCHEMA_VERSION

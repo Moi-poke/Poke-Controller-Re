@@ -11,7 +11,7 @@
 入口・参照の検査は次で再実行できる。
 
 ```text
-uv run --frozen python tools/check_docs.py
+uv run --frozen python tools/gates/check_docs.py
 uv run --frozen pytest tests/test_check_docs.py -q
 ```
 
@@ -151,7 +151,7 @@ def gui_loop():
 | 症状 | 見る場所 |
 |---|---|
 | editor が真っ白 | ブラウザ console、`/editor.html` の 200、`assets/blockly/*.js` の読込 |
-| 保存が 403 | Host / Origin / Content-Type（`ui/blockly_editor.py` の `_refuse_foreign`） |
+| 保存が 403 | Host / Origin / Content-Type（`pokecon/ui/blockly_editor.py` の `_refuse_foreign`） |
 | 保存は通るが一覧に出ない | `Commands/PythonCommands` の `.py`、`CommandLoader.reload` |
 | 試し実行が始まらない | `/run` の応答、`_RUN_HOST`、本体が実行中でないか |
 | 画像が一致しない | 実画面の解像度、`CROP`、`THRESHOLD`、`Template/` の画像 |

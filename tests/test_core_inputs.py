@@ -7,7 +7,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from core import inputs
+from pokecon.domain import inputs
 
 
 def _touch(path: Path) -> None:

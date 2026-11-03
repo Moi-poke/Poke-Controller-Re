@@ -7,15 +7,15 @@ PC に接続したコントローラ（XInput 系）の入力が、Switch 側の
 
 from __future__ import annotations
 
-from core import gamepad_map
-from core.gamepad_map import (
+from pokecon.domain import gamepad_map
+from pokecon.domain.gamepad_map import (
     DEADZONE_MAX,
     MappedInput,
     diff_mapped,
     map_state,
     stick_to_xy,
 )
-from core.xinput import (
+from pokecon.domain.xinput import (
     BTN_A,
     BTN_DPAD_DOWN,
     BTN_DPAD_LEFT,
@@ -52,7 +52,7 @@ def test_sdl_deadzone_is_zero() -> None:
 
 def test_gamepad_deadzone_clamped() -> None:
     """範囲外の遊びは 0〜DEADZONE_MAX（50%）に丸める。"""
-    from Gamepad import SwitchGamepadController
+    from pokecon.runtime.Gamepad import SwitchGamepadController
     from test_gamepad import FakeSender
 
     assert SwitchGamepadController(FakeSender(), deadzone=-5).deadzone == 0  # type: ignore[arg-type]
@@ -140,7 +140,7 @@ def test_reader_out_of_range_is_disconnected() -> None:
 
 def test_reader_without_dll_is_disconnected(monkeypatch) -> None:
     monkeypatch.setattr(gamepad_map, "DEADZONE_TRIGGER", 30)
-    import core.xinput as xinput_mod
+    import pokecon.domain.xinput as xinput_mod
 
     monkeypatch.setattr(xinput_mod, "_load_library", lambda: None)
     reader = XInputReader()

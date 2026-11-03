@@ -209,12 +209,12 @@ def test_source_pins_cover_the_camera_the_present_path_reads_through() -> None:
     # path's inputs -- the frame, the sequence and both timestamps -- come from
     # it. A pin list that omits it lets the present path's own input change
     # silently while the artifacts still look identical.
-    assert "SerialController/core/Camera.py" in pins
+    assert "SerialController/pokecon/domain/Camera.py" in pins
 
     # Then: and the files this harness and the area it measures stay pinned.
     for path in (
-        "SerialController/GuiAssets.py",
-        "SerialController/Window.py",
+        "SerialController/pokecon/ui/GuiAssets.py",
+        "SerialController/pokecon/app/Window.py",
         "tests/preview_fps_support.py",
     ):
         assert path in pins, path

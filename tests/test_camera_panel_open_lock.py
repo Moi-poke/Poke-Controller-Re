@@ -16,9 +16,9 @@ import threading
 import time
 from typing import Any
 
+import pokecon.ui.camera_panel as panel_module
 import pytest
-import ui.camera_panel as panel_module
-from ui.camera_panel import CameraPanelMixin
+from pokecon.ui.camera_panel import CameraPanelMixin
 
 # A lock held forever is indistinguishable from a driver that never returns,
 # which is exactly the production failure. The holder is a daemon so a RED run

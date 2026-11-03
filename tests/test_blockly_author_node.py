@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from core import blockly_headless
+from pokecon.domain import blockly_headless
 
 ROOT = Path(__file__).resolve().parent.parent
 BLOCKLY = ROOT / "SerialController" / "assets" / "blockly"

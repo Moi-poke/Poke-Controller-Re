@@ -17,7 +17,7 @@ COLOR_READ_FALLBACK_NOTE = "色の読み取りに失敗しました。000000で�
 
 def test_protocol_knows_color_ids() -> None:
     """bcon純粋層が問合せ2型を知っている（FW錠と一致）。"""
-    from core.transport.bcon_protocol import T_COLOR_GET, T_COLOR_INFO
+    from pokecon.domain.transport.bcon_protocol import T_COLOR_GET, T_COLOR_INFO
 
     assert T_COLOR_GET == FW_T_COLOR_GET
     assert T_COLOR_INFO == FW_T_COLOR_INFO
@@ -27,7 +27,7 @@ def test_protocol_knows_color_ids() -> None:
 
 def test_proto_expected_len_color() -> None:
     """GETはLEN0・INFOはLEN12（FW錠どおり）。"""
-    from core.transport.bcon_protocol import (
+    from pokecon.domain.transport.bcon_protocol import (
         T_COLOR_GET,
         T_COLOR_INFO,
         proto_expected_len,
@@ -39,7 +39,7 @@ def test_proto_expected_len_color() -> None:
 
 def test_frame_build_roundtrip_color() -> None:
     """GET空・INFO12Bが組立→分解で往復する。"""
-    from core.transport.bcon_protocol import (
+    from pokecon.domain.transport.bcon_protocol import (
         T_COLOR_GET,
         T_COLOR_INFO,
         BconParser,
@@ -59,7 +59,7 @@ def test_request_color_returns_12b_or_none_on_timeout() -> None:
 
     助けはまだ無いためこのimportでREDになる（実装後にGREEN化）。
     """
-    from BconSetup import request_color
+    from pokecon.ui.BconSetup import request_color
 
     class FakeOk:
         def request_color(self, timeout: float = 1.0) -> bytes | None:
@@ -80,7 +80,7 @@ def test_prefill_falls_back_to_zeros_with_note_on_failure() -> None:
 
     口はまだ無いためこのimportでREDになる（実装後にGREEN化）。
     """
-    from BconSetup import prefill_color_entries
+    from pokecon.ui.BconSetup import prefill_color_entries
 
     class StubVar:
         def __init__(self, value: str = "") -> None:
@@ -109,7 +109,7 @@ def test_preview_canvas_maps_entry_to_fill_on_input() -> None:
 
     口はまだ無いためこのimportでREDになる（実装後にGREEN化）。
     """
-    from BconSetup import update_color_preview
+    from pokecon.ui.BconSetup import update_color_preview
 
     class StubVar:
         def __init__(self, value: str) -> None:

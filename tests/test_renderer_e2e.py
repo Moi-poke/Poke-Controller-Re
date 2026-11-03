@@ -186,10 +186,10 @@ REQUIRED_ARTIFACTS: Final[tuple[str, ...]] = (
 
 #: The production files whose revision this measurement belongs to.
 PINNED_SOURCES: Final[tuple[str, ...]] = (
-    "SerialController/GuiAssets.py",
-    "SerialController/ui/photo_surface.py",
-    "SerialController/ui/preview_clock.py",
-    "SerialController/core/gdi_surface.py",
+    "SerialController/pokecon/ui/GuiAssets.py",
+    "SerialController/pokecon/ui/photo_surface.py",
+    "SerialController/pokecon/ui/preview_clock.py",
+    "SerialController/pokecon/domain/gdi_surface.py",
 )
 
 
@@ -301,8 +301,8 @@ def _install_counters(probe: _Probe, monkeypatch: pytest.MonkeyPatch) -> dict[st
     The guard probe also has to happen here: once ``resize`` is replaced, the
     class no longer carries the source this file is checking.
     """
-    from core import gdi_surface
-    from ui import photo_surface
+    from pokecon.domain import gdi_surface
+    from pokecon.ui import photo_surface
 
     backends = {
         "GdiSurface": gdi_surface.GdiSurface,
@@ -755,7 +755,7 @@ def _run_non_vacuity_control(
 
 def _capture_size() -> tuple[int, int]:
     """The frame size both backends judge incoming frames against."""
-    from core.Camera import CAPTURE_SIZE
+    from pokecon.domain.Camera import CAPTURE_SIZE
 
     return (int(CAPTURE_SIZE[0]), int(CAPTURE_SIZE[1]))
 
@@ -774,7 +774,7 @@ def _run_renderer(
     """
     import tkinter as tk
 
-    from GuiAssets import CaptureArea
+    from pokecon.ui.GuiAssets import CaptureArea
 
     capture_width, capture_height = _capture_size()
     # The show size the area is built at. Deliberately smaller than the window:

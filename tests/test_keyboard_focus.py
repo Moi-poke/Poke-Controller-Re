@@ -10,7 +10,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from Keyboard import SwitchKeyboardController
+from pokecon.runtime.Keyboard import SwitchKeyboardController
 
 
 class FakeKeyPress:
@@ -97,7 +97,7 @@ def test_direction_blocked_when_inactive(tmp_path: Path) -> None:
 
 def test_service_passes_predicate_to_keyboard(tmp_path: Path) -> None:
     """SerialService が受けた述語を Keyboard 実体へ渡すこと。"""
-    from services.serial_service import SerialService
+    from pokecon.runtime.serial_service import SerialService
 
     flag = {"active": False}
     notices: list[str] = []

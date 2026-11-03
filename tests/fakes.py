@@ -6,14 +6,14 @@ collect 対象にしない（test_ で始まらない）ため、ここには
 
 from typing import Any
 
-from core import Transport
+from pokecon.domain.transport import LEGACY_ROW, Transport
 
 
-class FakeTransport(Transport.Transport):
+class FakeTransport(Transport):
     """線の偽物。書かれた行を溜めるだけ。開閉は常に成功扱い。"""
 
     name = "fake"
-    capability = Transport.LEGACY_ROW
+    capability = LEGACY_ROW
 
     def __init__(self) -> None:
         self.rows: list[str] = []
@@ -52,7 +52,7 @@ class FakeTransport(Transport.Transport):
             self._listeners.remove(func)
 
 
-class NoSerTransport(Transport.Transport):
+class NoSerTransport(Transport):
     """ser を持たない方式（HID/BLE/TCP 等）の振る舞いの確認用。"""
 
     name = "noser"

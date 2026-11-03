@@ -1,10 +1,10 @@
 # ログ欄
 
 メイン画面のログ欄の形と、各部の役割。実装は
-`SerialController/ui/log_panel.py`（欄どうしの連携とポンプ）、
-`SerialController/ui/log_view.py`（1欄ぶんの表示部品）、
-`SerialController/core/log_model.py`（1行の型と水準の推定、tkinter なし）、
-`SerialController/LogPane.py`（キューと標準出力の付け替え）。
+`SerialController/pokecon/ui/log_panel.py`（欄どうしの連携とポンプ）、
+`SerialController/pokecon/ui/log_view.py`（1欄ぶんの表示部品）、
+`SerialController/pokecon/domain/log_model.py`（1行の型と水準の推定、tkinter なし）、
+`SerialController/pokecon/ui/LogPane.py`（キューと標準出力の付け替え）。
 
 ## 形
 

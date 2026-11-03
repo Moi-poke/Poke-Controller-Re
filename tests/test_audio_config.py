@@ -2,7 +2,7 @@
 
 import configparser
 
-import config
+from pokecon.domain import config
 
 
 def make_parser() -> configparser.ConfigParser:

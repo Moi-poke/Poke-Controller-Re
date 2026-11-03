@@ -5,7 +5,7 @@ from __future__ import annotations
 import threading
 from typing import Any
 
-from core.ui_inbox import UiInbox, post_latest_to_gui, post_to_gui
+from pokecon.domain.ui_inbox import UiInbox, post_latest_to_gui, post_to_gui
 
 
 def test_post_delivers_every_item_in_order() -> None:

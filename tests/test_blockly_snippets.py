@@ -84,7 +84,7 @@ def test_snippets_category_holds_eight_or_more_items() -> None:
 @NEEDS_NODE
 def test_each_snippet_generates_valid_python() -> None:
     """各項目をプログラムへつなぐと検査を通りcompileできること。"""
-    from core import blockly_validate
+    from pokecon.domain import blockly_validate
 
     # Given: 先頭分類の各項目をプログラムの中で生成する
     res: dict[str, Any] = run_blockly(

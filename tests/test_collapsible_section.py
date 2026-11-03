@@ -11,7 +11,7 @@ import tkinter.ttk as ttk
 from collections.abc import Iterator
 
 import pytest
-from ui.collapsible import CollapsibleSection
+from pokecon.ui.collapsible import CollapsibleSection
 
 
 @pytest.fixture

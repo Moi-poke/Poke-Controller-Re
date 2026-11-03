@@ -5,9 +5,9 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
-import Settings
-import config
 import pytest
+from pokecon.app import Settings
+from pokecon.domain import config
 
 BOOL_KEYS = [
     ("General Setting", "is_show_realtime"),

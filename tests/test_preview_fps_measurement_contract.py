@@ -15,8 +15,8 @@ from typing import Any, Protocol, cast
 import numpy as np
 import preview_fps_support as support
 import pytest
-from core import Camera as CamMod
-from core.Camera import Camera, LatestFrame
+from pokecon.domain import Camera as CamMod
+from pokecon.domain.Camera import Camera, LatestFrame
 
 _ONE_SECOND_NS = 1_000_000_000
 _START_NS = _ONE_SECOND_NS
@@ -930,13 +930,13 @@ def test_measurement_overshoot_limit_uses_two_periods_or_fifty_ms(
 
 def test_source_pins_include_production_and_evidence_files() -> None:
     assert support.SOURCE_PIN_PATHS == (
-        "SerialController/ui/preview_clock.py",
-        "SerialController/GuiAssets.py",
-        "SerialController/Window.py",
-        "SerialController/core/Camera.py",
-        "SerialController/ui/camera_panel.py",
-        "SerialController/config.py",
-        "SerialController/WindowUtils.py",
+        "SerialController/pokecon/ui/preview_clock.py",
+        "SerialController/pokecon/ui/GuiAssets.py",
+        "SerialController/pokecon/app/Window.py",
+        "SerialController/pokecon/domain/Camera.py",
+        "SerialController/pokecon/ui/camera_panel.py",
+        "SerialController/pokecon/domain/config.py",
+        "SerialController/pokecon/ui/WindowUtils.py",
         "tests/test_preview_clock.py",
         "tests/preview_fps_support.py",
         "tests/test_preview_fps_e2e.py",

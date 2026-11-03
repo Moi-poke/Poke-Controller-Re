@@ -39,8 +39,7 @@ class _FakeLogPanelHost:
 
 def test_display_text_idle_skips_tcl_but_keeps_stats() -> None:
     """全キュー空ならVar取得等のTclを省き、統計（_log_flush_ms等）は保つ。"""
-    import LogPane
-    from ui import log_panel
+    from pokecon.ui import LogPane, log_panel
 
     # 空キューを用意（本物の空DropOldestQueue）。
     LogPane.text_queue = LogPane.DropOldestQueue(maxsize=100)
@@ -85,7 +84,7 @@ def test_display_text_idle_skips_tcl_but_keeps_stats() -> None:
 
 def test_serial_monitor_idle_skips_status_tcl() -> None:
     """SerialMonitor空キューではstatusのTcl更新を省く（振る舞いは不変）。"""
-    from SerialMonitor import SerialMonitor
+    from pokecon.ui.SerialMonitor import SerialMonitor
 
     mon = SerialMonitor.__new__(SerialMonitor)
     mon._stop = False  # type: ignore[attr-defined]
@@ -98,7 +97,7 @@ def test_serial_monitor_idle_skips_status_tcl() -> None:
     mon._shown = 0  # type: ignore[attr-defined]
     mon._hidden = 0  # type: ignore[attr-defined]
     mon._dropped = 0  # type: ignore[attr-defined]
-    from LogPane import DropOldestQueue as _DQ
+    from pokecon.ui.LogPane import DropOldestQueue as _DQ
 
     mon._queue = _DQ(maxsize=100)  # type: ignore[attr-defined]
 

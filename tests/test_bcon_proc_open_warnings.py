@@ -33,7 +33,7 @@ class _AliveHandle:
 
 def test_spawn_worker_logs_spawn_exception(caplog: Any) -> None:
     """Given: spawnがRuntimeErrorで落ちる / When: _spawn_worker() / Then: WARNINGに例外が残りFalseを返す。"""
-    from core.transport import bcon_proc
+    from pokecon.domain.transport import bcon_proc
 
     def _boom(entry: Any, cfg: dict) -> Any:
         _ = entry, cfg
@@ -41,7 +41,9 @@ def test_spawn_worker_logs_spawn_exception(caplog: Any) -> None:
 
     made = bcon_proc.BconProcTransport(_spawn=_boom)
     try:
-        with caplog.at_level(logging.WARNING, logger="core.transport.bcon_proc"):
+        with caplog.at_level(
+            logging.WARNING, logger="pokecon.domain.transport.bcon_proc"
+        ):
             assert made._spawn_worker() is False
     finally:
         made.close()
@@ -52,7 +54,7 @@ def test_spawn_worker_logs_spawn_exception(caplog: Any) -> None:
 
 def test_open_logs_event_wait_timeout(caplog: Any, monkeypatch: Any) -> None:
     """Given: 応答を返さない子 / When: open() / Then: WARNINGにport/baud/timeoutが残りFalseを返す。"""
-    from core.transport import bcon_proc
+    from pokecon.domain.transport import bcon_proc
 
     monkeypatch.setattr(bcon_proc, "PROC_RPC_MARGIN_S", -9.9)
 
@@ -62,7 +64,9 @@ def test_open_logs_event_wait_timeout(caplog: Any, monkeypatch: Any) -> None:
 
     made = bcon_proc.BconProcTransport(_spawn=_silent)
     try:
-        with caplog.at_level(logging.WARNING, logger="core.transport.bcon_proc"):
+        with caplog.at_level(
+            logging.WARNING, logger="pokecon.domain.transport.bcon_proc"
+        ):
             assert made.open(3, "COM3", 1000000) is False
     finally:
         made.close()
@@ -78,7 +82,7 @@ def test_open_logs_event_wait_timeout(caplog: Any, monkeypatch: Any) -> None:
 
 def test_open_logs_child_result_false(caplog: Any) -> None:
     """Given: 子が結果Falseを返す / When: open() / Then: WARNINGにbox内容が残りFalseを返す。"""
-    from core.transport import bcon_proc
+    from pokecon.domain.transport import bcon_proc
 
     cmd_q: Any = queue.Queue()
     evt_q: Any = queue.Queue()
@@ -106,7 +110,9 @@ def test_open_logs_child_result_false(caplog: Any) -> None:
     helper = threading.Thread(target=_reply_false, daemon=True)
     try:
         helper.start()
-        with caplog.at_level(logging.WARNING, logger="core.transport.bcon_proc"):
+        with caplog.at_level(
+            logging.WARNING, logger="pokecon.domain.transport.bcon_proc"
+        ):
             assert made.open(3, "COM3", 1000000) is False
             assert made.last_open_error() == "USB disconnected"
     finally:

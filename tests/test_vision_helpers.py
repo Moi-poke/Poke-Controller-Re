@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from core.CommandVision import VisionMixin
+from pokecon.domain.CommandVision import VisionMixin
 
 
 class Probe(VisionMixin):

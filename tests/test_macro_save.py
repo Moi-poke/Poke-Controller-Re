@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from services import macro_save
+from pokecon.runtime import macro_save
 
 
 def good_code() -> str:

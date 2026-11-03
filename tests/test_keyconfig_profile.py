@@ -6,8 +6,8 @@ from __future__ import annotations
 
 from typing import Any
 
-import Menubar
-from Settings import GuiSettings
+from pokecon.app.Settings import GuiSettings
+from pokecon.ui import Menubar
 
 
 class _FakeRoot:

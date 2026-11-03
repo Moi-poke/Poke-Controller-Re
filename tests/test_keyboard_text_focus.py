@@ -12,8 +12,8 @@ import tkinter as tk
 import tkinter.ttk as ttk
 from types import SimpleNamespace
 
-from core.connection_state import ConnectionSnapshot
-from ui.serial_panel import SerialPanelMixin, _is_text_input
+from pokecon.domain.connection_state import ConnectionSnapshot
+from pokecon.ui.serial_panel import SerialPanelMixin, _is_text_input
 
 
 def _host(root: tk.Misc) -> SimpleNamespace:

@@ -6,8 +6,8 @@ import json
 import zipfile
 from pathlib import Path
 
-from core import pack_zip
-from services import script_pack
+from pokecon.domain import pack_zip
+from pokecon.runtime import script_pack
 
 ENTRY_PY = (
     "from Commands.Keys import Button\n"

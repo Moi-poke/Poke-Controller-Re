@@ -13,8 +13,8 @@ import datetime
 import math
 
 from blockly_node import NEEDS_NODE
-from core import InputLog
-from services import blockly_record as br
+from pokecon.domain import InputLog
+from pokecon.runtime import blockly_record as br
 
 pytestmark = NEEDS_NODE
 
@@ -110,10 +110,10 @@ def test_mid_clip_release_returns_to_neutral() -> None:
     """Given: 途中で離して置くスティック / When: 変換→再生する / Then: 離した後は中立に戻り最後まで残らないこと。"""
     import threading
 
-    from core import Sender
-    from core.CommandOperate import OperateMixin
-    from core.Keys import KeyPress, Stick
     from fakes import FakeTransport
+    from pokecon.domain.CommandOperate import OperateMixin
+    from pokecon.domain.Keys import KeyPress, Stick
+    from pokecon.domain.serial import sender as Sender
 
     class _Host(OperateMixin):
         """再生の台。待ちは実時間で回す。"""
@@ -199,9 +199,9 @@ def test_recorder_stop_returns_motion_when_stick_present() -> None:
     """Given: 実線に記録 / When: スティックを動かして止める / Then: motion 材料が返ること。"""
     import time
 
-    from core import Sender
-    from core.Keys import Button, Direction, KeyPress
     from fakes import FakeTransport
+    from pokecon.domain.Keys import Button, Direction, KeyPress
+    from pokecon.domain.serial import sender as Sender
 
     transport = FakeTransport()
     sender = Sender.Sender(is_show_serial=False, transport=transport)
@@ -312,10 +312,10 @@ def test_motion_playback_with_hold_keeps_hat() -> None:
     """Given: 十字キーの押しっぱなし＋スティック区間の再生 / When: 区間の前後で hold/holdEnd を併用する / Then: 途中の解放で Hat が落ちず最後に戻ること。"""
     import threading
 
-    from core import Sender
-    from core.CommandOperate import OperateMixin
-    from core.Keys import Button, Hat, KeyPress, Stick
     from fakes import FakeTransport
+    from pokecon.domain.CommandOperate import OperateMixin
+    from pokecon.domain.Keys import Button, Hat, KeyPress, Stick
+    from pokecon.domain.serial import sender as Sender
 
     class _LiveHost(OperateMixin):
         """再生の台。待ちは実時間で回す。"""
@@ -579,9 +579,9 @@ def test_roundtrip_up_stays_up() -> None:
 
     sys.path.insert(0, "SerialController")
 
-    from core import motion
-    from core.CommandOperate import OperateMixin
-    from core.Keys import Stick
+    from pokecon.domain import motion
+    from pokecon.domain.CommandOperate import OperateMixin
+    from pokecon.domain.Keys import Stick
 
     t0 = 30000.0
     wall = datetime.datetime.now()
@@ -663,7 +663,7 @@ def test_down_motion_roundtrip() -> None:
     steps = br.build_motion_steps(sorted(evs, key=lambda e: e.at))
     sticks = [s for s in steps if s["kind"] == "stick" and not s.get("static")]
     assert sticks, "下への倒しが stick 区間になること"
-    from core import motion as _motion
+    from pokecon.domain import motion as _motion
 
     for s in sticks:
         for key in ("from", "to"):

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
-from core import preview_filter
+from pokecon.domain import preview_filter
 
 
 def red_image(w: int = 40, h: int = 30) -> np.ndarray:

@@ -2,7 +2,7 @@
 
 
 def test_bcon_map_a_and_y_hat_and_sticks():
-    from core.serial.bcon_mapping import neutral_state, wire_row_to_state
+    from pokecon.domain.serial.bcon_mapping import neutral_state, wire_row_to_state
 
     neutral = neutral_state()
     assert neutral == {
@@ -25,7 +25,7 @@ def test_bcon_map_a_and_y_hat_and_sticks():
 
 
 def test_bcon_hat_nine_way():
-    from core.serial.bcon_mapping import wire_row_to_state
+    from pokecon.domain.serial.bcon_mapping import wire_row_to_state
 
     up = 1 << 11
     right = 1 << 9
@@ -47,7 +47,7 @@ def test_bcon_hat_nine_way():
 
 
 def test_bcon_len12_roundtrip_matches_len8_center():
-    from core.serial.bcon_mapping import (
+    from pokecon.domain.serial.bcon_mapping import (
         neutral_state,
         state_to_len8,
         state_to_len12,
@@ -78,7 +78,11 @@ def test_bcon_len12_roundtrip_matches_len8_center():
 
 
 def test_bcon_map_rs_quirk_and_end():
-    from core.serial.bcon_mapping import is_end_row, neutral_state, wire_row_to_state
+    from pokecon.domain.serial.bcon_mapping import (
+        is_end_row,
+        neutral_state,
+        wire_row_to_state,
+    )
 
     # RSのみ→RX/RYへwire lx/lyが載る
     moved = wire_row_to_state("1 08 ff 80")

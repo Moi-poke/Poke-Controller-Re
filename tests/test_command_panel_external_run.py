@@ -9,8 +9,8 @@ import pytest
 pytest.importorskip("tkinter")
 
 from fakes import FakeCommand, FakeScheduler, FakeSer  # noqa: E402
-from services.command_runner import CommandRunner  # noqa: E402
-from ui.command_panel import CommandPanelMixin  # noqa: E402
+from pokecon.runtime.command_runner import CommandRunner  # noqa: E402
+from pokecon.ui.command_panel import CommandPanelMixin  # noqa: E402
 
 
 class _Button(dict[str, Any]):
@@ -156,7 +156,7 @@ def test_external_start_passes_resolved_inputs() -> None:
 
 def test_external_start_is_refused_while_input_dialog_is_open(monkeypatch: Any) -> None:
     """引数ダイアログ表示中は、別の試し実行を始めないこと。"""
-    from ui import input_dialog
+    from pokecon.ui import input_dialog
 
     panel = make_panel()
     monkeypatch.setattr(input_dialog, "is_open", lambda: True)
@@ -167,7 +167,7 @@ def test_external_start_is_refused_while_input_dialog_is_open(monkeypatch: Any) 
 
 def test_start_inputs_prompt_and_cancel(monkeypatch: Any) -> None:
     """Start 前の引数は1回だけ聞き、取消なら開始しないこと。"""
-    from ui import input_dialog
+    from pokecon.ui import input_dialog
 
     panel = make_panel()
     panel.root = None

@@ -15,8 +15,8 @@ from typing import Any
 
 import pytest
 from bcon_ui_support import Service
-from ui.audio_panel import AudioPanelMixin
-from ui.serial_panel import SerialPanelMixin
+from pokecon.ui.audio_panel import AudioPanelMixin
+from pokecon.ui.serial_panel import SerialPanelMixin
 
 # ログを右に置いた窓や 4 つ並べた小さな窓でも横スクロールにならないよう、
 # コマンドタブ（一番細い欄）と同じ程度まで詰める。
@@ -158,13 +158,13 @@ def test_every_serial_and_audio_control_is_still_shown(host: _Host) -> None:
 
 
 def _text_px(combo: ttk.Combobox, text: str) -> int:
-    from ui.combo_fit import combo_font
+    from pokecon.ui.combo_fit import combo_font
 
     return int(combo_font(combo).measure(text))
 
 
 def test_a_combobox_is_widened_to_show_its_longest_choice(tk_root: tk.Tk) -> None:
-    from ui.combo_fit import fit_combo_width
+    from pokecon.ui.combo_fit import fit_combo_width
 
     window = tk.Toplevel(tk_root)
     try:
@@ -186,7 +186,7 @@ def test_a_combobox_is_widened_to_show_its_longest_choice(tk_root: tk.Tk) -> Non
 def test_a_combobox_never_grows_past_its_cap_or_shrinks_below_its_floor(
     tk_root: tk.Tk,
 ) -> None:
-    from ui.combo_fit import fit_combo_width
+    from pokecon.ui.combo_fit import fit_combo_width
 
     window = tk.Toplevel(tk_root)
     try:
@@ -209,7 +209,7 @@ def test_the_serial_tab_fits_with_a_real_usb_port_name(host: _Host) -> None:
     longest = "COM3: USB Serial Port (COM3)"
     host._com_port_map = {}
     host.com_port_cb["values"] = ["COM1: 通信ポート (COM1)", longest]
-    from ui.combo_fit import fit_combo_width
+    from pokecon.ui.combo_fit import fit_combo_width
 
     fit_combo_width(host.com_port_cb, min_chars=12, max_chars=32)
     host.root.update()
@@ -224,7 +224,7 @@ def test_the_serial_tab_fits_with_a_real_usb_port_name(host: _Host) -> None:
 
 @pytest.fixture
 def bcon(tk_root: tk.Tk) -> Iterator[Any]:
-    from BconSetup import BconSetup
+    from pokecon.ui.BconSetup import BconSetup
 
     window = tk.Toplevel(tk_root)
     tab = ttk.Frame(window)
@@ -281,7 +281,7 @@ def test_the_bcon_tab_asks_for_the_full_size_of_its_content(bcon: Any) -> None:
 def test_a_bcon_tab_built_while_hidden_asks_for_its_full_size_once_shown(
     tk_root: tk.Tk,
 ) -> None:
-    from BconSetup import BconSetup
+    from pokecon.ui.BconSetup import BconSetup
 
     # Given: アプリと同じく、別のタブを開いたままノートへ足してから組み立てる
     #        （組み立て時点では中身の大きさがまだ決まっていない）。
@@ -335,9 +335,9 @@ def test_serial_primary_controls_fit_the_visible_scrolled_notebook(
     viewport_size: tuple[int, int],
 ) -> None:
     """他タブが幅を要求しても、接続操作と確認結果は初期表示の可視範囲に収まる。"""
-    from core.connection_state import ConnectionSnapshot
-    from ui.combo_fit import fit_combo_width
-    from ui.scroll_host import ScrollHost
+    from pokecon.domain.connection_state import ConnectionSnapshot
+    from pokecon.ui.combo_fit import fit_combo_width
+    from pokecon.ui.scroll_host import ScrollHost
 
     window = tk.Toplevel(tk_root)
     window.geometry(f"{viewport_size[0]}x{viewport_size[1]}")
@@ -352,7 +352,7 @@ def test_serial_primary_controls_fit_the_visible_scrolled_notebook(
     notebook.add(ttk.Frame(notebook, width=1000, height=200), text="別の設定")
     h._build_serial_frame()
     # アプリと同じく、開いているタブの要求高さを Notebook とスクロール欄へ渡す。
-    from ui.notebook_fit import SelectedTabHeight
+    from pokecon.ui.notebook_fit import SelectedTabHeight
 
     tab_height = SelectedTabHeight(notebook, on_change=scroll.relayout)
     h.transport_name.set("switch-bcon")

@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from core import CommandHistory, CommandStats
-from services import blockly_save
+from pokecon.domain import CommandHistory, CommandStats
+from pokecon.runtime import blockly_save
 
 #: UTF-8 として解釈できないバイト列。JSON の字面以前に復号で落ちる。
 BROKEN_BYTES = b'{"name": "\xff\xfe"}'

@@ -33,7 +33,7 @@ from pathlib import Path
 from typing import Any, Final
 
 import cv2
-from core.Camera import CaptureDeviceReadback, _configure_capture
+from pokecon.domain.Camera import CaptureDeviceReadback, _configure_capture
 
 TESTS_DIR: Final[Path] = Path(__file__).resolve().parent
 REPO_ROOT: Final[Path] = TESTS_DIR.parent
@@ -53,7 +53,7 @@ CLAIM_PHYSICAL: Final[str] = "physical_capture_device"
 CLAIM_NO_DEVICE: Final[str] = "not_applicable_no_capture_device"
 
 # The requester whose revision the artifact is attributed to.
-PINNED_SOURCES: Final[tuple[str, ...]] = ("SerialController/core/Camera.py",)
+PINNED_SOURCES: Final[tuple[str, ...]] = ("SerialController/pokecon/domain/Camera.py",)
 
 NO_DEVICE_NOTE: Final[str] = (
     "no capture device opens under cv2.CAP_DSHOW at any probed index"

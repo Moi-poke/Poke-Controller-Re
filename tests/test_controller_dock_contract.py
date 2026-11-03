@@ -14,10 +14,10 @@ from typing import Any
 
 import pytest
 from Commands.Keys import Button, Hat
-from core.pad_layout import SHAPES
-from ui.controller_dock import ControllerDock
-from ui.controller_pad import ControllerGUI
-from ui.scroll_host import ScrollHost
+from pokecon.domain.pad_layout import JOYCON_L, JOYCON_R, SHAPES, layout_shapes
+from pokecon.ui.controller_dock import ControllerDock
+from pokecon.ui.controller_pad import ControllerGUI
+from pokecon.ui.scroll_host import ScrollHost
 
 
 class _Sender:
@@ -525,3 +525,61 @@ def test_release_all_held_does_not_neutral_external_stick(
     # Then: 外部表示は消え、頭はマウスの値（中立）へ戻る。
     assert pad._ext_stick_xy == {"L": None, "R": None}
     assert _face_centre(pad, "LCLICK") == pytest.approx(knob, abs=1)
+
+
+def test_a_joy_con_layout_draws_only_that_sides_buttons(
+    area: tk.Toplevel,
+) -> None:
+    holder = tk.Frame(area)
+    holder.pack()
+    pad = ControllerGUI(area, _Sender(), container=holder, layout=JOYCON_L)
+
+    # Then: Joy-Con (L) の的だけを描き、反対側の ABXY は無い。
+    assert pad.layout == JOYCON_L
+    for shape in layout_shapes(JOYCON_L):
+        assert pad.canvas.find_withtag(f"key:{shape.name}"), shape.name
+    assert not pad.canvas.find_withtag("key:A")
+    assert not pad.canvas.find_withtag("key:RCLICK")
+
+
+def test_switching_layout_releases_held_buttons_and_redraws(
+    area: tk.Toplevel,
+) -> None:
+    pad = _shown(area)
+    sender = pad.ser
+    x, y = _centre(pad, "A")
+    _click(pad, "<ButtonPress-1>", x, y)
+    assert sender.pressed == [int(Button.A)]
+
+    # When: 操作盤を Joy-Con (R) へ切り替える。
+    pad.set_layout(JOYCON_R)
+
+    # Then: 押しっぱなしを離し、Joy-Con (R) の的だけを描く。
+    assert sender.released == [int(Button.A)]
+    assert pad.layout == JOYCON_R
+    assert pad.canvas.find_withtag("key:A")
+    assert not pad.canvas.find_withtag("key:UP")
+    assert not pad.canvas.find_withtag("key:LCLICK")
+
+
+def test_the_dock_keeps_the_layout_for_embedded_and_floating_pads(
+    area: tk.Toplevel,
+) -> None:
+    holder = tk.Frame(area, width=420, height=600)
+    holder.pack_propagate(False)
+    holder.pack(anchor="nw")
+    dock = ControllerDock(area, holder, _Sender(), layout=JOYCON_L)
+    try:
+        assert dock.embedded is not None and dock.embedded.layout == JOYCON_L
+
+        # When: 別窓へ出し、そのあと種類を変える。
+        dock.pop_out()
+        assert dock.floating is not None and dock.floating.layout == JOYCON_L
+        dock.set_layout(JOYCON_R)
+
+        # Then: 出している操作盤も同じ種類になる。閉じて戻しても保たれる。
+        assert dock.floating is not None and dock.floating.layout == JOYCON_R
+        dock.close_floating()
+        assert dock.embedded is not None and dock.embedded.layout == JOYCON_R
+    finally:
+        dock.shutdown()

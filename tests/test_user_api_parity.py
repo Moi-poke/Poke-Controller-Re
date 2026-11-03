@@ -6,15 +6,15 @@ import importlib.util
 import sys
 from pathlib import Path
 
-from core import blockly_validate, pack_zip
-from core.user_api_allowlist import ALLOWED_COMMANDS_SUBS, THIRD_PARTY
+from pokecon.domain import blockly_validate, pack_zip
+from pokecon.domain.user_api_allowlist import ALLOWED_COMMANDS_SUBS, THIRD_PARTY
 
 ROOT = Path(__file__).resolve().parent.parent
 
 
 def _load_check_user_api():  # type: ignore[no-untyped-def]
     spec = importlib.util.spec_from_file_location(
-        "check_user_api", str(ROOT / "tools" / "check_user_api.py")
+        "check_user_api", str(ROOT / "tools" / "gates" / "check_user_api.py")
     )
     assert spec is not None and spec.loader is not None
     mod = importlib.util.module_from_spec(spec)

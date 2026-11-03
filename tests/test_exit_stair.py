@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-import Window
+from pokecon.app import Window
 
 
 class _Surface:
@@ -139,7 +139,7 @@ class _Camera:
 
 def test_camera_closed_by_the_inbox_is_closed_again_by_the_exit_stair() -> None:
     """Given: 開き途中のカメラが受け渡し箱に残る / When: 終了を回す / Then: 二重に閉じても壊れないこと。"""
-    from core.ui_inbox import UiInbox
+    from pokecon.domain.ui_inbox import UiInbox
 
     app = _FakeApp()
     app._exit_phase = "preview_stopped"

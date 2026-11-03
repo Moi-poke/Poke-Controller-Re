@@ -50,8 +50,8 @@ def _make_pack_src(base: Path, version: str, min_app: str) -> Path:
 
 def test_uninstall_skips_traversal_rels(tmp_path: Path) -> None:
     """改ざんされた導入記録の `..` は消さずに無視する。"""
-    from core import pack_zip
-    from services import script_pack
+    from pokecon.domain import pack_zip
+    from pokecon.runtime import script_pack
 
     app = tmp_path / "app"
     app.mkdir()
@@ -77,8 +77,8 @@ def test_install_rolls_back_on_mid_copy_failure(tmp_path: Path) -> None:
     """途中で書けなくても前半だけ残さない（退避から戻す）。"""
     import shutil
 
-    from core import pack_zip
-    from services import script_pack
+    from pokecon.domain import pack_zip
+    from pokecon.runtime import script_pack
 
     app = tmp_path / "app"
     app.mkdir()
@@ -106,8 +106,8 @@ def test_install_rolls_back_on_mid_copy_failure(tmp_path: Path) -> None:
 
 def test_install_rejects_too_new_min_app_version(tmp_path: Path) -> None:
     """要る版が今より新しければ導入しない。"""
-    from core import pack_zip
-    from services import script_pack
+    from pokecon.domain import pack_zip
+    from pokecon.runtime import script_pack
 
     app = tmp_path / "app"
     app.mkdir()
@@ -122,8 +122,8 @@ def test_install_rejects_too_new_min_app_version(tmp_path: Path) -> None:
 
 def test_save_template_clears_cpu_cache(tmp_path: Path) -> None:
     """保存後はCPU側の古い画像を読まない。"""
-    from core.CommandVision import _imread_or_raise
-    from services import blockly_capture
+    from pokecon.domain.CommandVision import _imread_or_raise
+    from pokecon.runtime import blockly_capture
 
     png = _png_of(np.zeros((20, 20, 3), dtype=np.uint8) + 10)
     tpl_dir = tmp_path / "Template" / "pack"
@@ -139,7 +139,7 @@ def test_save_template_clears_cpu_cache(tmp_path: Path) -> None:
 
 def test_save_template_rejects_slash_name(tmp_path: Path) -> None:
     """保存名の `/`・`\\` は固定配置のため断る。"""
-    from services import blockly_capture
+    from pokecon.runtime import blockly_capture
 
     png = _png_of(_frame())
     full = {"x": 0, "y": 0, "width": 1, "height": 1}
@@ -150,7 +150,7 @@ def test_save_template_rejects_slash_name(tmp_path: Path) -> None:
 
 def test_match_rejects_symlink_escape(tmp_path: Path) -> None:
     """Template内の外へのリンクは読まない（editorと同じ閉じ込め）。"""
-    from services import blockly_match
+    from pokecon.runtime import blockly_match
 
     frame = _frame()
     outside_dir = tmp_path / "outside"
@@ -171,9 +171,9 @@ def test_match_rejects_symlink_escape(tmp_path: Path) -> None:
 
 def test_switch_transport_failure_keeps_target_and_finishes_failed() -> None:
     """失敗した切替は既存の送信先を保ち、失敗状態を完了する。"""
-    from core.serial.sender import Sender
     from fakes import FakeTransport
-    from services.serial_service import SerialService
+    from pokecon.domain.serial.sender import Sender
+    from pokecon.runtime.serial_service import SerialService
 
     class StuckSender(Sender):
         def stopLiveWorker(self, timeout: float = 1.0) -> bool:
@@ -212,10 +212,10 @@ def test_switch_to_unlinked_updates_target_and_connection_log_consumer() -> None
     """ログ非対応方式でも切替結果と確定状態を通知する。"""
     from typing import Any
 
-    from core import Transport
-    from core.transport.base import Transport as BaseTransport
     from fakes import FakeTransport
-    from services.serial_service import SenderSpec, SerialService
+    from pokecon.domain import transport as Transport
+    from pokecon.domain.transport.base import Transport as BaseTransport
+    from pokecon.runtime.serial_service import SenderSpec, SerialService
 
     class DummyNoLog(BaseTransport):
         name = "dummy_nolog_review"
@@ -288,7 +288,7 @@ def test_switch_to_unlinked_updates_target_and_connection_log_consumer() -> None
 
 def test_stop_waited_doc_says_ms() -> None:
     """stop_waitedの説明は秒でなくmsにする。"""
-    from services.command_runner import CommandRunner
+    from pokecon.runtime.command_runner import CommandRunner
 
     doc = str(CommandRunner.stop_waited.__doc__ or "")
     assert "秒数" not in doc
@@ -298,7 +298,7 @@ def test_stop_waited_doc_says_ms() -> None:
 def test_post_clears_watch_id() -> None:
     """後始末が済んだら見張りの予約は残さない。"""
     from fakes import FakeCommand, FakeScheduler, FakeSer, FakeThread
-    from services.command_runner import CommandRunner
+    from pokecon.runtime.command_runner import CommandRunner
 
     clock = FakeScheduler()
     runner = CommandRunner(
@@ -323,7 +323,7 @@ def test_save_returns_failed_on_unexpected_error(
     """json書込みの想定外の例外もHTTP無応答にしない。"""
     import json as std_json
 
-    from services import blockly_save
+    from pokecon.runtime import blockly_save
 
     app = tmp_path / "app"
     (app / "Commands" / "PythonCommands").mkdir(parents=True)
@@ -355,7 +355,7 @@ def test_save_returns_failed_on_unexpected_error(
 
 def test_keyword_template_arg_validated() -> None:
     """キーワードのテンプレ指定も検査する。"""
-    from services import blockly_templates
+    from pokecon.runtime import blockly_templates
 
     code = (
         "from Commands.PythonCommandBase import ImageProcPythonCommand\n"
@@ -369,7 +369,7 @@ def test_keyword_template_arg_validated() -> None:
 
 def test_dynamic_template_arg_warns() -> None:
     """変数・f文字列の参照は落とさず注意する。"""
-    from services import blockly_templates
+    from pokecon.runtime import blockly_templates
 
     code_var = (
         "from Commands.PythonCommandBase import ImageProcPythonCommand\n"
@@ -395,7 +395,7 @@ def test_decode_upload_double_decode_note() -> None:
     """uploadはbase64復号の二重実行を避けても文言は変えない。"""
     raw = _png_of(_frame())
     b64 = base64.b64encode(raw).decode()
-    from services import blockly_match
+    from pokecon.runtime import blockly_match
 
     assert blockly_match.decode_upload_image(b64) == raw
 
@@ -413,7 +413,7 @@ def _vision_code(expr: str) -> str:
 
 def test_mask_path_traversal_rejected() -> None:
     """mask_pathの`..`は落とす（素名は注意に留める）。"""
-    from services import blockly_templates
+    from pokecon.runtime import blockly_templates
 
     code = _vision_code('self.waitTemplate("ok.png", mask_path="../evil.png")')
     assert blockly_templates.validate_template_refs(code) != []
@@ -423,7 +423,7 @@ def test_mask_path_traversal_rejected() -> None:
 
 def test_gpu_api_traversal_rejected() -> None:
     """GPU系APIの`..`も落とす。"""
-    from services import blockly_templates
+    from pokecon.runtime import blockly_templates
 
     code = _vision_code('self.isContainTemplateGPU("../evil.png")')
     assert blockly_templates.validate_template_refs(code) != []
@@ -431,7 +431,7 @@ def test_gpu_api_traversal_rejected() -> None:
 
 def test_max_api_list_traversal_rejected() -> None:
     """一覧指定（位置・キーワード）の`..`は落とす。"""
-    from services import blockly_templates
+    from pokecon.runtime import blockly_templates
 
     code_pos = _vision_code('self.isContainTemplate_max(["../evil.png"])')
     assert blockly_templates.validate_template_refs(code_pos) != []
@@ -445,7 +445,7 @@ def test_max_api_list_traversal_rejected() -> None:
 
 def test_dynamic_list_warns_not_fails() -> None:
     """一覧・maskの動的指定は落とさず注意だけ出す。"""
-    from services import blockly_templates
+    from pokecon.runtime import blockly_templates
 
     code_var = _vision_code("self.isContainTemplate_max(path_list)")
     assert blockly_templates.validate_template_refs(code_var) == []
@@ -461,8 +461,8 @@ def test_install_rejects_escape_rel(
     """staged配置の外向き相対は導入せず外を壊さない（閉じ込め）。"""
     from pathlib import PurePosixPath
 
-    from core import pack_manifest, pack_zip
-    from services import script_pack
+    from pokecon.domain import pack_manifest, pack_zip
+    from pokecon.runtime import script_pack
 
     app = tmp_path / "app"
     app.mkdir()

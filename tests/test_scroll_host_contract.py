@@ -12,7 +12,7 @@ import tkinter.ttk as ttk
 from collections.abc import Iterator
 
 import pytest
-from ui.scroll_host import ScrollHost
+from pokecon.ui.scroll_host import ScrollHost
 
 _REQ_W = 600
 _REQ_H = 400

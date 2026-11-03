@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 import pytest
-from core import dshow_devices
+from pokecon.domain import dshow_devices
 
 
 def test_non_windows_never_touches_com(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -288,7 +288,7 @@ def test_japanese_variable_names_stay_readable_in_generated_code() -> None:
     """日本語の変数名は `_E9_A0_85` のように潰さず、そのまま（記号だけ _ に）出すこと。"""
     import ast
 
-    from core import blockly_validate
+    from pokecon.domain import blockly_validate
 
     # Given: 日本語・数字始まり・記号入りの変数を使うプログラム
     res = run_blockly(

@@ -34,7 +34,7 @@ def _build(module_name: str, class_name: str, ser: Any) -> Any:
 
 def test_bcon_rx_pump_retries_before_giving_up() -> None:
     """Given: 読み取りが必ず例外になる線 / When: ポンプを回す / Then: 数回試してから死んだ印を残すこと。"""
-    transport = _build("core.transport.bcon", "BconTransport", _FailingSer())
+    transport = _build("pokecon.domain.transport.bcon", "BconTransport", _FailingSer())
     transport._parser = None
 
     transport._rx_loop()  # 例外を投げずに戻る（諦めて break する）
@@ -46,7 +46,7 @@ def test_bcon_rx_pump_retries_before_giving_up() -> None:
 
 def test_bcon_rx_pump_without_a_line_is_not_dead() -> None:
     """Given: 線が無い（未接続） / When: ポンプを回す / Then: 死んだ印を立てないこと。"""
-    transport = _build("core.transport.bcon", "BconTransport", None)
+    transport = _build("pokecon.domain.transport.bcon", "BconTransport", None)
     transport._parser = None
 
     transport._rx_loop()
@@ -58,7 +58,7 @@ def test_bcon_rx_pump_without_a_line_is_not_dead() -> None:
 def test_text_rx_pump_retries_before_giving_up() -> None:
     """Given: 読み取りが必ず例外になる線 / When: テキスト方式のポンプを回す / Then: 同じ扱いであること。"""
     transport = _build(
-        "core.transport.text_serial", "TextSerialTransport", _FailingSer()
+        "pokecon.domain.transport.text_serial", "TextSerialTransport", _FailingSer()
     )
 
     transport._rx_loop()

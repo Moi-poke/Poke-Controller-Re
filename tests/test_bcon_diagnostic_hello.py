@@ -12,8 +12,8 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from core.transport.bcon import BconTransport
-from core.transport.bcon_protocol import (
+from pokecon.domain.transport.bcon import BconTransport
+from pokecon.domain.transport.bcon_protocol import (
     T_HELLO,
     T_HELLO_ACK,
     T_IMU_SAMPLE,
@@ -71,7 +71,7 @@ class _DiagnosticWire:
 
 
 def _load_tool(name: str) -> Any:
-    path = Path(__file__).resolve().parent.parent / "tools" / f"{name}.py"
+    path = Path(__file__).resolve().parent.parent / "tools" / "probes" / f"{name}.py"
     spec = importlib.util.spec_from_file_location(f"test_{name}", path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
@@ -90,7 +90,7 @@ def _install_wire(
         wires.append(wire)
         return wire
 
-    monkeypatch.setattr("core.transport.bcon.serial.Serial", open_wire)
+    monkeypatch.setattr("pokecon.domain.transport.bcon.serial.Serial", open_wire)
     return wires
 
 

@@ -22,7 +22,7 @@ whole reason the buffer is no longer allocated from the show size.
 
 import cv2
 import numpy as np
-from GuiAssets import CaptureArea
+from pokecon.ui.GuiAssets import CaptureArea
 
 #: The capture resolution the work buffers are allocated at.
 CAPTURE_WIDTH, CAPTURE_HEIGHT = 1280, 720
@@ -109,7 +109,7 @@ def test_alloc_buffers_sizes_the_work_buffers_by_capture_not_by_show_size() -> N
 
 def test_correction_only_applies_before_rgb() -> None:
     """抽出OFF・補正ONでも補正がかかる（輝度+50で全画素+50）。"""
-    from core import preview_filter
+    from pokecon.domain import preview_filter
 
     area = make_area(64, 48)
     frame = capture_frame((100, 100, 100))
@@ -123,7 +123,7 @@ def test_correction_only_applies_before_rgb() -> None:
 
 def test_correction_neutral_keeps_bit_identical() -> None:
     """中立補正は無効時とbit一致（余計な経路を通らない）。"""
-    from core import preview_filter
+    from pokecon.domain import preview_filter
 
     area = make_area(64, 48)
     frame = np.random.randint(0, 256, (48, 64, 3), dtype=np.uint8)
@@ -139,7 +139,7 @@ def test_correction_neutral_keeps_bit_identical() -> None:
 
 def test_correction_runs_before_hsv_mask() -> None:
     """補正→抽出の順にかかる（暗い赤を輝度で持ち上げると拾える）。"""
-    from core import preview_filter
+    from pokecon.domain import preview_filter
 
     area = make_area(64, 48)
     frame = capture_frame((0, 0, 80))  # 暗い赤。V=80 で下限V=100に届かない

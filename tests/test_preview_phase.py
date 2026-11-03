@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from typing import Protocol
 
 import pytest
-from core.preview_phase import PhaseLock
+from pokecon.domain.preview_phase import PhaseLock
 
 _NS = 1_000_000_000
 _MS = 1_000_000

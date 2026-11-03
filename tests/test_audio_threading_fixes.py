@@ -9,7 +9,7 @@ from typing import Any
 
 import numpy as np
 import pytest
-from core import AudioCapture as AC
+from pokecon.domain import AudioCapture as AC
 
 
 class FakeStream:
@@ -321,7 +321,7 @@ def test_6_stats_hammer() -> None:
 
 def test_7_probe_keeps_old_on_failure() -> None:
     """絞り込みの片失敗で良い方を捨てない。"""
-    from services import audio_service as svc_mod
+    from pokecon.runtime import audio_service as svc_mod
 
     notes: list[str] = []
     svc = svc_mod.AudioService(notify_user=notes.append)

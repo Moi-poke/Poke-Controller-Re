@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import queue
 
-from LogPane import DropOldestQueue, QueueStdoutRedirector
+from pokecon.ui.LogPane import DropOldestQueue, QueueStdoutRedirector
 
 
 def _make_redirector() -> tuple[QueueStdoutRedirector, DropOldestQueue]:

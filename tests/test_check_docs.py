@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-CHECKER = Path(__file__).resolve().parents[1] / "tools" / "check_docs.py"
+CHECKER = Path(__file__).resolve().parents[1] / "tools" / "gates" / "check_docs.py"
 
 
 @pytest.fixture

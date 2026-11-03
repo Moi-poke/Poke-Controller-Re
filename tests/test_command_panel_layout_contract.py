@@ -13,7 +13,7 @@ from collections.abc import Iterator
 from typing import Any
 
 import pytest
-from ui.command_panel import CommandPanelMixin
+from pokecon.ui.command_panel import CommandPanelMixin
 
 
 class _Host(CommandPanelMixin):

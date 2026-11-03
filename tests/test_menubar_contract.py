@@ -12,7 +12,7 @@ from collections.abc import Iterator
 from typing import Any
 
 import pytest
-from Menubar import PokeController_Menubar
+from pokecon.ui.Menubar import PokeController_Menubar
 
 _TOP = ["ファイル(F)", "コマンド(C)", "表示(V)", "接続(N)", "ツール(T)", "ヘルプ(H)"]
 

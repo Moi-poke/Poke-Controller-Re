@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from core import blockly_validate
+from pokecon.domain import blockly_validate
 
 ROOT = Path(__file__).resolve().parent.parent
 BLOCKLY = ROOT / "SerialController" / "assets" / "blockly"

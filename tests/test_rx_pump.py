@@ -8,8 +8,8 @@
 import threading
 import time
 
-from core import Transport
 from fakes import NoSerTransport
+from pokecon.domain import transport as Transport
 
 
 class ScriptedSer:
@@ -115,7 +115,7 @@ def test_drain_keeps_pump_buffer() -> None:
 
     ポンプが読む前の行まで捨てると、応答待ちとモニタの両方から消える。
     """
-    from core import WakeLink
+    from pokecon.domain import WakeLink
 
     t, ser = _pump_transport()
     try:
@@ -127,7 +127,7 @@ def test_drain_keeps_pump_buffer() -> None:
 
 def test_expect_resolves_via_pump() -> None:
     """送信への応答はポンプ経由で expect に届く (購読者も同時に受け取る)。"""
-    from core import WakeLink
+    from pokecon.domain import WakeLink
 
     t, ser = _pump_transport()
     try:

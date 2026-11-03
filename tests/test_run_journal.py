@@ -1,7 +1,7 @@
 """走行日誌の純粋部品の検証。時計も線も要らない（辞書と文字列だけ）。"""
 
 from fakes import CannedMonTransport, FakeTransport
-from services.run_journal import (
+from pokecon.runtime.run_journal import (
     format_live_delta,
     format_m_delta,
     format_run_end,

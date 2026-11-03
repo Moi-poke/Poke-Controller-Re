@@ -2,13 +2,13 @@
 
 
 def test_bcon_crc8_vector():
-    from core.transport.bcon_protocol import crc8
+    from pokecon.domain.transport.bcon_protocol import crc8
 
     assert crc8(b"123456789") == 0xF4
 
 
 def test_bcon_frame_build_state_neutral():
-    from core.transport.bcon_protocol import T_STATE, frame_build
+    from pokecon.domain.transport.bcon_protocol import T_STATE, frame_build
 
     payload = bytes([0x00, 0x00, 0x00, 0x00, 0x80, 0x80, 0x80, 0x80])
     frame = frame_build(T_STATE, payload, 0x00)
@@ -19,7 +19,7 @@ def test_bcon_frame_build_state_neutral():
 
 
 def test_bcon_parser_slides_on_bad_crc():
-    from core.transport.bcon_protocol import T_PING, BconParser, frame_build
+    from pokecon.domain.transport.bcon_protocol import T_PING, BconParser, frame_build
 
     good = frame_build(T_PING, b"", 0x05)
     bad = bytearray(good)
@@ -32,7 +32,7 @@ def test_bcon_parser_slides_on_bad_crc():
 
 
 def test_bcon_hello_len_and_baud_table():
-    from core.transport.bcon_protocol import (
+    from pokecon.domain.transport.bcon_protocol import (
         BAUD_TABLE,
         DEFAULT_BAUD_INDEX,
         T_BAUD_SET,
@@ -51,7 +51,12 @@ def test_bcon_hello_len_and_baud_table():
 
 
 def test_bcon_parser_resyncs_with_sync_byte_in_payload():
-    from core.transport.bcon_protocol import T_PING, T_STATE, BconParser, frame_build
+    from pokecon.domain.transport.bcon_protocol import (
+        T_PING,
+        T_STATE,
+        BconParser,
+        frame_build,
+    )
 
     payload = bytes([0xAB, 0x00, 0xAB, 0x00, 0xAB, 0xAB, 0xAB, 0xAB])
     first = frame_build(T_STATE, payload, 0x10)
@@ -72,7 +77,7 @@ def test_bcon_parser_resyncs_with_sync_byte_in_payload():
 
 
 def test_bcon_bootsel_type_magic_and_len():
-    from core.transport.bcon_protocol import (
+    from pokecon.domain.transport.bcon_protocol import (
         BOOTSEL_MAGIC,
         T_BOOTSEL,
         BconParser,
@@ -99,8 +104,8 @@ def test_bcon_rx_seq_first_not_counted_and_gap_events():
     import threading
     import time
 
-    from core.transport import create_transport
-    from core.transport.bcon_protocol import T_PING, frame_build
+    from pokecon.domain.transport import create_transport
+    from pokecon.domain.transport.bcon_protocol import T_PING, frame_build
 
     class ScriptedSer:
         is_open = True

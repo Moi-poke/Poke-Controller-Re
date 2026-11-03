@@ -5,7 +5,7 @@ import tempfile
 
 
 def test_record_and_play_roundtrip():
-    from core.motion_track import MotionPlayer, MotionRecorder
+    from pokecon.domain.motion_track import MotionPlayer, MotionRecorder
 
     with tempfile.TemporaryDirectory() as tmp:
         path = os.path.join(tmp, "rec.pgyro")
@@ -22,7 +22,7 @@ def test_record_and_play_roundtrip():
 
 
 def test_record_clamps_i16_and_rejects_bad():
-    from core.motion_track import MotionPlayer, MotionRecorder
+    from pokecon.domain.motion_track import MotionPlayer, MotionRecorder
 
     with tempfile.TemporaryDirectory() as tmp:
         path = os.path.join(tmp, "rec.pgyro")
@@ -36,7 +36,7 @@ def test_record_clamps_i16_and_rejects_bad():
 
 
 def test_player_rejects_broken_files():
-    from core.motion_track import MotionPlayer
+    from pokecon.domain.motion_track import MotionPlayer
 
     with tempfile.TemporaryDirectory() as tmp:
         missing = MotionPlayer(os.path.join(tmp, "none.pgyro"))
@@ -56,7 +56,7 @@ def test_player_rejects_broken_files():
 
 
 def test_player_generator_ends_with_none():
-    from core.motion_track import MotionPlayer, MotionRecorder
+    from pokecon.domain.motion_track import MotionPlayer, MotionRecorder
 
     with tempfile.TemporaryDirectory() as tmp:
         path = os.path.join(tmp, "rec.pgyro")
@@ -71,7 +71,7 @@ def test_player_generator_ends_with_none():
 
 
 def test_player_as_source_is_callable():
-    from core.motion_track import MotionPlayer, MotionRecorder
+    from pokecon.domain.motion_track import MotionPlayer, MotionRecorder
 
     with tempfile.TemporaryDirectory() as tmp:
         path = os.path.join(tmp, "rec.pgyro")
@@ -88,7 +88,7 @@ def test_player_as_source_is_callable():
 def test_recorder_header_layout():
     import struct
 
-    from core.motion_track import MotionRecorder
+    from pokecon.domain.motion_track import MotionRecorder
 
     with tempfile.TemporaryDirectory() as tmp:
         path = os.path.join(tmp, "rec.pgyro")

@@ -71,7 +71,9 @@ def _wait_for(predicate, timeout: float = 2.0) -> bool:
 
 
 def _load_jitter_tool():
-    path = Path(__file__).resolve().parent.parent / "tools" / "bcon_jitter.py"
+    path = (
+        Path(__file__).resolve().parent.parent / "tools" / "probes" / "bcon_jitter.py"
+    )
     spec = importlib.util.spec_from_file_location("bcon_jitter", str(path))
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
@@ -80,7 +82,8 @@ def _load_jitter_tool():
 
 
 def test_bcon_live_capable_and_stats_shape():
-    from core import Sender, Transport
+    from pokecon.domain import transport as Transport
+    from pokecon.domain.serial import sender as Sender
 
     probe = Sender.Sender.__new__(Sender.Sender)
     made = Transport.create_transport("bcon")
@@ -96,7 +99,7 @@ def test_bcon_live_capable_and_stats_shape():
 
 def test_bcon_send_row_accepts_pico_s_row_neutral():
     """live workerの出すS行（姿勢空間）をSTATE 1発で送る。"""
-    from core.transport import create_transport
+    from pokecon.domain.transport import create_transport
 
     made = create_transport("bcon")
     ser = _make_fake_ser()
@@ -115,7 +118,7 @@ def test_bcon_s_row_buttons_map_to_viper_not_wire():
 
     姿勢A=0x04をwireと読むとbit2→BTN_Yになる。正しくはBTN_A(1<<1)。
     """
-    from core.transport import create_transport
+    from pokecon.domain.transport import create_transport
 
     made = create_transport("bcon")
     ser = _make_fake_ser()
@@ -133,7 +136,7 @@ def test_bcon_s_row_buttons_map_to_viper_not_wire():
 
 
 def test_bcon_s_row_hat_and_sticks():
-    from core.transport import create_transport
+    from pokecon.domain.transport import create_transport
 
     made = create_transport("bcon")
     ser = _make_fake_ser()
@@ -158,7 +161,7 @@ def test_bcon_stick_y_passes_through_uninverted():
     Keys上（LY=0x00）はUART LY=0x00のまま送り、Pico側packの
     反転1回で輸送最大端へ載る。wakecon経路（無反転）と同一の端。
     """
-    from core.transport import create_transport
+    from pokecon.domain.transport import create_transport
 
     made = create_transport("bcon")
     ser = _make_fake_ser()
@@ -175,7 +178,7 @@ def test_bcon_stick_y_passes_through_uninverted():
 
 def test_bcon_live_loop_refreshes_and_seqs():
     """loop起動中は最新姿勢を120Hzで送り直す。1呼出し1フレーム・SEQ連番。"""
-    from core.transport import create_transport
+    from pokecon.domain.transport import create_transport
 
     made = create_transport("bcon")
     ser = _make_fake_ser()
@@ -199,7 +202,7 @@ def test_bcon_live_loop_refreshes_and_seqs():
 
 def test_bcon_live_loop_coalesces_burst_into_merged():
     """loop回転より速い連打は最新1件へ畳みmergedに数える（backlogなし）。"""
-    from core.transport import create_transport
+    from pokecon.domain.transport import create_transport
 
     made = create_transport("bcon")
     ser = _make_fake_ser(write_delay=0.03)
@@ -218,7 +221,7 @@ def test_bcon_live_loop_coalesces_burst_into_merged():
 
 
 def test_bcon_live_stats_shape_and_counts():
-    from core.transport import create_transport
+    from pokecon.domain.transport import create_transport
 
     made = create_transport("bcon")
     ser = _make_fake_ser()
@@ -246,7 +249,7 @@ def test_bcon_live_stats_shape_and_counts():
 
 def test_bcon_hold_suppresses_loop_and_counts_dropped():
     """hunt中の抑えはloopの送出も止め捨てた分をdroppedに数える。"""
-    from core.transport import create_transport
+    from pokecon.domain.transport import create_transport
 
     made = create_transport("bcon")
     ser = _make_fake_ser()
@@ -281,8 +284,8 @@ def test_bcon_set_baud_window_holds_tx():
 
     応答はSTATUSだけ返し新baudのHELLOには答えないため復帰経路を通る。
     """
-    from core.transport import create_transport
-    from core.transport.bcon_protocol import T_BAUD_SET, T_STATUS, frame_build
+    from pokecon.domain.transport import create_transport
+    from pokecon.domain.transport.bcon_protocol import T_BAUD_SET, T_STATUS, frame_build
 
     made = create_transport("bcon")
     ser = _make_fake_ser()
@@ -340,8 +343,9 @@ def test_bcon_set_baud_window_holds_tx():
 
 def test_bcon_sender_live_reaches_bcon_wire_as_viper():
     """Senderのlive経路（S行）がbconの線へVIIPERで届く（統合の要）。"""
-    from core import Sender, Transport
-    from core.Keys import Button
+    from pokecon.domain import transport as Transport
+    from pokecon.domain.Keys import Button
+    from pokecon.domain.serial import sender as Sender
 
     made = Transport.create_transport("bcon")
     ser = _make_fake_ser()
@@ -363,7 +367,7 @@ def test_bcon_sender_live_reaches_bcon_wire_as_viper():
 
 
 def test_bcon_close_stops_live_loop():
-    from core.transport import create_transport
+    from pokecon.domain.transport import create_transport
 
     made = create_transport("bcon")
     ser = _make_fake_ser()

@@ -24,6 +24,43 @@ Pico 中継（USB）、Pico 中継（別プロセス））が並び、表に無�
 使う。方式の説明は「通信の詳細設定」を開くと読める。
 プラグインで登録した方式も候補に加わる。
 
+### 利用者が通信方式を足す（v4 の manifest 方式）
+
+`settings.ini` の `[Transport] plugin_dir` に置いたフォルダを見る。
+1方式につき1ディレクトリで、`manifest.toml` と `__init__.py` を置く。
+
+```
+plugin_dir/
+  switch-pro-cont/
+    manifest.toml
+    __init__.py
+```
+
+```toml
+name            = "switch-pro-cont"
+version         = "1.2.0"
+api_version     = 1          # 受け口の版。合わなければ読まない
+min_app_version = "4.0.0"    # これ未満のアプリでは読まない
+```
+
+```python
+# __init__.py
+from Commands.Transport import Transport, register_transport
+
+
+class SwitchProCont(Transport):
+    name = "switch-pro-cont"
+
+
+def register(register_transport):
+    register_transport(SwitchProCont.name, SwitchProCont)
+```
+
+読まなかったときは理由（`manifest.toml` が無い・`api_version` が違う・
+`min_app_version` が新しい・import か `register` が失敗した）をログと画面に出す。
+1本が壊れても他は読む。`api_version` は `pokecon/plugins/transports.py` の
+`API_VERSION` が正本で、破壊的変更のときだけ上げる。
+
 `switch-bcon-proc` は送出路の別プロセス版である。操作面は
 `switch-bcon` と同じで、120Hz送出・受信・会話opを子プロセス
 で回し、GUIのGIL・描画負荷から切り離す。送出タイミングの
@@ -76,7 +113,7 @@ BCON は「ポート接続中」→「HELLO 確認中」→「接続済み」と
 Pico は未確定のあいだ各 rate に 150ms ずつ留まり、同じ滞在中に
 有効 frame が 2 連続で届いたときだけ確定するため、`HELLO` の単発
 （0.5 秒毎）では永久に確定しない（2026-10-05 実機で 0/5）。
-実機確認は `tools/bcon_hunt_probe.py`（BREAK→`baud_hunt`→STATUS）。
+実機確認は `tools/probes/bcon_hunt_probe.py`（BREAK→`baud_hunt`→STATUS）。
 
 ## BCON 設定の使い方
 
@@ -171,7 +208,7 @@ CONFIG の結果は操作前後の STATUS を比較して判断する。`errcode
 
 ## 計測と不具合対応
 
-`tools/bcon_jitter.py` は 120Hz送出の揺らぎを量る道具だ。
+`tools/probes/bcon_jitter.py` は 120Hz送出の揺らぎを量る道具だ。
 ポートを開き、互換版 Pico と `HELLO` を確認してから、中立 `STATE` を
 120Hz で送り、要約と CSV を出して閉じる。
 `HELLO` が失敗または例外になった場合は、送信ループを始めず、要約と CSV を

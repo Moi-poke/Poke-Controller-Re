@@ -16,8 +16,8 @@ from typing import Any
 import cv2
 import numpy as np
 from blockly_node import NEEDS_NODE
-from core import blockly_headless
-from services import blockly_author
+from pokecon.domain import blockly_headless
+from pokecon.runtime import blockly_author
 
 pytestmark = NEEDS_NODE
 

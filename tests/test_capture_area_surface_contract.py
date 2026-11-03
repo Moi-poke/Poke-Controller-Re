@@ -84,6 +84,7 @@ from gdi_source_readers import (
 PHOTO_SURFACE_SOURCE = (
     Path(__file__).resolve().parent.parent
     / "SerialController"
+    / "pokecon"
     / "ui"
     / "photo_surface.py"
 )
@@ -96,7 +97,7 @@ CAPTURE_WIDTH, CAPTURE_HEIGHT = 1280, 720
 
 def _gui_assets() -> Any:
     """Import ``GuiAssets`` at call time so a missing module is a per-test RED."""
-    import GuiAssets as module
+    import pokecon.ui.GuiAssets as module
 
     return module
 
@@ -328,7 +329,7 @@ def test_capture_area_exposes_the_documented_overlay_surface_and_buffer_state() 
 
 def test_default_constructed_overlay_is_the_all_default_overlay_state() -> None:
     # Given: a bare area whose four components carry the documented defaults.
-    from core import preview_renderer
+    from pokecon.domain import preview_renderer
 
     bare = bare_capture_area()
 
@@ -658,7 +659,7 @@ def test_draw_frame_skips_convert_entirely_without_a_filter_or_correction() -> N
 def test_a_filtered_frame_reaches_compose_as_the_filters_bgr_output() -> None:
     # Given: a bare area with a narrow gray_out HSV filter active.
     import cv2
-    from core import preview_filter
+    from pokecon.domain import preview_filter
 
     bare = bare_capture_area()
     lower, upper = preview_filter.validate_hsv(list(FILTER_LOWER), list(FILTER_UPPER))
@@ -693,7 +694,7 @@ def test_a_filtered_frame_reaches_compose_as_the_filters_bgr_output() -> None:
 def test_a_corrected_frame_reaches_compose_as_bgr_not_rgb() -> None:
     # Given: a bare area with a non-neutral colour correction and no filter.
     import cv2
-    from core import preview_filter
+    from pokecon.domain import preview_filter
 
     bare = bare_capture_area()
     correction = preview_filter.validate_correction(NON_NEUTRAL_CORRECTION)
@@ -856,7 +857,7 @@ class _RefusingSurface:
         self.resizes.append((size[0], size[1]))
 
     def compose(self, frame: Any, overlay: Any) -> Any:
-        from core import preview_renderer
+        from pokecon.domain import preview_renderer
 
         self.calls.append("compose")
         self.composes.append((frame, overlay))
@@ -867,7 +868,7 @@ class _RefusingSurface:
         return result
 
     def present(self) -> Any:
-        from core import preview_renderer
+        from pokecon.domain import preview_renderer
 
         self.calls.append("present")
         result = preview_renderer.RenderResult(
@@ -1161,7 +1162,7 @@ class _DestroyEvent:
 
 def test_the_self_test_poll_stops_the_moment_the_surface_answers() -> None:
     # Given: a surface that can answer, and a widget double that records after.
-    from ui.photo_surface import SelfTestResult
+    from pokecon.ui.photo_surface import SelfTestResult
 
     bare = bare_capture_area()
     area = bare.area
@@ -1181,7 +1182,7 @@ def test_the_self_test_poll_stops_the_moment_the_surface_answers() -> None:
 
 def test_the_self_test_poll_retries_while_the_surface_stays_unmapped() -> None:
     # Given: a surface that reports "not mapped" once and a real answer after.
-    from ui.photo_surface import SelfTestResult
+    from pokecon.ui.photo_surface import SelfTestResult
 
     bare = bare_capture_area()
     area = bare.area
@@ -1214,7 +1215,7 @@ def test_the_self_test_poll_retries_while_the_surface_stays_unmapped() -> None:
 def test_the_self_test_poll_retries_while_the_surface_reports_not_run() -> None:
     # Given: a surface whose first probe ran before its window existed (the
     # attach-time BitBlt can fail outright) and a real answer after.
-    from ui.photo_surface import SelfTestResult
+    from pokecon.ui.photo_surface import SelfTestResult
 
     bare = bare_capture_area()
     area = bare.area
@@ -1249,7 +1250,7 @@ def test_the_self_test_poll_gives_up_at_its_deadline(
 ) -> None:
     # Given: a surface that never gets mapped, and a clock that steps past the
     # deadline between arming and probing.
-    from ui.photo_surface import SelfTestResult
+    from pokecon.ui.photo_surface import SelfTestResult
 
     bare = bare_capture_area()
     area = bare.area
@@ -1294,7 +1295,7 @@ def test_a_destroy_cancels_the_armed_self_test_after_and_a_child_does_not() -> N
     )
 
     # Given: a poll that has armed exactly one retry.
-    from ui.photo_surface import SelfTestResult
+    from pokecon.ui.photo_surface import SelfTestResult
 
     bare = bare_capture_area()
     area = bare.area
@@ -1457,7 +1458,7 @@ def test_a_none_frame_composes_and_presents_the_disabled_image() -> None:
     # the *last live frame* on screen, which looks exactly like success and is
     # the same observable (a2) exists to rule out.
     # PASSES TODAY: _showDisabled raises nothing. Kept as the guard.
-    from ui import preview_clock
+    from pokecon.ui import preview_clock
 
     assert isinstance(result, preview_clock.DispatchResult), (
         f"(a3) UNMET: _dispatch_tick returned {result!r} instead of a "
@@ -1659,8 +1660,8 @@ def test_photo_surface_scales_the_whole_capture_frame_into_a_smaller_show_size(
     # Given: the fallback surface at the shipped show size, with ImageTk and
     # the Canvas stubbed out, because a real PhotoImage needs a Tk root and
     # this backend is otherwise unreachable without a display.
-    import ui.photo_surface as module
-    from core import preview_renderer
+    import pokecon.ui.photo_surface as module
+    from pokecon.domain import preview_renderer
 
     built: list[Any] = []
 
@@ -2000,7 +2001,7 @@ def _photo_backed_area(
     real Canvas needs a display and a real PhotoImage a live Tk root;
     monkeypatch reverts both when the test ends.
     """
-    import ui.photo_surface as module
+    import pokecon.ui.photo_surface as module
 
     class _PhotoImage:
         def __init__(self, _image: Any) -> None:

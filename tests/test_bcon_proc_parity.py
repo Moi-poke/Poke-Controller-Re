@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import inspect
 
-from core.transport.bcon import BconTransport
-from core.transport.bcon_proc import _ALLOWED_CALLS, BconProcTransport
+from pokecon.domain.transport.bcon import BconTransport
+from pokecon.domain.transport.bcon_proc import _ALLOWED_CALLS, BconProcTransport
 
 #: proc 側が自前で持つ（本家へ転送しない）公開メンバー。
 #: 転送するのは会話系（hello/config/last_* など）だけで、フレーム送出と

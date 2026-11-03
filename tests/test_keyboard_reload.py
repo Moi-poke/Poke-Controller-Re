@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from Commands.Keys import Button
-from Keyboard import SwitchKeyboardController
+from pokecon.runtime.Keyboard import SwitchKeyboardController
 
 
 class FakeKeyPress:

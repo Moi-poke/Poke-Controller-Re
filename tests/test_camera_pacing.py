@@ -12,8 +12,8 @@ from typing import Any
 
 import numpy as np
 import pytest
-from core import Camera as CamMod
-from core.Camera import Camera
+from pokecon.domain import Camera as CamMod
+from pokecon.domain.Camera import Camera
 
 _OVERSLEEP_S = 0.0012  # 毎回の待機がこれだけ長引く
 _READ_S = 0.0005  # read() はドライバのバッファから即座に返る

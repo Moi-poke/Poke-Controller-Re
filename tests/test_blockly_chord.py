@@ -15,10 +15,11 @@ from typing import Any
 
 import pytest
 from blockly_node import NEEDS_NODE, run_blockly
-from core import InputLog, Sender
-from core.Keys import Button, Hat, KeyPress
 from fakes import FakeTransport
-from services import blockly_record
+from pokecon.domain import InputLog as InputLog
+from pokecon.domain.Keys import Button, Hat, KeyPress
+from pokecon.domain.serial import sender as Sender
+from pokecon.runtime import blockly_record
 
 pytestmark = NEEDS_NODE
 

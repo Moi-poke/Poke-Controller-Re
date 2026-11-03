@@ -12,10 +12,10 @@ import tkinter as tk
 from collections.abc import Iterator
 from typing import Any
 
-import WindowUtils
 import pytest
-from ui.camera_panel import CameraPanelMixin
-from ui.display_settings import DisplaySettingsDialog
+from pokecon.ui import WindowUtils
+from pokecon.ui.camera_panel import CameraPanelMixin
+from pokecon.ui.display_settings import DisplaySettingsDialog
 
 
 @pytest.fixture

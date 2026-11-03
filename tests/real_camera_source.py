@@ -44,12 +44,12 @@ def _default_camera(fps: int, capture_size: tuple[int, int]) -> Any:
     the source constructible without hardware for contract runs that inject a
     double instead.
     """
-    module: Any = importlib.import_module("core.Camera")
+    module: Any = importlib.import_module("pokecon.domain.Camera")
     return module.Camera(fps=fps, capture_size=capture_size)
 
 
 def _readback_field_names() -> tuple[str, ...]:
-    module: Any = importlib.import_module("core.Camera")
+    module: Any = importlib.import_module("pokecon.domain.Camera")
     return tuple(field.name for field in fields(module.CaptureDeviceReadback))
 
 

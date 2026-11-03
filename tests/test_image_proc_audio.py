@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 from Commands import PythonCommandBase
 from Commands.PythonCommandBase import ImageProcAudioPythonCommand
-from core import audio_dsp
+from pokecon.domain import audio_dsp
 
 
 def sine(freq: float, seconds: float, rate: int = 44100) -> np.ndarray:

@@ -9,15 +9,15 @@ describe_bcon_errcode で解く。いまの実装は O 行を送るため赤の�
 from typing import Any
 
 import pytest
-from BconSetup import (
-    build_color_payload,
-    describe_bcon_errcode,
-    parse_color_hex,
-)
 from Commands.PythonCommands.set_procon_color import (
     PRESET,
     SetProconColor,
     normalize,
+)
+from pokecon.ui.BconSetup import (
+    build_color_payload,
+    describe_bcon_errcode,
+    parse_color_hex,
 )
 
 
@@ -159,8 +159,8 @@ def test_short_hex_rejected_by_both_readers(raw: str) -> None:
 
 def test_canonical_slot_names_decision() -> None:
     """正準の部品名をここに固定する。どちらかが動いたら赤（要再決定）。"""
-    from BconSetup import COLOR_SLOT_NAMES
     from Commands.PythonCommands.set_procon_color import PART_NAMES
+    from pokecon.ui.BconSetup import COLOR_SLOT_NAMES
 
     # Given: いまの両者の並び（正準の決定として記録する）。
     # When/Then: ずれていたら統一の対応表を作り直す合図。

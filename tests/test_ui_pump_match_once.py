@@ -10,7 +10,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 import pytest
-from services import blockly_match
+from pokecon.runtime import blockly_match
 
 
 def _frame() -> np.ndarray:
@@ -92,7 +92,7 @@ def test_match_accepts_ndarray_without_frame_redecode(tmp_path: Path) -> None:
 
 
 def test_match_ndarray_skips_frame_imdecode(tmp_path: Path) -> None:
-    """ndarray入力ではframeのimdecodeが走らない（テンプレ読込分のみ）。"""
+    """ndarray入力ではframeの再復号が走らない（imdecodeはテンプレ読込の分だけ）。"""
     frame = _frame()
     app = _app_with_template(tmp_path, frame)
     calls = {"n": 0}
@@ -111,5 +111,6 @@ def test_match_ndarray_skips_frame_imdecode(tmp_path: Path) -> None:
 
         _cv2b.imdecode = orig  # type: ignore[method-assign]
     assert res.status == "ok"
-    # frame復号0回＋テンプレは別経路（_imread）のため、imdecodeは0回のはず。
-    assert calls["n"] == 0, f"frame側で再復号しています: {calls['n']}回"
+    # frame を ndarray で渡しているので、復号はテンプレ画像の読込（最大1回）だけ。
+    # frame を復号し直す実装に戻ると 2 回以上になる。
+    assert calls["n"] <= 1, f"frame側で再復号しています: {calls['n']}回"

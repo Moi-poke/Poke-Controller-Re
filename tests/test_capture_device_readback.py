@@ -59,7 +59,7 @@ from gdi_source_readers import (
     referenced_names,
 )
 
-CAMERA_SOURCE = SERIAL_CONTROLLER / "core" / "Camera.py"
+CAMERA_SOURCE = SERIAL_CONTROLLER / "pokecon" / "domain" / "Camera.py"
 
 # The readback the implementation must expose, and the single method a caller
 # reads it through. Both names are pinned: a rename is a source contract, so it
@@ -236,14 +236,14 @@ def _camera_module() -> Any:
     currently-clean tree. ``AGENTS.md`` sanctions the ``Any`` boundary for
     exactly this kind of stub friction.
     """
-    module: Any = importlib.import_module("core.Camera")
+    module: Any = importlib.import_module("pokecon.domain.Camera")
     return module
 
 
 def _readback_type() -> Any:
     readback = getattr(_camera_module(), READBACK_CLASS, None)
     assert readback is not None, (
-        f"core.Camera must define {READBACK_CLASS}; the readback is currently "
+        f"pokecon.domain.Camera must define {READBACK_CLASS}; the readback is currently "
         "logged and then dropped, so nothing machine-readable survives a "
         "silent driver fallback"
     )

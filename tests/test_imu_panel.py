@@ -18,7 +18,7 @@ import pytest
 @pytest.fixture(autouse=True)
 def _hidhide_ready(monkeypatch: pytest.MonkeyPatch) -> None:
     """HidHideの有無に依存せず、IMUパネルのHID契約をテストする。"""
-    monkeypatch.setattr("core.hidhide.hidhide_ready", lambda **kwargs: True)
+    monkeypatch.setattr("pokecon.domain.hidhide.hidhide_ready", lambda **kwargs: True)
 
 
 class _FakeTransport:
@@ -121,7 +121,7 @@ def _make_panel(
     settings_data: dict[str, str] | None = None,
     transport: Any = None,
 ) -> tuple[Any, Any, Any, _FakeSettings, tk.Toplevel]:
-    from ImuPanel import ImuPanel
+    from pokecon.ui.ImuPanel import ImuPanel
 
     root = tk.Toplevel(tk_root)
     root.withdraw()
@@ -494,7 +494,7 @@ def test_imu_panel_hid_bias_and_axis_scale_apply_before_signs(
         assert _wait_until(lambda: panel._streaming is True, root)
         source = transport.source
         assert source is not None
-        from core.sdl_sensor import gyro_to_raw
+        from pokecon.domain.sdl_sensor import gyro_to_raw
 
         bias = gyro_to_raw(0.1)
         assert bias == 94
@@ -591,7 +591,7 @@ def test_imu_panel_toggle_does_not_overlap_workers(tk_root: tk.Tk) -> None:
 
 def test_imu_panel_source_side_can_leave_signs_to_watched() -> None:
     """source側の軸変換は符号を掛けない（watchedとの二重適用防止）。"""
-    from ImuPanel import ImuPanel
+    from pokecon.ui.ImuPanel import ImuPanel
 
     class _Reader:
         def __init__(self) -> None:
@@ -619,7 +619,7 @@ def test_imu_panel_hid_source_rearms_through_ensure_live(
     tk_root: tk.Tk, monkeypatch
 ) -> None:
     """HIDが開いたまま0x30が古い場合も、開始時にensure_liveで再武装する。"""
-    import core.nintendo_hid as nintendo_hid
+    import pokecon.domain.nintendo_hid as nintendo_hid
 
     class _FakeHid:
         def __init__(self) -> None:
@@ -657,7 +657,7 @@ def test_imu_panel_hid_start_reports_imu_arm_failure(
     tk_root: tk.Tk, monkeypatch
 ) -> None:
     """IMUを有効化できないハンドルで「開始しました」と言わない。"""
-    import core.nintendo_hid as nintendo_hid
+    import pokecon.domain.nintendo_hid as nintendo_hid
 
     class _UnarmedHid:
         def is_open(self) -> bool:
@@ -691,7 +691,7 @@ def test_imu_panel_hid_rearms_through_ensure_live_on_missing_sample(
     tk_root: tk.Tk, monkeypatch
 ) -> None:
     """0x30が途絶えたら、同じ ensure_live 経路で再武装して読める。"""
-    import core.nintendo_hid as nintendo_hid
+    import pokecon.domain.nintendo_hid as nintendo_hid
 
     class _DroppingHid:
         def __init__(self) -> None:
@@ -730,7 +730,7 @@ def test_imu_panel_hid_start_always_rearms_even_when_live(
     tk_root: tk.Tk, monkeypatch
 ) -> None:
     """開始時は毎回 arm_imu を呼ぶ（0x30が新鮮でも再武装する）。"""
-    import core.nintendo_hid as nintendo_hid
+    import pokecon.domain.nintendo_hid as nintendo_hid
 
     class _LiveHid:
         def __init__(self) -> None:
@@ -770,7 +770,7 @@ def test_imu_panel_hid_start_always_rearms_even_when_live(
 
 def test_imu_panel_records_sent_values(tk_root: tk.Tk, tmp_path) -> None:
     """送出値をそのまま .pgyro へ記録し、停止後に同じ値で読み戻せる。"""
-    from core.motion_track import MotionPlayer
+    from pokecon.domain.motion_track import MotionPlayer
 
     path = str(tmp_path / "rec.pgyro")
     data = {
@@ -809,7 +809,7 @@ def test_imu_panel_records_sent_values(tk_root: tk.Tk, tmp_path) -> None:
 
 def test_imu_panel_plays_recording_and_stops_at_end(tk_root: tk.Tk, tmp_path) -> None:
     """記録の再生は値を加工せずに返し、終端で自動停止する。"""
-    from core.motion_track import MotionRecorder
+    from pokecon.domain.motion_track import MotionRecorder
 
     path = str(tmp_path / "play.pgyro")
     samples = [
@@ -884,7 +884,7 @@ def test_imu_panel_keeps_playback_file_when_record_path_matches(
     tk_root: tk.Tk, tmp_path
 ) -> None:
     """再生元と同じ記録先を指定されても、元ファイルを上書きしない。"""
-    from core.motion_track import MotionPlayer, MotionRecorder
+    from pokecon.domain.motion_track import MotionPlayer, MotionRecorder
 
     path = str(tmp_path / "same.pgyro")
     samples = [(1, 2, 4096, 100, -200, 0), (3, 4, 4096, 300, -400, 50)]

@@ -6,8 +6,8 @@ import json
 import zipfile
 from pathlib import Path
 
-from core import pack_zip
-from services import script_pack
+from pokecon.domain import pack_zip
+from pokecon.runtime import script_pack
 
 
 def make_src(base: Path, version: str = "1.0.0") -> Path:

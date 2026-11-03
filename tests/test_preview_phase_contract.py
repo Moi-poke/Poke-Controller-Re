@@ -12,11 +12,11 @@ import types
 from collections.abc import Callable
 from typing import Any
 
-import GuiAssets
 import numpy as np
 import pytest
-from GuiAssets import CaptureArea
-from core.preview_phase import PhaseLock
+from pokecon.domain.preview_phase import PhaseLock
+from pokecon.ui import GuiAssets
+from pokecon.ui.GuiAssets import CaptureArea
 
 _MS = 1_000_000
 _PERIOD = round(1e9 / 60)

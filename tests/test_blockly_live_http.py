@@ -19,14 +19,13 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
-import WindowUtils
 import cv2
 import numpy as np
 import pytest
 from blockly_node import NEEDS_NODE
-from core import blockly_headless
-from services import blockly_author
-from ui import blockly_editor
+from pokecon.domain import blockly_headless
+from pokecon.runtime import blockly_author
+from pokecon.ui import WindowUtils, blockly_editor
 
 pytestmark = NEEDS_NODE
 

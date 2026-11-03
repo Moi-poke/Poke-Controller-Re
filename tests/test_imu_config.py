@@ -4,7 +4,7 @@ import configparser
 
 
 def _fresh() -> configparser.ConfigParser:
-    import config
+    from pokecon.domain import config
 
     parser = configparser.ConfigParser()
     parser.optionxform = str  # type: ignore[assignment]
@@ -37,7 +37,7 @@ def test_imu_section_defaults():
 
 
 def test_imu_section_repairs_invalid():
-    import config
+    from pokecon.domain import config
 
     parser = _fresh()
     parser["IMU"]["source"] = "bad"
@@ -68,7 +68,7 @@ def test_imu_section_repairs_invalid():
 
 
 def test_imu_section_keeps_valid():
-    import config
+    from pokecon.domain import config
 
     parser = _fresh()
     parser["IMU"]["source"] = "step"
@@ -83,7 +83,7 @@ def test_imu_section_keeps_valid():
 
 def test_apply_gyro_deadband_zeroes_small_axes() -> None:
     """不感帯はジャイロのみ・各軸独立。加速度と閾値超えは残す。"""
-    from core.imu_wave import apply_gyro_deadband
+    from pokecon.domain.imu_wave import apply_gyro_deadband
 
     sample = (100, -200, 4096, 20, -49, 50)
     assert apply_gyro_deadband(sample, 0.0) == sample
@@ -94,7 +94,7 @@ def test_apply_gyro_deadband_zeroes_small_axes() -> None:
 
 def test_sample_transform_identity_and_signs() -> None:
     """軸・符号変換（接頭辞なし＝SDL路）。恒等ならNone、指定時は軸と符号を適用。"""
-    from ImuPanel import ImuPanel
+    from pokecon.ui.ImuPanel import ImuPanel
 
     ident = {
         "accel_axes": "0,1,2",
@@ -123,7 +123,7 @@ def test_sample_transform_identity_and_signs() -> None:
 
 def test_sample_transform_hid_uses_own_keys() -> None:
     """HID直結は hid_* キーだけを見る。SDL用の既定値に引きずられない。"""
-    from ImuPanel import ImuPanel
+    from pokecon.ui.ImuPanel import ImuPanel
 
     sdl_defaults = {
         "accel_axes": "2,0,1",
@@ -153,7 +153,7 @@ def test_sample_transform_hid_uses_own_keys() -> None:
 
 def test_imu_section_keeps_file_source_and_paths():
     """記録の再生（file）と記録・再生パスは補正で壊さない。"""
-    import config
+    from pokecon.domain import config
 
     parser = _fresh()
     parser["IMU"]["source"] = "file"
