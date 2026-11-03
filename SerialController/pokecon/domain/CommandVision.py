@@ -36,7 +36,7 @@ from typing import Any
 import cv2
 import numpy as np
 from loguru import logger
-from pokecon.domain.Camera import BASE_DIR, imwrite
+from pokecon.domain.Camera import BASE_DIR, imread, imwrite
 from pokecon.domain.recovery import (
     CameraUnavailableError,
     RecoveryAdvice,
@@ -90,10 +90,9 @@ def _imread_or_raise(template_path: str, flags: int) -> np.ndarray:
     差し替えたときは clear_template_cache() を呼ぶ。
     """
     filespec = _get_template_filespec(template_path)
-    # imread のスタブは ndarray 固定だが、実機では読めないと None が返る。
-    # Any で受けて None を見る（isinstance では MatLike が ndarray の
-    #   別名のため到達不能と見なされてしまう）。
-    image: Any = cv2.imread(filespec, flags)
+    # cv2.imread は非 ASCII のパスを開けないため Camera.imread を通す。
+    # 実機では読めないと None が返るので Any で受けて None を見る。
+    image: Any = imread(filespec, flags)
     if image is None:
         # ライトユーザーが最も詰まる箇所なので、理由と置き場所を
         # 具体的に出す。「無い」のか「壊れている（読めない）」のかを

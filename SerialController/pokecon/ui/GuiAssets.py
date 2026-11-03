@@ -31,7 +31,7 @@ import numpy as np
 #   ボタンと十字キーの種類を直接使う（UnitCommand を経由しない）。
 from Commands.PythonCommandBase import PythonCommand
 from loguru import logger
-from pokecon.domain.Camera import CAPTURE_SIZE
+from pokecon.domain.Camera import CAPTURE_SIZE, imread
 from pokecon.domain.coordinates import CoordinateMapper, fit_rect
 from pokecon.domain.gdi_surface import GdiSurface
 from pokecon.domain.preview_phase import PhaseLock
@@ -720,16 +720,7 @@ class CaptureArea(tk.Frame):
         弾かれ、「カメラが止まった」絵が一度も画面に出ない。
         """
         width, height = CAPTURE_SIZE
-        # cv2.imread はWindowsで非ASCIIパスを開けない（このリポジトリの
-        # ワークスペース名が日本語だと必ず None）。np.fromfileは開けるので
-        # バイト列を読んでから imdecode する。
-        img: Any = None
-        try:
-            buf: Any = np.fromfile(DISABLED_IMAGE_PATH, dtype=np.uint8)
-            if buf.size:
-                img = cv2.imdecode(buf, cv2.IMREAD_COLOR)
-        except Exception:
-            img = None
+        img = imread(DISABLED_IMAGE_PATH)
         if img is None:
             logger.warning(f"disabled image not found: {DISABLED_IMAGE_PATH}")
             return np.zeros((height, width, 3), np.uint8)

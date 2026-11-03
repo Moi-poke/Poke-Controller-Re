@@ -168,6 +168,24 @@ def _configure_capture(
 # ---------------------------------------------------------------------------
 
 
+def imread(filename: str, flags: int = cv2.IMREAD_COLOR) -> np.ndarray | None:
+    """日本語を含むパスからも読める cv2.imread の代替。
+
+    cv2.imread は Windows で非 ASCII のパスを開けず、実在する画像でも
+    None を返す（このリポジトリのワークスペース名が日本語だと必ずなる）。
+    np.fromfile でバイト列を読んでから imdecode する。読めなければ None。
+    """
+    try:
+        buf: Any = np.fromfile(filename, dtype=np.uint8)
+        if not isinstance(buf, np.ndarray) or buf.size == 0:
+            return None
+        decoded: Any = cv2.imdecode(buf, flags)
+        return decoded if isinstance(decoded, np.ndarray) else None
+    except Exception as e:
+        logger.error(f"Image Read Error: {filename}: {e}")
+        return None
+
+
 def imwrite(filename: str, img: np.ndarray, params: Any = None) -> bool:
     """日本語を含むパスへも書き込める cv2.imwrite の代替."""
     try:
