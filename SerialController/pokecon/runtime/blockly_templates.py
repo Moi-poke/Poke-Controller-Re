@@ -50,16 +50,41 @@ DYNAMIC_TEMPLATE_HINT = (
 )
 
 
+def _is_icon_store(path: Path, base: Path) -> bool:
+    """`Template/<pkg>/<set>/icons/` の直下か（表示専用アイコン）。
+
+    `Template/icons/` のようにセットの外にある `icons` は除外しない
+    （既存の認識テンプレートを消さないため）。
+    """
+    parent = path.parent
+    if parent.name != "icons" or parent.parent == base:
+        return False
+    try:
+        return any(
+            child.is_file() and child.suffix.lower() in _IMAGE_SUFFIXES
+            for child in parent.parent.iterdir()
+            if child != parent
+        )
+    except OSError:
+        return False
+
+
 def list_image_templates(app_dir: str | Path) -> list[str]:
-    """`Template/` 以下の画像を相対（posix）で名前順に返す。無ければ空。"""
+    """`Template/` 以下の画像を相対（posix）で名前順に返す。無ければ空。
+
+    セット直下の `icons/` は表示専用なので候補から外す。
+    """
     base = Path(app_dir) / TEMPLATE_DIR_REL
     if not base.is_dir():
         return []
     found: list[str] = []
     for path in base.rglob("*"):
-        if path.is_file() and path.suffix.lower() in _IMAGE_SUFFIXES:
-            rel = path.relative_to(base).as_posix()
-            found.append(PurePosixPath(rel).as_posix())
+        if not path.is_file() or path.suffix.lower() not in _IMAGE_SUFFIXES:
+            continue
+        if _is_icon_store(path, base):
+            continue
+        rel = path.relative_to(base).as_posix()
+        found.append(PurePosixPath(rel).as_posix())
     return sorted(found)
 
 
@@ -133,8 +158,22 @@ def _template_args(python_code: str) -> list[str]:
     return args
 
 
+def _is_option_template_call(node: ast.expr) -> bool:
+    """`self.option_template(...)` の直接指定か。"""
+    return (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "option_template"
+    )
+
+
 def _has_dynamic_template_arg(python_code: str) -> bool:
-    """動的なテンプレ指定があれば True（保存は通し警告だけ出す）。"""
+    """動的なテンプレ指定があれば True（保存は通し警告だけ出す）。
+
+    セットの値から解決する `self.option_template(...)` の直接指定は、
+    実在を保存時に確かめられるため「不明な動的指定」として警告しない。
+    文字列連結などで包まれていれば従来どおり警告する。
+    """
     try:
         tree = ast.parse(python_code)
     except SyntaxError:
@@ -146,7 +185,8 @@ def _has_dynamic_template_arg(python_code: str) -> bool:
         if not (isinstance(func, ast.Attribute) and func.attr in VISION_TEMPLATE_APIS):
             continue
         if node.args and _is_dynamic(node.args[0]):
-            return True
+            if not _is_option_template_call(node.args[0]):
+                return True
         for kw in node.keywords:
             if kw.arg in _TEMPLATE_PATH_KWS and _static_value(kw.value) is None:
                 return True

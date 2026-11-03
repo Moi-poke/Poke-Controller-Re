@@ -345,14 +345,18 @@ function checkTopBlocks(workspace) {
   for (const block of tops) {
     if (block.type === "pokecon_program") {
       programs += 1;
-    } else if (block.type !== "pokecon_sub_def") {
+    } else if (
+      block.type !== "pokecon_sub_def" &&
+      block.type !== "pokecon_input_choice" &&
+      block.type !== "pokecon_input_int"
+    ) {
       bad.push(block.type);
     }
   }
   const errors = [];
   if (bad.length) {
     errors.push(
-      "プログラムの外にブロックがあります（pokecon_program / pokecon_sub_def の外へは置けません）: " +
+      "プログラムの外にブロックがあります（プログラム・サブルーチン定義・入力宣言の外へは置けません）: " +
         bad.join(", "),
     );
   }

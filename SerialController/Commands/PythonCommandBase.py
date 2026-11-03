@@ -56,12 +56,19 @@ from pokecon.app.DiscordNotify import Discord_Notify
 # 回復可能なエラーの分類と、利用者への再試行の案内。利用者スクリプトが
 #   from Commands.PythonCommandBase import RecoverableError
 # と書けるよう、ここから再公開する（実体は core.recovery）。
+from pokecon.domain import option_sets
 from pokecon.domain.recovery import (
     RecoverableError as RecoverableError,
     RecoveryAborted as RecoveryAborted,
     RecoveryAdvice as RecoveryAdvice,
     classify as classifyRecoverable,
 )
+
+#: `input_value` の既定値未指定を表す番兵（None を明示の既定値にできる）。
+_MISSING = object()
+
+#: アプリのディレクトリ（`Template/` の親）。
+_POKECON_APP_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 def _begin_timer_period() -> None:
@@ -88,6 +95,10 @@ _begin_timer_period()
 
 # Python command
 class PythonCommand(CommandBase.Command, OperateMixin, DialogMixin):
+    #: 実行時引数の宣言。Start 直前に GUI/answers/既定値で値を確定する。
+    #: 生成コードはここへ `POKECON_INPUTS` を出す。空なら従来どおり。
+    POKECON_INPUTS: Any = ()
+
     def __init__(self) -> None:
         super().__init__()
         # この操作が「誰のものか」を表す名札。
@@ -122,6 +133,9 @@ class PythonCommand(CommandBase.Command, OperateMixin, DialogMixin):
         # ことになるため、値だけを受け取る。無ければ reload_com_port は
         # 理由を出して False を返す（設定ファイルを読み直さない）。
         self.serial_config: dict[str, Any] | None = None
+        # Start 前に確定した実行時引数（key → 値）。
+        # GUI が `pokecon_input_values` を設定し、do() は input_value で読む。
+        self.pokecon_input_values: dict[str, Any] = {}
 
         # __post_init__ は do_safe 経由でしか呼ばれない。do() を直接呼ぶ
         # 使い方をされたときに AttributeError にならないよう None で初期化する。
@@ -507,6 +521,41 @@ class PythonCommand(CommandBase.Command, OperateMixin, DialogMixin):
     def finish(self) -> None:
         self.alive = False
         self.checkIfAlive()
+
+    def input_value(self, key: str, default: Any = _MISSING) -> Any:
+        """Start 前に確定した実行時引数を返す。
+
+        `POKECON_INPUTS` の `key` を読む。未定義なら `KeyError`。
+        `default` を渡したときだけ、未定義の代わりにそれを返す。
+        """
+        values = getattr(self, "pokecon_input_values", None)
+        if isinstance(values, dict) and key in values:
+            return values[key]
+        if default is not _MISSING:
+            return default
+        raise KeyError(f"実行時引数がありません: {key}")
+
+    def option_template(self, set_name: str, value: Any) -> str:
+        """選択肢セットの値から、実在する画像のパス（拡張子込み）を返す。
+
+        セットに無い値・読めないセットは `OptionSetError`（回復可能）。
+        """
+        return option_sets.option_template(_POKECON_APP_DIR, set_name, value)
+
+    def pokecon_list(self, values: Any) -> Any:
+        """一覧ブロック用の型確認。文字列を部分一致で扱わない。"""
+        if not isinstance(values, (list, tuple)):
+            raise TypeError(
+                "一覧が必要です（単一選択の文字列が渡されています）: "
+                f"{type(values).__name__}"
+            )
+        return values
+
+    def pokecon_list_remove(self, values: Any, value: Any) -> None:
+        """一覧に値があれば外す（無ければ何もしない）。"""
+        target = self.pokecon_list(values)
+        if value in target:
+            target.remove(value)
 
     # -- 出力先の使い分け ---------------------------------------------------
 

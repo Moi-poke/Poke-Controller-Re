@@ -89,6 +89,14 @@ class TrialSession:
         self.error_block = ""
         #: 変数の今の値（表示用の文字列）。目印を通るたびに丸ごと差し替える。
         self.variables: dict[str, str] = {}
+        #: 実行時引数の待ち状態。`/run` の dialog ポリシーで使う。
+        #: `awaiting_input` の間は実行器に命令を渡していない。
+        self.awaiting_input = False
+        #: `none` / `awaiting` / `accepted` / `canceled` / `failed`。
+        self.input_status = "none"
+        #: 確定した引数と、その出どころ（answer/default/dialog）。
+        self.inputs: dict[str, Any] = {}
+        self.input_sources: dict[str, str] = {}
         #: 目印を通るたびに呼ぶ（検証用の差し口）。
         self.on_step: Any = None
         self._lock = threading.Lock()
@@ -144,6 +152,10 @@ class TrialSession:
             "logs": [list(item) for item in self.logs_since(int(since))],
             "vars": [[name, self.variables[name]] for name in sorted(self.variables)],
             "timedOut": self.timed_out,
+            "awaitingInput": self.awaiting_input,
+            "inputStatus": self.input_status,
+            "inputs": dict(self.inputs),
+            "inputSources": dict(self.input_sources),
         }
 
     # -- 作業スレッドから呼ばれる ---------------------------------------------

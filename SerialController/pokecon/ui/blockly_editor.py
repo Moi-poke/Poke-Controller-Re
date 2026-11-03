@@ -29,7 +29,7 @@ from concurrent.futures import Future
 from pathlib import Path
 from typing import Any
 
-from pokecon.domain import blockly_headless
+from pokecon.domain import blockly_headless, blockly_validate, inputs as input_specs
 from pokecon.runtime import (
     blockly_author,
     blockly_capture,
@@ -41,7 +41,7 @@ from pokecon.runtime import (
     blockly_save,
     blockly_templates,
 )
-from pokecon.ui import WindowUtils
+from pokecon.ui import WindowUtils, input_dialog
 
 _BLOCKLY_DIR = Path(WindowUtils.APP_DIR) / "assets" / "blockly"
 
@@ -141,7 +141,12 @@ _GUI_CALLS: queue.Queue[tuple[Callable[[], Any], Future[Any]]] = queue.Queue()
 GUI_CALL_TIMEOUT_S = 5.0
 
 #: `/run/state` が名乗る機能。ブラウザ側は見て分岐できる（今は表示に使わない）。
-RUN_CAPABILITIES = ["boundedTrial", "runIdControl"]
+RUN_CAPABILITIES = [
+    "boundedTrial",
+    "runIdControl",
+    "inputAnswers",
+    "awaitingInput",
+]
 
 #: runId が無い・古いときに返す理由（別の試し実行へ切り替わった）。
 RUN_SWITCHED_MESSAGE = "試し実行が切り替わったため操作しません"
@@ -352,10 +357,16 @@ def _run_state(since: int) -> dict[str, Any]:
         except Exception:
             busy = False
     cmd = _our_command(trial)
-    if trial is not None and cmd is None and trial.session.running:
+    if (
+        trial is not None
+        and cmd is None
+        and trial.session.running
+        and not trial.session.awaiting_input
+    ):
         # 結果は後始末の手前で決まるため、走り終えたなら実行器が空く前に出ている。
         # 結果が無いまま実行器が手放した（止まらない作業を打ち切った）ときは、
         # 編集画面が「実行中」のまま待ち続けないよう停止として閉じる。
+        # 入力待ちの間は実行器に渡していないので、ここでは閉じない。
         trial.session.end("停止")
     if trial is None:
         state: dict[str, Any] = {
@@ -368,6 +379,10 @@ def _run_state(since: int) -> dict[str, Any]:
             "logs": [],
             "vars": [],
             "timedOut": False,
+            "awaitingInput": False,
+            "inputStatus": "none",
+            "inputs": {},
+            "inputSources": {},
         }
     else:
         state = trial.session.snapshot(since)
@@ -377,6 +392,7 @@ def _run_state(since: int) -> dict[str, Any]:
             paused = bool(cmd.isPaused())
         except Exception:
             paused = False
+    busy = busy or bool(trial is not None and trial.session.awaiting_input)
     state.update(
         {
             "available": host is not None,
@@ -1015,7 +1031,13 @@ class _Handler(http.server.SimpleHTTPRequestHandler):
         )
 
     def _start_trial(self, payload: dict[str, Any]) -> None:
-        """保存せずに今の組み立てを本体の実行器で走らせる（試し実行）。"""
+        """保存せずに今の組み立てを本体の実行器で走らせる（試し実行）。
+
+        実行時引数（`POKECON_INPUTS`）があるときは、開始前に
+        answers → ポリシー（dialog / default / fail）で確定する。
+        dialog は GUI スレッドで表示を予約してすぐ応答し、結果は
+        `/run/state` で返す（HTTP 応答を待たせない）。
+        """
         global _TRIAL, _BREAKPOINTS
         host = _RUN_HOST
         if host is None:
@@ -1031,9 +1053,58 @@ class _Handler(http.server.SimpleHTTPRequestHandler):
                 "操作の記録中は試し実行できません（記録を止めてから試してください）",
             )
             return
+        current = _TRIAL
+        if current is not None and current.session.awaiting_input:
+            self._reply(
+                False,
+                "実行時引数の入力中です（先に閉じてください）",
+            )
+            return
         allowed, max_seconds, reason = _parse_max_seconds(payload)
         if not allowed:
             self._reply(False, reason)
+            return
+        policy = payload.get("inputPolicy", "dialog")
+        if not isinstance(policy, str) or policy not in input_specs.POLICIES:
+            self._reply(
+                False,
+                "inputPolicy は dialog / default / fail のどれかにしてください",
+            )
+            return
+        answers = payload.get("answers", {})
+        if answers is None:
+            answers = {}
+        if not isinstance(answers, dict):
+            self._reply(False, "answers は key → 値のオブジェクトで書いてください")
+            return
+        code = str(payload.get("code", ""))
+        raw_spec, spec_errors = input_specs.raw_spec_from_code(code)
+        if spec_errors:
+            self._reply(False, "実行できません:\n- " + "\n- ".join(spec_errors))
+            return
+        specs, spec_errors = input_specs.parse_spec(raw_spec, WindowUtils.APP_DIR)
+        if spec_errors:
+            self._reply(False, "実行時引数が不正です:\n- " + "\n- ".join(spec_errors))
+            return
+        input_errors = blockly_validate.validate_input_code(code, WindowUtils.APP_DIR)
+        if input_errors:
+            self._reply(False, "実行時引数が不正です:\n- " + "\n- ".join(input_errors))
+            return
+        resolution = input_specs.resolve(specs, answers, policy, WindowUtils.APP_DIR)
+        if resolution.errors:
+            self._reply(
+                False, "実行時引数が不正です:\n- " + "\n- ".join(resolution.errors)
+            )
+            return
+        if resolution.missing and policy in ("fail", "default"):
+            self._reply(
+                False,
+                "実行時引数が足りません",
+                {
+                    "status": "input_required",
+                    "inputRequired": resolution.missing,
+                },
+            )
             return
         if "breakpoints" in payload:
             _BREAKPOINTS = _as_ids(payload.get("breakpoints"))
@@ -1043,28 +1114,27 @@ class _Handler(http.server.SimpleHTTPRequestHandler):
         if isinstance(run_to, str) and run_to:
             # 行き先が来なくても止まらないだけ（走らせる前に断らない）。
             session.run_to = run_to
-        cls, errors = blockly_run.build_trial_class(
-            str(payload.get("code", "")), session
-        )
+        cls, errors = blockly_run.build_trial_class(code, session)
         if cls is None:
             self._reply(False, "実行できません:\n- " + "\n- ".join(errors))
             return
         trial = _Trial(session, cls)
 
-        def _begin() -> str | None:
-            """混雑の確認・開始・公開をまとめて GUI スレッドで行う。
-
-            受け口のスレッドが別々に確かめると、その間に別の実行が始まって
-            対象を取り違える。期限もここ（開始の直前）で取る。
-            """
+        def _finish_start(
+            values: dict[str, Any], sources: dict[str, str]
+        ) -> str | None:
+            """期限を引数確定後に取り、実行器へ渡す。"""
             global _TRIAL
+            session.inputs = dict(values)
+            session.input_sources = dict(sources)
+            session.input_status = "accepted" if specs else "none"
+            session.awaiting_input = False
             if max_seconds is not None:
                 session.deadline = time.monotonic() + max_seconds
             try:
-                message = host.start_external_command(cls)
+                message = host.start_external_command(cls, values)
             except Exception:
-                # 開始の後の手順（一覧の作り直し等）で落ちても、走っていれば追跡する。
-                # 追跡しないと編集画面から見えず、止めることもできない。
+                # 開始の後の手順で落ちても、走っていれば追跡する。
                 if _our_command(trial) is not None:
                     _TRIAL = trial
                 raise
@@ -1072,22 +1142,115 @@ class _Handler(http.server.SimpleHTTPRequestHandler):
                 _TRIAL = trial
             return message
 
-        try:
-            message = _call_on_gui(_begin)
-        except Exception as e:
-            if _TRIAL is trial:
-                self._reply(
-                    True,
-                    f"試し実行を始めました（本体で注意: {e}）",
-                    {"runId": session.run_id},
-                )
+        def _begin() -> str | None:
+            """混雑の確認・開始・公開をまとめて GUI スレッドで行う。"""
+            if host.runner.is_busy():
+                return "本体で別のコマンドが実行中です（止めてから試してください）"
+            if input_dialog.is_open():
+                return "実行時引数の入力中です（先に閉じてください）"
+            return _finish_start(resolution.values, resolution.sources)
+
+        if not resolution.missing:
+            try:
+                message = _call_on_gui(_begin)
+            except Exception as e:
+                if _TRIAL is trial:
+                    self._reply(
+                        True,
+                        f"試し実行を始めました（本体で注意: {e}）",
+                        {"runId": session.run_id},
+                    )
+                    return
+                self._reply(False, f"本体が応答しません: {e}")
                 return
+            if message:
+                self._reply(False, str(message))
+                return
+            self._reply(True, "試し実行を始めました", {"runId": session.run_id})
+            return
+
+        # dialog ポリシー: 表示だけ予約し、HTTP はすぐ返す。
+        def _show_input() -> None:
+            root = getattr(host, "root", None)
+            try:
+                result = input_dialog.prompt(
+                    root, raw_spec, WindowUtils.APP_DIR, initial=resolution.values
+                )
+            except Exception as e:
+                session.awaiting_input = False
+                session.input_status = "failed"
+                session.fail(f"実行時引数の入力を開けません: {e}")
+                session.end("エラー")
+                return
+            if result.values is None:
+                session.awaiting_input = False
+                if result.error:
+                    session.input_status = "failed"
+                    session.fail(result.error)
+                    session.end("エラー")
+                else:
+                    session.input_status = "canceled"
+                    session.log("実行時引数の入力を取り消しました")
+                    session.end("停止")
+                return
+            resolved = input_specs.resolve(
+                specs,
+                answers,
+                "dialog",
+                WindowUtils.APP_DIR,
+                dialog_values=result.values,
+            )
+            if resolved.errors or resolved.missing:
+                session.awaiting_input = False
+                session.input_status = "failed"
+                session.fail(
+                    "実行時引数が不正です: "
+                    + "; ".join(
+                        resolved.errors + [item["key"] for item in resolved.missing]
+                    )
+                )
+                session.end("エラー")
+                return
+            try:
+                message = _finish_start(resolved.values, resolved.sources)
+            except Exception as e:
+                session.fail(f"試し実行を開始できません: {e}")
+                session.end("エラー")
+                return
+            if message:
+                session.fail(message)
+                session.end("エラー")
+
+        def _reserve() -> str | None:
+            global _TRIAL
+            if host.runner.is_busy():
+                return "本体で別のコマンドが実行中です（止めてから試してください）"
+            if input_dialog.is_open():
+                return "実行時引数の入力中です（先に閉じてください）"
+            root = getattr(host, "root", None)
+            if root is None:
+                return "本体の画面が無いため引数ダイアログを開けません"
+            _TRIAL = trial
+            session.awaiting_input = True
+            session.input_status = "awaiting"
+            session.inputs = dict(resolution.values)
+            session.input_sources = dict(resolution.sources)
+            root.after(0, _show_input)
+            return None
+
+        try:
+            message = _call_on_gui(_reserve)
+        except Exception as e:
             self._reply(False, f"本体が応答しません: {e}")
             return
         if message:
             self._reply(False, str(message))
             return
-        self._reply(True, "試し実行を始めました", {"runId": session.run_id})
+        self._reply(
+            True,
+            "実行時引数の入力を待っています",
+            {"runId": session.run_id, "status": "awaiting_input"},
+        )
 
     def _control_trial(self, payload: dict[str, Any]) -> None:
         """試し実行の停止・一時停止・再開・1つ進む・区切りの差し替え。
@@ -1115,6 +1278,13 @@ class _Handler(http.server.SimpleHTTPRequestHandler):
                 _BREAKPOINTS = _as_ids(payload.get("breakpoints"))
                 session.breakpoints = _BREAKPOINTS
                 return (True, "")
+            if session.awaiting_input:
+                if action == "stop":
+                    # 表示中の引数ダイアログを閉じる。閉じた結果は
+                    # /run/state の inputStatus:"canceled" で見える。
+                    input_dialog.cancel()
+                    return (True, "")
+                return (False, "実行時引数の入力を待っています")
             host = _RUN_HOST
             cmd = _our_command(trial)
             if host is None or cmd is None:

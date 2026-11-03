@@ -142,6 +142,25 @@
     // 浮いた塊を無効にし、つなぎ直した塊は有効へ戻す（手動の無効は触らない）。
     // 生成器は無効ブロックを飛ばして「次」へ進むため、塊の後続まで無効にする。
     // Blockly標準の disableOrphans は描画用ワークスペース専用のため自前で持つ。
+    // TEMPLATE_EXPR の接続に合わせて、固定欄の有効/無効とプレビューを
+    // 揃え直す。保存物の読込はイベントを止めて行われるため、画面側から
+    // 明示的に呼ぶ。
+    refreshTemplateFields: function (ws) {
+      if (!ws || typeof ws.getAllBlocks !== "function") {
+        return;
+      }
+      ws.getAllBlocks(false).forEach(function (b) {
+        var fn = b && b._pokeconRefreshTemplate;
+        if (typeof fn === "function") {
+          try {
+            fn();
+          } catch (e) {
+            /* 表示だけの更新。失敗しても編集は続ける */
+          }
+        }
+      });
+    },
+
     syncOrphans: function (ws) {
       var want = {};
       PokeconEditor.orphanBlocks(ws).forEach(function (top) {
@@ -198,6 +217,11 @@
     blocksMissingTemplate: function (ws) {
       return ws.getAllBlocks(false).filter(function (b) {
         if (!b.isEnabled() || typeof b.getField !== "function" || !b.getField("TEMPLATE")) {
+          return false;
+        }
+        // TEMPLATE_EXPR がつながっていれば固定欄が空でもよい。
+        var expr = typeof b.getInput === "function" ? b.getInput("TEMPLATE_EXPR") : null;
+        if (expr && expr.connection && expr.connection.targetBlock()) {
           return false;
         }
         return !String(b.getFieldValue("TEMPLATE") || "").trim();
@@ -589,7 +613,12 @@
       var START = "# @@pokecon:%1@@\n";
       var END = "# @@/pokecon:%1@@\n";
       var MARK_RE = /^[ \t]*# @@(\/?)pokecon:(?:"([^"]+)"|'([^']+)')@@[ \t]*$/;
-      var OUTER = { pokecon_program: true, pokecon_sub_def: true };
+      var OUTER = {
+        pokecon_program: true,
+        pokecon_sub_def: true,
+        pokecon_input_choice: true,
+        pokecon_input_int: true,
+      };
       var hadOwnScrub = Object.prototype.hasOwnProperty.call(gen, "scrub_");
       var prevScrub = gen.scrub_;
       var marked = "";

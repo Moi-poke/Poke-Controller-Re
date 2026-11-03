@@ -431,6 +431,7 @@ button.run:hover { background: #17793a; }
         { kind: 'block', type: 'pokecon_vision_press_until' },
         { kind: 'block', type: 'pokecon_vision_press_until_gone' },
         { kind: 'block', type: 'pokecon_vision_position' },
+        { kind: 'block', type: 'pokecon_option_template' },
         { kind: 'block', type: 'pokecon_vision_wait_stable' },
         { kind: 'block', type: 'pokecon_vision_wait_count' },
         { kind: 'block', type: 'pokecon_vision_count' },
@@ -447,6 +448,9 @@ button.run:hover { background: #17793a; }
         { kind: 'block', type: 'pokecon_dialog_choice' },
         { kind: 'block', type: 'pokecon_dialog_number' },
         { kind: 'block', type: 'pokecon_dialog_check' },
+        { kind: 'block', type: 'pokecon_input_choice' },
+        { kind: 'block', type: 'pokecon_input_int' },
+        { kind: 'block', type: 'pokecon_input_get' },
       ] },
       { kind: 'category', name: '計算・論理', colour: '230', contents: [
         { kind: 'block', type: 'logic_compare' },
@@ -461,6 +465,9 @@ button.run:hover { background: #17793a; }
         { kind: 'block', type: 'math_random_float' },
         { kind: 'block', type: 'text' },
         { kind: 'block', type: 'text_join' },
+        { kind: 'block', type: 'pokecon_list_has' },
+        { kind: 'block', type: 'pokecon_list_remove' },
+        { kind: 'block', type: 'pokecon_list_empty' },
       ] },
       { kind: 'category', name: '変数', colour: '330', custom: 'VARIABLE' },
       { kind: 'category', name: 'サブルーチン', colour: '290', contents: [
@@ -923,6 +930,7 @@ button.run:hover { background: #17793a; }
     ws.clear();
     Blockly.serialization.workspaces.load(state, ws);
     if (E) { E.syncOrphans(ws); }
+    if (E && E.refreshTemplateFields) { E.refreshTemplateFields(ws); }
     ws.getAllBlocks(false).forEach(function (b) {
       if (typeof b.getField !== 'function') { return; }
       var t = b.getField('TEMPLATE'), p = b.getField('PREVIEW');
@@ -2015,7 +2023,12 @@ button.run:hover { background: #17793a; }
       run.runId = j.runId;
       setRunUi(true, false);
       if (previewOn) { showPaneTab('log'); }
-      setStatus('試し実行中です（編集しても、走っている内容は変わりません）', false);
+      setStatus(
+        j.status === 'awaiting_input'
+          ? '本体で実行時引数の入力を待っています…'
+          : '試し実行中です（編集しても、走っている内容は変わりません）',
+        false,
+      );
       pollRun();
     }).catch(function (e) {
       setRunUi(false, false);
@@ -2036,6 +2049,14 @@ button.run:hover { background: #17793a; }
       }
       appendRunLog(s.logs);
       updateRunVars(s.vars);
+      if (s.awaitingInput) {
+        // 引数ダイアログは本体側。ここは待ち状態を出してポーリングを続ける。
+        lightBlock(null);
+        setRunUi(true, false);
+        setStatus('本体で実行時引数の入力を待っています…', false);
+        run.timer = setTimeout(pollRun, 300);
+        return;
+      }
       if (s.running) {
         lightBlock(s.blockId);
         setRunUi(true, s.paused);
@@ -2080,6 +2101,10 @@ button.run:hover { background: #17793a; }
     run.pauseNotified = false;
     runToWait = null;
     // 変数の最後の値は残す（次の実行開始で消す）。
+    if (s.inputStatus === 'canceled') {
+      setStatus('実行時引数の指定を取り消したため、試し実行は開始しませんでした', false);
+      return;
+    }
     var result = s.result || '終了';
     if (result === 'エラー') {
       var msg = s.error || '（本体のログ欄を確認してください）';
@@ -2288,6 +2313,7 @@ button.run:hover { background: #17793a; }
     } catch (e) {
       return 'workspace を読み込めません: ' + String((e && e.message) || e);
     }
+    if (E && E.refreshTemplateFields) { E.refreshTemplateFields(ws); }
     try { if (typeof ws.scroll === 'function') { ws.scroll(x, y); } } catch (e) { /* 続ける */ }
     try { if (typeof ws.setScale === 'function') { ws.setScale(scale); } } catch (e) { /* 続ける */ }
     // 構造変更は読み込み直しのため、既存の元に戻す履歴とは混ぜない。

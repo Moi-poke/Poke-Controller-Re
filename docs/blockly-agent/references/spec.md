@@ -422,6 +422,25 @@ GUI 編集済み作品を古い仕様から作り直さず、workspace の ID・
 - `.py` を直接編集しない。手編集を検出した通常保存は拒否され、明示許可時だけ `--overwrite-external` を使う（[手順](../README.md)）。
 - 既存作品を上書きするときはユーザーの意図を確認し、保存済み workspace から `patch` する。ディスクの版検査はブラウザの未保存編集を検出しない。
 
+## 実行時引数（workspace / patch）
+
+`POKECON_INPUTS`（Start 前の引数）と、その値を使うブロックは、現行の
+コンパクト仕様には専用の短縮形が**ない**。新規に組むときは workspace JSON を
+直接書くか、`patch` の `create_block` / `set_field` / `connect` で作る。
+
+| ブロック | 主な fields / inputs |
+| --- | --- |
+| `pokecon_input_choice` | `KEY`, `TITLE`, `SET`, `MULTI`, `DEFAULT`, `LABELS`（`値=表示名;…`） |
+| `pokecon_input_int` | `KEY`, `TITLE`, `MIN`, `MAX`, `DEFAULT`, `ALLOW_UNLIMITED`, `DEFAULT_UNLIMITED` |
+| `pokecon_input_get` | `KEY`。値ブロック |
+| `pokecon_option_template` | `SET` + `VALUE`。値から実在する画像パスを返す |
+| `pokecon_for_each` | `VAR` + `LIST`、`DO` |
+| `pokecon_repeat_limit` | `VAR` + `LIMIT`、`DO`（上限が None なら回り続ける） |
+| `pokecon_list_has` / `pokecon_list_remove` / `pokecon_list_empty` | `LIST`（+ `VALUE`） |
+
+宣言ブロックはトップレベルに置く（プログラムの外でもよい）。画像認識ブロックの
+`TEMPLATE_EXPR` につないだ式は固定の `TEMPLATE` 欄より優先される。
+
 ## 関連
 
 - [手順](../README.md) — 作成・保存済み作品の部分編集・ライブ編集。

@@ -144,3 +144,48 @@ def test_set_pause_only_changes_when_needed() -> None:
     assert running.paused is True
     panel.set_running_paused(False)
     assert running.paused is False
+
+
+def test_external_start_passes_resolved_inputs() -> None:
+    """開始前に確定した引数を、走らせる実体へ渡すこと。"""
+    panel = make_panel()
+    message = panel.start_external_command(_PausingCommand, {"targets": ["a"]})
+    assert message is None
+    assert panel.built[0].pokecon_input_values == {"targets": ["a"]}
+
+
+def test_external_start_is_refused_while_input_dialog_is_open(monkeypatch: Any) -> None:
+    """引数ダイアログ表示中は、別の試し実行を始めないこと。"""
+    from pokecon.ui import input_dialog
+
+    panel = make_panel()
+    monkeypatch.setattr(input_dialog, "is_open", lambda: True)
+    message = panel.start_external_command(_PausingCommand)
+    assert message and "引数" in message
+    assert panel.built == []
+
+
+def test_start_inputs_prompt_and_cancel(monkeypatch: Any) -> None:
+    """Start 前の引数は1回だけ聞き、取消なら開始しないこと。"""
+    from pokecon.ui import input_dialog
+
+    panel = make_panel()
+    panel.root = None
+
+    class _WithInputs(_PausingCommand):
+        POKECON_INPUTS = [{"key": "n", "kind": "int", "min": 1, "max": 5}]
+
+    panel.cur_command = _WithInputs()
+    monkeypatch.setattr(
+        input_dialog,
+        "prompt",
+        lambda *a, **k: input_dialog.PromptResult(values={"n": 3}),
+    )
+    assert panel._resolve_start_inputs(panel.cur_command) is True
+    assert panel.cur_command.pokecon_input_values == {"n": 3}
+
+    monkeypatch.setattr(
+        input_dialog, "prompt", lambda *a, **k: input_dialog.PromptResult(canceled=True)
+    )
+    assert panel._resolve_start_inputs(panel.cur_command) is False
+    assert panel.runner.state == "idle"

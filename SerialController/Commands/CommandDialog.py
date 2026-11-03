@@ -26,6 +26,7 @@ PythonCommandBase.py から対話部を切り出したもの。
 
 from __future__ import annotations
 
+import base64
 import os
 import queue
 import subprocess
@@ -38,6 +39,7 @@ from collections.abc import Callable
 from typing import Any, cast
 
 from loguru import logger
+from pokecon.domain import dialog_gallery
 from pokecon.domain.recovery import RecoveryAdvice
 
 # 作業側→GUI側の委譲待ち行列。作業スレッドはTkを触らず積むだけにし、
@@ -549,6 +551,297 @@ class DialogMixin:
         return None
 
 
+class _ChoiceValue:
+    """choice widget の値。`ok_command` は `.get()` だけを使う。"""
+
+    def __init__(self, grid: _ChoiceGrid) -> None:
+        self._grid = grid
+
+    def get(self) -> str | list[str]:
+        return self._grid.value()
+
+    def valid(self) -> bool:
+        return self._grid.valid()
+
+
+class _ChoiceGrid:
+    """アイコン付きのチェック式グリッド（GUI スレッド専用）。
+
+    項目は `(値, 表示名, アイコンの実パス)`。アイコンが無い/読めない
+    ときは文字だけ出す。選択状態はフィルタとは別に持ち、検索中も
+    消えない。複数選択で0件のときは `valid()` が False になり、OK を
+    無効にする。
+    """
+
+    def __init__(
+        self,
+        parent: Any,
+        items: list[Any],
+        default: Any = None,
+        *,
+        multi: bool = False,
+        thumb: int = 40,
+        on_change: Callable[[], None] | None = None,
+    ) -> None:
+        self.frame = ttk.Frame(parent)
+        self._multi = bool(multi)
+        self._thumb = max(16, min(96, int(thumb)))
+        self._on_change = on_change or (lambda: None)
+        self._items: list[tuple[str, str, str]] = []
+        for entry in items:
+            if isinstance(entry, (list, tuple)) and entry:
+                value = str(entry[0])
+                label = str(entry[1]) if len(entry) > 1 else value
+                icon = str(entry[2]) if len(entry) > 2 else ""
+                self._items.append((value, label, icon))
+            elif isinstance(entry, str):
+                self._items.append((entry, entry, ""))
+        self._values = [value for value, _, _ in self._items]
+        self._selected: set[str] = set()
+        self._images: list[Any] = []
+        self._tiles: dict[str, tk.Frame] = {}
+        self._marks: dict[str, tk.Label] = {}
+        self._query = tk.StringVar(value="")
+        self._count = ttk.Label(self.frame, text="")
+        self._canvas: tk.Canvas | None
+        self._body: ttk.Frame
+        self._search: ttk.Entry | None = None
+
+        self._build_toolbar()
+        self._build_canvas()
+        self._build_tiles()
+        self._apply_initial(default)
+        self._apply_filter()
+        self._refresh()
+
+    # -- 組み立て ---------------------------------------------------------
+    def _build_toolbar(self) -> None:
+        bar = ttk.Frame(self.frame)
+        bar.pack(fill="x", padx=2, pady=(2, 4))
+        if self._multi:
+            ttk.Button(bar, text="全選択", command=self._select_all).pack(side="left")
+            ttk.Button(bar, text="全解除", command=self._clear_all).pack(
+                side="left", padx=(4, 8)
+            )
+        self._count.pack(side="right")
+        if len(self._items) > 12:
+            self._search = ttk.Entry(bar, textvariable=self._query)
+            self._search.pack(side="left", fill="x", expand=True, padx=(4, 6))
+            self._query.trace_add("write", lambda *_: self._apply_filter())
+
+    def _build_canvas(self) -> None:
+        rows = max(1, (len(self._items) + 3) // 4)
+        if rows <= 3:
+            # 少ないときはスクロールバーを出さない（見た目のノイズを減らす）。
+            self._canvas = None  # type: ignore[assignment]
+            self._body = ttk.Frame(self.frame)
+            self._body.pack(fill="both", expand=True)
+            for column in range(4):
+                self._body.grid_columnconfigure(column, weight=1)
+            return
+        height = min(320, max(140, rows * (self._thumb + 50)))
+        wrap = ttk.Frame(self.frame)
+        wrap.pack(fill="both", expand=True)
+        canvas = tk.Canvas(
+            wrap,
+            height=height,
+            highlightthickness=0,
+            borderwidth=0,
+        )
+        self._canvas = canvas
+        scroll = ttk.Scrollbar(wrap, orient="vertical", command=canvas.yview)
+        canvas.configure(yscrollcommand=scroll.set)
+        canvas.pack(side="left", fill="both", expand=True)
+        scroll.pack(side="right", fill="y")
+        self._body = ttk.Frame(canvas)
+        window = canvas.create_window((0, 0), window=self._body, anchor="nw")
+        self._body.bind(
+            "<Configure>",
+            lambda _e: canvas.configure(scrollregion=canvas.bbox("all")),
+        )
+        canvas.bind(
+            "<Configure>",
+            lambda e: canvas.itemconfigure(window, width=e.width),
+        )
+        for column in range(4):
+            self._body.grid_columnconfigure(column, weight=1)
+
+    def _build_tiles(self) -> None:
+        for index, (value, label, icon) in enumerate(self._items):
+            tile = tk.Frame(
+                self._body,
+                bd=0,
+                highlightthickness=2,
+                highlightbackground="#c8c8c8",
+                padx=4,
+                pady=4,
+                cursor="hand2",
+            )
+            tile.grid(
+                row=index // 4,
+                column=index % 4,
+                padx=4,
+                pady=4,
+                sticky="nsew",
+            )
+            widgets: list[Any] = [tile]
+            png = dialog_gallery.thumbnail_png(icon, size=self._thumb) if icon else None
+            if png is not None:
+                image = tk.PhotoImage(data=base64.b64encode(png).decode("ascii"))
+                self._images.append(image)
+                image_label = tk.Label(tile, image=image, bd=0)
+                image_label.pack()
+                widgets.append(image_label)
+            else:
+                placeholder = tk.Label(tile, text="（画像なし）", bd=0)
+                placeholder.pack()
+                widgets.append(placeholder)
+            name_label = tk.Label(
+                tile,
+                text=label,
+                wraplength=88,
+                justify="center",
+                bd=0,
+            )
+            name_label.pack(fill="x")
+            widgets.append(name_label)
+            mark = tk.Label(tile, text="", bd=0)
+            mark.pack()
+            widgets.append(mark)
+            for widget in widgets:
+                widget.bind(
+                    "<Button-1>",
+                    lambda _event, v=value: self._toggle(v),
+                )
+            self._tiles[value] = tile
+            self._marks[value] = mark
+
+    # -- 状態 -------------------------------------------------------------
+    def _apply_initial(self, default: Any) -> None:
+        if self._multi:
+            if isinstance(default, str):
+                chosen = (
+                    []
+                    if not default.strip()
+                    else [part.strip() for part in default.split(",") if part.strip()]
+                )
+            elif isinstance(default, (list, tuple)):
+                chosen = [str(value) for value in default]
+            else:
+                chosen = []
+            if "*" in chosen:
+                chosen = list(self._values)
+            self._selected = {v for v in chosen if v in self._values}
+        else:
+            single = default
+            if isinstance(single, (list, tuple)) and single:
+                single = single[0]
+            text = str(single) if single is not None else ""
+            if text not in self._values and self._values:
+                text = self._values[0]
+            self._selected = {text} if text else set()
+
+    def _toggle(self, value: str) -> None:
+        if self._multi:
+            if value in self._selected:
+                self._selected.remove(value)
+            else:
+                self._selected.add(value)
+        else:
+            self._selected = {value}
+        self._refresh()
+
+    def _select_all(self) -> None:
+        self._selected = set(self._values)
+        self._refresh()
+
+    def _clear_all(self) -> None:
+        self._selected.clear()
+        self._refresh()
+
+    def _refresh(self) -> None:
+        for value, tile in self._tiles.items():
+            chosen = value in self._selected
+            tile.configure(highlightbackground="#2a6fdb" if chosen else "#c8c8c8")
+            mark = self._marks[value]
+            mark.configure(
+                text=("●" if chosen and not self._multi else "✓" if chosen else ""),
+                fg="#2a6fdb" if chosen else "#808080",
+            )
+        if self._multi:
+            self._count.configure(text=f"{len(self._selected)} / {len(self._items)} 件")
+        else:
+            self._count.configure(text="")
+        self._on_change()
+
+    def _apply_filter(self) -> None:
+        query = self._query.get().strip().casefold()
+        visible = 0
+        for value, label, _icon in self._items:
+            hit = not query or query in value.casefold() or query in label.casefold()
+            tile = self._tiles[value]
+            if hit:
+                tile.grid()
+                visible += 1
+            else:
+                tile.grid_remove()
+        if self._canvas is None:
+            return
+        try:
+            self._canvas.update_idletasks()
+            self._canvas.configure(scrollregion=self._canvas.bbox("all"))
+        except tk.TclError:
+            pass
+
+    def value(self) -> str | list[str]:
+        if self._multi:
+            return [value for value in self._values if value in self._selected]
+        for value in self._values:
+            if value in self._selected:
+                return value
+        return ""
+
+    def valid(self) -> bool:
+        if self._multi:
+            return bool(self._selected)
+        return bool(self.value())
+
+
+class _IntLimitValue:
+    """`int_limit` widget の値。チェック時は None（上限なし）。"""
+
+    def __init__(
+        self,
+        check: tk.BooleanVar,
+        entry: tk.StringVar,
+        minimum: int,
+        maximum: int,
+        allow_unlimited: bool,
+    ) -> None:
+        self._check = check
+        self._entry = entry
+        self._minimum = minimum
+        self._maximum = maximum
+        self._allow_unlimited = allow_unlimited
+
+    def get(self) -> str | None:
+        if self._allow_unlimited and bool(self._check.get()):
+            return None
+        return self._entry.get()
+
+    def valid(self) -> bool:
+        if self._allow_unlimited and bool(self._check.get()):
+            return True
+        text = str(self._entry.get()).strip()
+        if not text:
+            return False
+        try:
+            number = int(text)
+        except ValueError:
+            return False
+        return self._minimum <= number <= self._maximum
+
+
 def _copy_to_clipboard(widget: tk.Misc, text: str) -> None:
     """診断テキストをクリップボードへ入れる（GUI スレッドから呼ぶ）。"""
     top = widget.winfo_toplevel()
@@ -669,14 +962,16 @@ class PokeConDialogue:
     ) -> None:
         """
         pokecon用ダイアログ生成関数(注意:mode=0と1でmessageの取り扱いが大きく異なる。)
-        mode | int: 0のときEntryのみ、1のとき6種類のwidgetに対応
+        mode | int: 0のときEntryのみ、1のとき9種類のwidgetに対応
         title | str: タイトル
         message | mode=0の場合 : int/str/list: Entryのラベル、mode=1の場合 : list[widget, widget, ...]: widgetごとの設定をリスト化したもの
         widget | list : widgetごとの設定(ウィジェットの種類によってリストの中身は異なる。以下を参照。)
         checkbox/entry/colorentryの場合 : [type, subtitle, init]
         combobox/radiobutton/spinboxの場合 : [type, subtitle, selectlist, init] (例) ["Combo", "Combo(例)", ["hello", "world"], "hello"]、["RADIO", "Radio(例)", ["dog", "cat"],"dog"]、["Spin", "Spin(例)", list(map(str, range(10))), "3"]
         scaleの場合 : [type, subtitle, min, max, init, digit] (例) ["Scale", "scale(例)", 0, 100, 50.1, 2]
-        type | str: widgetの種類(check/combo/entry/colorentry/radio/spin/scaleのいずれか。大文字小文字は問わない)
+        choiceの場合 : [type, subtitle, items, default, options]（items は (値, 表示名, アイコンの実パス)、options は {"multi": bool, "thumb": int}）
+        int_limitの場合 : [type, subtitle, init, options]（options は {"min": int, "max": int, "allow_unlimited": bool, "unlimited": bool}）
+        type | str: widgetの種類(check/combo/entry/colorentry/radio/spin/scale/choice/int_limitのいずれか。大文字小文字は問わない)
         subtitle | str : widgetのタイトル
         init | checkboxの場合bool,scaleの場合int/float,その他str : 初期値
         selectlist | list : 項目のリスト
@@ -736,8 +1031,27 @@ class PokeConDialogue:
         self.Cancel.grid(column=1, row=1, sticky="ew")
         self.result.grid(column=0, columnspan=2, pady=5, row=2, sticky="ew")
         self.result.grid_anchor("center")
+        self._refresh_ok()
         self.main_frame.pack()
         self.message_dialogue.master.wait_window(self.message_dialogue)
+
+    def _refresh_ok(self) -> None:
+        """choice widget が0件のとき OK を押せないようにする。"""
+        button = getattr(self, "OK", None)
+        if button is None:
+            return
+        valid = True
+        for value in self.dialogue_ls.values():
+            check = getattr(value, "valid", None)
+            if callable(check):
+                try:
+                    if not check():
+                        valid = False
+                        break
+                except Exception:
+                    valid = False
+                    break
+        button.configure(state="normal" if valid else "disabled")
 
     def mode0(self, message: list | str | int) -> None:
         if type(message) is not list:
@@ -765,6 +1079,8 @@ class PokeConDialogue:
         "radio": 4,
         "spin": 4,
         "scale": 6,
+        "choice": 3,
+        "int_limit": 3,
     }
 
     @classmethod
@@ -817,8 +1133,78 @@ class PokeConDialogue:
             # widgetはすべてframeの中に入れる。scaleの場合、値を示すlabelもフレームの中に入れる。
             frame.append(ttk.LabelFrame(self.inputs, text=dialogue_list[i][1]))
 
+            # 整数（任意で「上限なし」）。範囲は Spinbox の上下限で示し、
+            # ラベルに「（1〜100）」のような補足を重ねない。
+            if dialogue_list[i][0].casefold() == "int_limit".casefold():
+                init = str(dialogue_list[i][2]) if len(dialogue_list[i]) > 2 else ""
+                options = (
+                    dialogue_list[i][3]
+                    if len(dialogue_list[i]) > 3
+                    and isinstance(dialogue_list[i][3], dict)
+                    else {}
+                )
+                minimum = int(options.get("min", 0))
+                maximum = int(options.get("max", 999999))
+                allow_unlimited = bool(options.get("allow_unlimited", False))
+                unlimited = bool(options.get("unlimited", False)) and allow_unlimited
+                limit_row = ttk.Frame(frame[i])
+                limit_row.pack(fill="x", padx=3, pady=3)
+                check_var = tk.BooleanVar(value=unlimited)
+                entry_var = tk.StringVar(value=init)
+                spin = ttk.Spinbox(
+                    limit_row,
+                    from_=minimum,
+                    to=maximum,
+                    textvariable=entry_var,
+                    width=12,
+                )
+
+                def refresh_int(
+                    *_args: object,
+                    spin: Any = spin,
+                    check_var: tk.BooleanVar = check_var,
+                    allow: bool = allow_unlimited,
+                ) -> None:
+                    spin.configure(
+                        state="disabled" if allow and check_var.get() else "normal"
+                    )
+                    self._refresh_ok()
+
+                if allow_unlimited:
+                    ttk.Checkbutton(
+                        limit_row,
+                        text="上限なし",
+                        variable=check_var,
+                        command=refresh_int,
+                    ).grid(column=0, row=0, sticky="w", padx=(0, 8))
+                spin.grid(column=1, row=0, sticky="w")
+                entry_var.trace_add("write", refresh_int)
+                refresh_int()
+                self.dialogue_ls[dialogue_list[i][1]] = _IntLimitValue(
+                    check_var, entry_var, minimum, maximum, allow_unlimited
+                )
+            # Choice grid（アイコン付き。単一/複数）
+            elif dialogue_list[i][0].casefold() == "choice".casefold():
+                items = dialogue_list[i][2] if len(dialogue_list[i]) > 2 else []
+                default = dialogue_list[i][3] if len(dialogue_list[i]) > 3 else None
+                options = (
+                    dialogue_list[i][4]
+                    if len(dialogue_list[i]) > 4
+                    and isinstance(dialogue_list[i][4], dict)
+                    else {}
+                )
+                grid = _ChoiceGrid(
+                    frame[i],
+                    list(items),
+                    default,
+                    multi=bool(options.get("multi", False)),
+                    thumb=int(options.get("thumb", 40)),
+                    on_change=self._refresh_ok,
+                )
+                grid.frame.pack(fill="both", expand=True)
+                self.dialogue_ls[dialogue_list[i][1]] = _ChoiceValue(grid)
             # Checkbox
-            if dialogue_list[i][0].casefold() == "check".casefold():
+            elif dialogue_list[i][0].casefold() == "check".casefold():
                 self.dialogue_ls[dialogue_list[i][1]] = tk.BooleanVar(
                     value=dialogue_list[i][2]
                 )
@@ -987,6 +1373,10 @@ class PokeConDialogue:
         self.isOK = False
 
     def ok_command(self) -> None:
+        for value in self.dialogue_ls.values():
+            check = getattr(value, "valid", None)
+            if callable(check) and not check():
+                return
         self._ls = [v.get() for k, v in self.dialogue_ls.items()]
         self.message_dialogue.destroy()
         self.isOK = True

@@ -1149,6 +1149,7 @@ def _inspect_workspace(
         errors.append("Blockly の生成コードが空です")
         return CheckResult(False, _dedupe(errors), warnings, workspace, "", stem)
     errors.extend(blockly_validate.validate_generated_code(code))
+    errors.extend(blockly_validate.validate_input_code(code, app_dir))
     errors.extend(blockly_templates.validate_template_refs(code))
     return CheckResult(not errors, _dedupe(errors), warnings, workspace, code, stem)
 
@@ -1215,6 +1216,11 @@ def _check_template_files(
         fields = block.get("fields")
         if not isinstance(fields, dict):
             fields = {}
+        inputs = block.get("inputs")
+        expr = inputs.get("TEMPLATE_EXPR") if isinstance(inputs, dict) else None
+        if isinstance(expr, dict) and isinstance(expr.get("block"), dict):
+            # 動的指定。実在は option_template 側（validate_input_code）で見る。
+            continue
         for spec in info.get("fields", []):
             if not isinstance(spec, dict):
                 continue

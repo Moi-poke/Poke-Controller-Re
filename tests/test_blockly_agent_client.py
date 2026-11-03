@@ -194,6 +194,29 @@ def test_start_trial_posts_code_breakpoints_and_the_limit(
         "code": "print('x')",
         "breakpoints": [],
         "maxSeconds": 1.5,
+        "inputPolicy": "fail",
+    }
+
+
+def test_start_trial_posts_answers_and_policy(
+    editor_server: tuple[str, _Recorder],
+) -> None:
+    """実行時引数とポリシーを /run へ渡すこと。"""
+    base, rec = editor_server
+    rec.routes["/run"] = _json({"ok": True, "runId": 3})
+    client = EditorClient(base)
+    client.start_trial(
+        "code",
+        max_seconds=2,
+        answers={"targets": ["a"], "n": 1},
+        input_policy="fail",
+    )
+    assert json.loads(rec.requests[-1]["body"]) == {
+        "code": "code",
+        "breakpoints": [],
+        "maxSeconds": 2.0,
+        "inputPolicy": "fail",
+        "answers": {"targets": ["a"], "n": 1},
     }
 
 
@@ -235,3 +258,21 @@ def test_a_redirect_is_not_followed(
     with pytest.raises(ValueError, match="HTTP 302"):
         EditorClient(base).frame()
     assert [request["path"] for request in rec.requests] == ["/frame"]
+
+
+def test_start_trial_returns_input_required_without_raising(
+    editor_server: tuple[str, _Recorder],
+) -> None:
+    """/run の input_required は失敗ではなく、そのまま受け取れること。"""
+    base, rec = editor_server
+    rec.routes["/run"] = _json(
+        {
+            "ok": False,
+            "status": "input_required",
+            "inputRequired": [{"key": "targets", "kind": "choice"}],
+        }
+    )
+    client = EditorClient(base)
+    response = client.start_trial("code", max_seconds=1)
+    assert response["status"] == "input_required"
+    assert response["inputRequired"][0]["key"] == "targets"

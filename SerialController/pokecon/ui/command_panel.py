@@ -21,7 +21,7 @@ from pokecon.domain.CommandLoader import CommandLoader
 from pokecon.domain.CommandTags import TAG_ALL
 from pokecon.runtime.command_runner import CommandRunner
 from pokecon.runtime.serial_service import SerialService
-from pokecon.ui import CommandPalette, TagEditor, WindowUtils
+from pokecon.ui import CommandPalette, TagEditor, WindowUtils, input_dialog
 from pokecon.ui.GuiAssets import CaptureAreaProxy
 from pokecon.ui.tab_fit import TabFit
 
@@ -792,11 +792,42 @@ class CommandPanelMixin:
         開始の手順そのものは runner が持つ。写しは Start の直前に
         行う。生成時に渡すと、そのあと COM ポートを選び直しても
         古い値のまま残る。
+
+        `POKECON_INPUTS` を宣言しているコマンドは、ここで実行時引数を
+        1回だけ聞く。取消なら開始しない（履歴にも残さない）。
         """
         self.assignCommand()
-        if self.cur_command is not None:
-            self._snapshotSerialConfig(self.cur_command)
-        self.runner.request_start(self.cur_command, self.serial.sender)
+        command = self.cur_command
+        if command is not None:
+            if not self._resolve_start_inputs(command):
+                return
+            self._snapshotSerialConfig(command)
+        self.runner.request_start(command, self.serial.sender)
+
+    def _resolve_start_inputs(self, command: Any) -> bool:
+        """開始前の引数を確定する。False なら開始しない。"""
+        spec = getattr(type(command), "POKECON_INPUTS", None)
+        if not spec:
+            command.pokecon_input_values = {}
+            return True
+        if self.runner.is_busy():
+            print("実行中は引数を指定できません")
+            logger.warning("Start refused while a command is running")
+            return False
+        if input_dialog.is_open():
+            print("引数の入力中です（先に閉じてください）")
+            return False
+        result = input_dialog.prompt(self.root, spec, WindowUtils.APP_DIR)
+        if result.values is None:
+            if result.error:
+                print(result.error)
+                logger.warning("Start refused at the input dialog: %s" % result.error)
+            else:
+                print("引数の指定を取り消しました")
+                logger.info("Start cancelled at the input dialog")
+            return False
+        command.pokecon_input_values = result.values
+        return True
 
     def stopPlay(self) -> None:
         """実行中のコマンドへ停止を要求する（手順は runner が持つ）。"""
@@ -886,18 +917,24 @@ class CommandPanelMixin:
         if paused != bool(self._paused):
             self._show_paused(paused)
 
-    def start_external_command(self, cmd_class: Any) -> str | None:
+    def start_external_command(
+        self, cmd_class: Any, input_values: dict[str, Any] | None = None
+    ) -> str | None:
         """一覧に無いクラス（編集画面の試し実行）を本体と同じ手順で走らせる。
 
         GUI スレッドから呼ぶ。開始できたら None、できなければ理由を返す。
         作る（_buildCommand）・COM の写し・開始（runner）は Start と同じ
         経路を通し、カメラ・音声・ダイアログの渡し方を揃える。
+        `input_values` は呼び出し側（/run）が確定済みの実行時引数。
         """
         if self.runner.is_busy():
             return "本体で別のコマンドが実行中です（止めてから試してください）"
+        if input_dialog.is_open():
+            return "実行時引数の入力中です（先に閉じてください）"
         command = self._buildCommand(cmd_class)
         if command is None:
             return "コマンドを作れませんでした（本体のログ欄を確認してください）"
+        command.pokecon_input_values = dict(input_values or {})
         self._snapshotSerialConfig(command)
         self.runner.request_start(command, self.serial.sender)
         if self.runner.running_command is not command:

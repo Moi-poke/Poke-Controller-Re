@@ -128,6 +128,7 @@ def save_blockly(
     errors.extend(blockly_validate.validate_workspace_json(workspace_json))
     errors.extend(blockly_validate.validate_generated_code(python_code))
     errors.extend(blockly_validate.validate_dialog_vars(workspace_json))
+    errors.extend(blockly_validate.validate_input_code(python_code, app_dir))
     # 深すぎるJSONは両方の検証が同じ異常を返すため、重複を落とす。
     errors = list(dict.fromkeys(errors))
     if errors:

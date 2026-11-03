@@ -89,6 +89,10 @@ _KNOWN_SELF_METHODS = frozenset(
         "discord_image",
         "dialogue",
         "dialogue6widget",
+        "input_value",
+        "option_template",
+        "pokecon_list",
+        "pokecon_list_remove",
         "isContainTemplate",
         "isContainTemplate_max",
         "isContainTemplateGPU",
@@ -307,6 +311,47 @@ def validate_generated_code(code: str) -> list[str]:
             errors.append('`NAME = "..."`（空でない文字）がありません')
             errors.append("`def do(self)` がありません")
     errors.extend(_check_subroutines(tree))
+    return errors
+
+
+def validate_input_code(code: str, app_dir: str | None = None) -> list[str]:
+    """生成コードの実行時引数（宣言・参照・option_template）を検査する。"""
+    from pokecon.domain import inputs as input_specs, option_sets
+
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return []
+    raw, errors = input_specs.raw_spec_from_code(code)
+    if errors:
+        return errors
+    specs, spec_errors = input_specs.parse_spec(raw, app_dir)
+    errors.extend(spec_errors)
+    keys = {spec.key for spec in specs}
+    for key in input_specs.input_keys_in_code(code):
+        if key not in keys:
+            errors.append(f"引数の key が宣言にありません: {key}")
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if not isinstance(func, ast.Attribute) or func.attr != "option_template":
+            continue
+        if not node.args or not isinstance(node.args[0], ast.Constant):
+            continue
+        set_name = node.args[0].value
+        if not isinstance(set_name, str):
+            continue
+        normalized = option_sets.normalize_set_name(set_name)
+        if normalized is None:
+            errors.append(f"option_template のセット名が不正です: {set_name!r}")
+            continue
+        if app_dir is None:
+            continue
+        try:
+            option_sets.list_items(app_dir, normalized)
+        except option_sets.OptionSetError as exc:
+            errors.append(f"option_template: {exc}")
     return errors
 
 

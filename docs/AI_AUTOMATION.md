@@ -57,3 +57,10 @@ uv run --frozen python tools/blockly_agent.py --help
 - [コンパクト仕様](blockly-agent/references/spec.md) / [CLI 契約](blockly-agent/references/cli.md) / [作例](blockly-agent/examples/)
 - [実画像からの認識準備と限定試行](blockly-agent/references/vision.md)
 - [人向けエディタ操作](BLOCKLY_EDITOR.md) / [検証範囲](BLOCKLY_AGENT_VERIFICATION.md)
+
+## 実行時引数つきの試し実行
+
+コマンドが `POKECON_INPUTS` を宣言している場合、`trial --allow-input --answers <file>`
+で Start 前の引数を渡せる（`--answers` の既定ポリシーは `fail`）。足りなければ
+`status:"input_required"` で開始せずに戻るので、`inputRequired` を見て直し、
+同じコードで再実行する。`--answers` の形は `{"key": 値}`。

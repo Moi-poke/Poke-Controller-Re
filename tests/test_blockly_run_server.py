@@ -45,6 +45,13 @@ class FakeRunner:
         return self.state != "idle"
 
 
+class _AfterNow:
+    """`root.after` の代役。その場で呼ぶ（テスト用）。"""
+
+    def after(self, _ms: int, fn: Any) -> None:
+        fn()
+
+
 class FakeHost:
     """本体の代役。受け取ったクラスを実際に偽の線で走らせる。"""
 
@@ -53,12 +60,16 @@ class FakeHost:
         self.started: list[Any] = []
         self.transport = FakeTransport()
         self.gui_threads: set[int] = set()
+        self.root = _AfterNow()
 
-    def start_external_command(self, cls: Any) -> str | None:
+    def start_external_command(
+        self, cls: Any, input_values: dict[str, Any] | None = None
+    ) -> str | None:
         self.gui_threads.add(threading.get_ident())
         if self.runner.is_busy():
             return "本体で別のコマンドが実行中です"
         cmd = cls()
+        cmd.pokecon_input_values = dict(input_values or {})
         self.started.append(cmd)
         self.runner.running_command = cmd
         self.runner.done = threading.Event()
@@ -395,8 +406,10 @@ def test_a_gui_call_that_timed_out_is_not_run_later(
 class LateFailHost(FakeHost):
     """開始はできたのに、その後の手順で例外を出す本体（一覧の作り直しで落ちる等）。"""
 
-    def start_external_command(self, cls: Any) -> str | None:
-        super().start_external_command(cls)
+    def start_external_command(
+        self, cls: Any, input_values: dict[str, Any] | None = None
+    ) -> str | None:
+        super().start_external_command(cls, input_values)
         raise RuntimeError("一覧の作り直しで失敗")
 
 
@@ -518,13 +531,23 @@ def test_state_reports_run_capabilities_with_and_without_a_trial(
     """様子には、時間上限つき・runId 付き操作の対応がいつでも入っていること。"""
     host, _ = run_server
     fresh = state(host)
-    assert fresh["capabilities"] == ["boundedTrial", "runIdControl"]
+    assert fresh["capabilities"] == [
+        "boundedTrial",
+        "runIdControl",
+        "inputAnswers",
+        "awaitingInput",
+    ]
     assert fresh["timedOut"] is False
     # When: 試し実行が始まっても同じ
     reply = post(host, "/run", {"code": trial_code(PROGRAM), "breakpoints": ["pr1"]})
     assert reply["ok"]
     snap = wait_state(host, lambda s: s["paused"])
-    assert snap["capabilities"] == ["boundedTrial", "runIdControl"]
+    assert snap["capabilities"] == [
+        "boundedTrial",
+        "runIdControl",
+        "inputAnswers",
+        "awaitingInput",
+    ]
     assert snap["timedOut"] is False
     assert control(host, reply["runId"], "stop")["ok"]
 
@@ -793,3 +816,156 @@ def test_closing_the_editor_stops_its_bounded_trial() -> None:
     finally:
         blockly_editor._TRIAL = None
         blockly_editor._set_run_host(None)
+
+
+INPUT_CODE = """
+from Commands.PythonCommandBase import PythonCommand
+
+
+class BlocklyCmd(PythonCommand):
+    NAME = "入力つき"
+    POKECON_INPUTS = [
+        {"key": "targets", "kind": "choice", "set": "mypack/items",
+         "multi": True, "default": "*"},
+        {"key": "n", "kind": "int", "min": 1, "max": 5, "default": 2},
+    ]
+
+    def do(self) -> None:
+        targets = self.input_value("targets")
+        n = self.input_value("n")
+        self.print2(f"{targets} {n}")
+"""
+
+
+@pytest.fixture()
+def input_app(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> Any:
+    from pathlib import Path
+
+    app = Path(tmp_path) / "SerialController"
+    for name in ("potion", "ball"):
+        path = app / "Template" / "mypack" / "items" / f"{name}.png"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"image")
+    monkeypatch.setattr(blockly_editor.WindowUtils, "APP_DIR", str(app))
+    return app
+
+
+def test_run_inputs_fail_refuses_before_starting(
+    run_server: tuple[str, FakeHost], input_app: Any
+) -> None:
+    """fail で答えが足りなければ、開始せず input_required を返すこと。"""
+    host, fake = run_server
+    reply = post(host, "/run", {"code": INPUT_CODE, "inputPolicy": "fail"})
+    assert reply["ok"] is False
+    assert reply["status"] == "input_required"
+    keys = [item["key"] for item in reply["inputRequired"]]
+    assert keys == ["targets", "n"]
+    assert fake.started == []
+    assert fake.transport.rows == []
+
+
+def test_run_inputs_answers_start_with_values(
+    run_server: tuple[str, FakeHost], input_app: Any
+) -> None:
+    """answers が揃っていれば、その値で開始すること。"""
+    host, fake = run_server
+    reply = post(
+        host,
+        "/run",
+        {
+            "code": INPUT_CODE,
+            "inputPolicy": "fail",
+            "answers": {"targets": ["potion"], "n": 3},
+        },
+    )
+    assert reply["ok"] is True, reply
+    snap = wait_state(host, lambda s: s["result"])
+    assert snap["result"] == "完了"
+    assert fake.started[0].pokecon_input_values == {"targets": ["potion"], "n": 3}
+    assert snap["inputs"] == {"targets": ["potion"], "n": 3}
+    assert snap["inputSources"] == {"targets": "answer", "n": "answer"}
+    assert any("potion" in text for _, text in snap["logs"])
+
+
+def test_run_inputs_default_policy_uses_defaults(
+    run_server: tuple[str, FakeHost], input_app: Any
+) -> None:
+    """default ポリシーは既定値で開始すること。"""
+    host, fake = run_server
+    reply = post(host, "/run", {"code": INPUT_CODE, "inputPolicy": "default"})
+    assert reply["ok"] is True, reply
+    snap = wait_state(host, lambda s: s["result"])
+    assert snap["result"] == "完了"
+    assert fake.started[0].pokecon_input_values == {
+        "targets": ["ball", "potion"],
+        "n": 2,
+    }
+    assert snap["inputSources"] == {"targets": "default", "n": "default"}
+
+
+def test_run_inputs_dialog_replies_awaits_then_starts(
+    run_server: tuple[str, FakeHost],
+    input_app: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """dialog はすぐ awaiting_input を返し、入力後に開始すること。"""
+    host, fake = run_server
+    monkeypatch.setattr(
+        blockly_editor.input_dialog,
+        "prompt",
+        lambda *a, **k: blockly_editor.input_dialog.PromptResult(
+            values={"targets": ["ball"], "n": 4}
+        ),
+    )
+    started_at = time.monotonic()
+    reply = post(host, "/run", {"code": INPUT_CODE, "inputPolicy": "dialog"})
+    assert time.monotonic() - started_at < 3.0
+    assert reply["ok"] is True
+    assert reply["status"] == "awaiting_input"
+    snap = wait_state(host, lambda s: s["result"])
+    assert snap["result"] == "完了"
+    assert snap["inputStatus"] == "accepted"
+    assert fake.started[0].pokecon_input_values == {"targets": ["ball"], "n": 4}
+
+
+def test_run_inputs_dialog_cancel_reports_not_started(
+    run_server: tuple[str, FakeHost],
+    input_app: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """dialog の取消は開始せず、状態に canceled を残すこと。"""
+    host, fake = run_server
+    monkeypatch.setattr(
+        blockly_editor.input_dialog,
+        "prompt",
+        lambda *a, **k: blockly_editor.input_dialog.PromptResult(canceled=True),
+    )
+    reply = post(host, "/run", {"code": INPUT_CODE, "inputPolicy": "dialog"})
+    assert reply["ok"] is True
+    assert reply["status"] == "awaiting_input"
+    snap = wait_state(host, lambda s: s["inputStatus"] == "canceled")
+    assert snap["result"] == "停止"
+    assert fake.started == []
+
+
+def test_run_inputs_dialog_error_is_not_reported_as_cancel(
+    run_server: tuple[str, FakeHost],
+    input_app: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """入力ダイアログの失敗を「取り消し」と混同しないこと。"""
+    host, fake = run_server
+    monkeypatch.setattr(
+        blockly_editor.input_dialog,
+        "prompt",
+        lambda *a, **k: blockly_editor.input_dialog.PromptResult(
+            error="値を読めません"
+        ),
+    )
+    reply = post(host, "/run", {"code": INPUT_CODE, "inputPolicy": "dialog"})
+    assert reply["ok"] is True
+    snap = wait_state(host, lambda s: s["result"])
+    assert snap["inputStatus"] == "failed"
+    assert snap["result"] == "エラー"
+    assert "値を読めません" in snap["error"]
+    assert fake.started == []
