@@ -88,3 +88,19 @@ def test_sender_writes_through_fake() -> None:
     assert fake.rows == ["0x0003 8"]
     sender.closeSerial()
     assert sender.isOpened() is False
+
+
+def test_duplicate_registration_is_refused_without_replace() -> None:
+    """同名の登録は黙って上書きしない（利用者の足した方式を守る）。"""
+    name = "dup_guard_tmp"
+    assert Transport.register_transport(name, NoSerTransport)
+    try:
+        assert Transport.register_transport(name, FakeTransport) is False
+        info = Transport.get_transport_info(name)
+        assert info is not None and info["factory"] is NoSerTransport
+
+        assert Transport.register_transport(name, FakeTransport, replace=True) is True
+        replaced = Transport.get_transport_info(name)
+        assert replaced is not None and replaced["factory"] is FakeTransport
+    finally:
+        Transport.unregister_transport(name)

@@ -376,6 +376,26 @@ class VisionMixin:
         return src[y1:y2, x1:x2]
 
     @staticmethod
+    def _checkThreshold(threshold: Any) -> None:
+        """しきい値を 0.0〜1.0 に限定する。
+
+        0.7 を 70 と書く取り違えが最も多い。そのまま比較すると
+        「一度も一致しない」まま待ち続け、原因が画像側に見える。
+        照合の直前に落として、値の誤りだと分かる文言を返す。
+        """
+        try:
+            value = float(threshold)
+        except (TypeError, ValueError):
+            raise ValueError(
+                f"threshold は 0.0〜1.0 の数値です: {threshold!r}"
+            ) from None
+        if not 0.0 <= value <= 1.0:
+            raise ValueError(
+                f"threshold は 0.0〜1.0 の数値です: {threshold!r}"
+                "（0.7 は 70% の意味。パーセントでは書かない）"
+            )
+
+    @staticmethod
     def _checkTemplate(src: np.ndarray, template: Any, mask: Any = None) -> None:
         """テンプレートとマスクの整合を見る。合わなければ ValueError。
 
@@ -573,6 +593,7 @@ class VisionMixin:
         crop=None,
         mask_path=None,
     ):
+        self._checkThreshold(threshold)
         crop = crop or []
         src = self._prepareSrc(crop, use_gray)
 
@@ -648,6 +669,7 @@ class VisionMixin:
         """
         if not template_path_list:
             raise ValueError("template_path_list が空です。")
+        self._checkThreshold(threshold)
 
         crop = crop or []
         src = self._prepareSrc(crop, use_gray)
@@ -727,6 +749,7 @@ class VisionMixin:
 
         not_show_false は本体で参照していない（互換のため残置）。
         """
+        self._checkThreshold(threshold)
         if not use_gray:
             raise ValueError(
                 "isContainTemplateGPU はグレースケールのみ対応です。"
@@ -821,6 +844,7 @@ class VisionMixin:
         同じ答えになる。鍵は (seq, crop, use_gray, template mtime) とし、
         clear() で seq が進むため旧世代を使い回すことはない。
         """
+        self._checkThreshold(threshold)
         crop = crop or []
         src = self._prepareSrc(crop, use_gray)
         seq = getattr(self, "_cached_seq", None)
@@ -1169,6 +1193,13 @@ class VisionMixin:
         答えが桁で狂う。テンプレートの幅・高さの半分より近い点は同じ
         対象とみなし、相関の高いほうだけを残す。
         """
+        self._checkThreshold(threshold)
+        try:
+            max_count_value = int(max_count)
+        except (TypeError, ValueError):
+            raise ValueError(f"max_count は 1 以上の整数です: {max_count!r}") from None
+        if max_count_value < 1:
+            raise ValueError(f"max_count は 1 以上の整数です: {max_count!r}")
         crop = crop or []
         src = self._prepareSrc(crop, use_gray)
 

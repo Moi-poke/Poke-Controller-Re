@@ -439,3 +439,30 @@ def test_dialogue_mode0_rejects_duplicate_labels(tk_root: tk.Tk) -> None:
     # 生成に失敗したとき、空の窓を残さない
     assert _toplevels(tk_root, "重複") == []
     assert cmd.message_dialogue is None
+
+
+def test_dialogue6widget_rejects_an_unknown_widget_kind(tk_root: tk.Tk) -> None:
+    """種別の綴り違いで欄が黙って消えない（数が合わなくなる）。"""
+    cmd = _Cmd(tk_root)
+
+    with pytest.raises(RuntimeError, match="未知の widget 種別"):
+        _run_in_worker(
+            tk_root,
+            lambda: cmd.dialogue6widget(
+                "未知", [["checkbox", "有効", True]], need=dict
+            ),
+        )
+
+    assert _toplevels(tk_root, "未知") == []
+
+
+def test_dialogue6widget_rejects_a_short_widget_spec(tk_root: tk.Tk) -> None:
+    cmd = _Cmd(tk_root)
+
+    with pytest.raises(RuntimeError, match="要素が必要"):
+        _run_in_worker(
+            tk_root,
+            lambda: cmd.dialogue6widget("不足", [["entry", "名前"]], need=dict),
+        )
+
+    assert _toplevels(tk_root, "不足") == []

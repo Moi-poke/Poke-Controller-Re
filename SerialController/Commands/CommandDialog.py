@@ -756,7 +756,40 @@ class PokeConDialogue:
             label.grid(column=0, row=i, sticky="nsew", padx=3, pady=3)
             entry.grid(column=1, row=i, sticky="nsew", padx=3, pady=3)
 
+    #: mode=1 で受け付ける widget 種別と、必要な要素数（先頭の種別名を含む）。
+    _WIDGET_SPECS = {
+        "check": 3,
+        "entry": 3,
+        "colorentry": 3,
+        "combo": 4,
+        "radio": 4,
+        "spin": 4,
+        "scale": 6,
+    }
+
+    @classmethod
+    def _checkWidgetSpecs(cls, dialogue_list: list) -> None:
+        """widget の設定リストを検証する。誤りは作る前に断る。
+
+        未知の種別は従来どちらにも当たらず、その欄だけ黙って消えていた。
+        設定の数と戻り値の数が食い違い、利用者は「入力したのに空」と
+        なる。要素不足も同じ結果になるため、ここで名前を挙げて止める。
+        """
+        for index, spec in enumerate(dialogue_list):
+            if not isinstance(spec, (list, tuple)) or not spec:
+                raise ValueError(f"{index + 1}番目の widget 設定が空です: {spec!r}")
+            kind = str(spec[0]).casefold()
+            need = cls._WIDGET_SPECS.get(kind)
+            if need is None:
+                allowed = " / ".join(sorted(cls._WIDGET_SPECS))
+                raise ValueError(
+                    f"未知の widget 種別です: {spec[0]!r}（使えるのは {allowed}）"
+                )
+            if len(spec) < need:
+                raise ValueError(f"{kind} には {need} 要素が必要です: {spec!r}")
+
     def mode1(self, dialogue_list: list) -> None:
+        self._checkWidgetSpecs(dialogue_list)
         n = len(dialogue_list)
         frame: list[Any] = []
 
