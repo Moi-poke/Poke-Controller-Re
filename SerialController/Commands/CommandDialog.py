@@ -233,8 +233,16 @@ class DialogMixin:
             except Exception:
                 box["error"] = traceback.format_exc()
             finally:
+                # 生成の途中で失敗すると、空の Toplevel が画面に残る
+                # （mode0 の重複ラベルなど）。成否によらず片付ける。
+                top = holder.pop("top", None)
+                if top is not None:
+                    try:
+                        if bool(top.winfo_exists()):
+                            top.destroy()
+                    except Exception:
+                        logger.debug("対話の後始末で例外を握りました")
                 self.message_dialogue = None
-                holder.pop("top", None)
                 done.set()
 
         def closeOnGui() -> None:
