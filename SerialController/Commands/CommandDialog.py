@@ -26,7 +26,10 @@ PythonCommandBase.py から対話部を切り出したもの。
 
 from __future__ import annotations
 
+import os
 import queue
+import subprocess
+import sys
 import threading
 import tkinter as tk
 import tkinter.ttk as ttk
@@ -409,30 +412,34 @@ class DialogMixin:
 
                 frame = ttk.Frame(top)
                 frame.pack(fill="both", expand=True, padx=14, pady=12)
-                ttk.Label(
+
+                def copy_report() -> None:
+                    try:
+                        _copy_to_clipboard(top, advice.copy_text)
+                        panel["copy_button"].configure(text="コピーしました")
+                        top.after(
+                            1500,
+                            lambda: panel["copy_button"].configure(
+                                text="エラー内容をコピー"
+                            ),
+                        )
+                    except Exception:
+                        logger.warning("診断テキストをコピーできませんでした")
+
+                def open_folder() -> None:
+                    if not _open_folder(advice.open_path):
+                        logger.warning(
+                            f"フォルダを開けませんでした: {advice.open_path}"
+                        )
+
+                panel = build_recovery_panel(
                     frame,
-                    text=advice.title,
-                    font=("", 11, "bold"),
-                    anchor="w",
-                    justify="left",
-                ).pack(fill="x")
-                body = advice.body()
-                if body:
-                    ttk.Label(
-                        frame,
-                        text=body,
-                        anchor="w",
-                        justify="left",
-                        wraplength=560,
-                    ).pack(fill="x", pady=(6, 12))
-                buttons = ttk.Frame(frame)
-                buttons.pack()
-                ttk.Button(
-                    buttons, text=advice.retry_label, command=lambda: close(True)
-                ).pack(side="left", padx=4)
-                ttk.Button(
-                    buttons, text=advice.abort_label, command=lambda: close(False)
-                ).pack(side="left", padx=4)
+                    advice,
+                    on_retry=lambda: close(True),
+                    on_abort=lambda: close(False),
+                    on_copy=copy_report,
+                    on_open=open_folder,
+                )
 
                 top.update_idletasks()
                 try:
@@ -532,6 +539,120 @@ class DialogMixin:
             if obj is not None and hasattr(obj, "after"):
                 return obj
         return None
+
+
+def _copy_to_clipboard(widget: tk.Misc, text: str) -> None:
+    """診断テキストをクリップボードへ入れる（GUI スレッドから呼ぶ）。"""
+    top = widget.winfo_toplevel()
+    top.clipboard_clear()
+    top.clipboard_append(text)
+    top.update_idletasks()
+
+
+def _open_folder(path: str) -> bool:
+    """OS のファイルマネージャでフォルダを開く。開けたら True。
+
+    失敗しても例外にしない。ダイアログの副ボタンなので、開けない環境
+    （ヘッドレス・権限なし）ではログだけ残して本体の判断を妨げない。
+    """
+    if not path or not os.path.isdir(path):
+        return False
+    try:
+        if sys.platform == "win32":
+            os.startfile(path)  # type: ignore[attr-defined]
+        elif sys.platform == "darwin":
+            subprocess.Popen(["open", path])
+        else:
+            subprocess.Popen(["xdg-open", path])
+        return True
+    except Exception:
+        return False
+
+
+def build_recovery_panel(
+    parent: Any,
+    advice: RecoveryAdvice,
+    *,
+    on_retry: Callable[[], None],
+    on_abort: Callable[[], None],
+    on_copy: Callable[[], None] | None = None,
+    on_open: Callable[[], None] | None = None,
+) -> dict[str, Any]:
+    """回復ダイアログの中身（本文・パス・ボタン）を組む。
+
+    パスは本文に混ぜず、選択できる独立した行（読み取り専用の Entry）に
+    出す。長いパスは折り返せず読めないうえ、利用者がそのままコピーして
+    開発者へ渡したいため。Tk のスレッド制約は呼び出し側の責任。
+    """
+    ttk.Label(
+        parent,
+        text=advice.title,
+        font=("", 11, "bold"),
+        anchor="w",
+        justify="left",
+    ).pack(fill="x")
+    body = advice.body()
+    if body:
+        ttk.Label(
+            parent,
+            text=body,
+            anchor="w",
+            justify="left",
+            wraplength=560,
+        ).pack(fill="x", pady=(6, 10))
+    path_entry: Any = None
+    if advice.path:
+        ttk.Label(parent, text="パス", anchor="w").pack(fill="x")
+        # Entry は折り返さないので、長いパスは右で切れて読めない。
+        # Text を wrap="char" で置き、選択とコピーだけ許す（編集は止める）。
+        path_entry = tk.Text(
+            parent,
+            height=2,
+            wrap="char",
+            font=("TkFixedFont", 9),
+            relief="solid",
+            borderwidth=1,
+            padx=4,
+            pady=2,
+        )
+        path_entry.insert("1.0", advice.path)
+        try:
+            background = ttk.Style().lookup("TFrame", "background") or "#f0f0f0"
+        except Exception:
+            background = "#f0f0f0"
+        path_entry.configure(background=background)
+
+        def _keep_copyable_only(event: Any) -> str | None:
+            if (event.state & 0x4) and event.keysym.lower() in {"a", "c"}:
+                return None
+            return "break"
+
+        path_entry.bind("<Key>", _keep_copyable_only)
+        path_entry.bind("<<Paste>>", lambda _e: "break")
+        path_entry.bind("<<Cut>>", lambda _e: "break")
+        path_entry.pack(fill="x", pady=(2, 10))
+    buttons = ttk.Frame(parent)
+    buttons.pack()
+    ttk.Button(buttons, text=advice.retry_label, command=on_retry).pack(
+        side="left", padx=4
+    )
+    ttk.Button(buttons, text=advice.abort_label, command=on_abort).pack(
+        side="left", padx=4
+    )
+    open_button: Any = None
+    if advice.open_path and on_open is not None:
+        open_button = ttk.Button(buttons, text="フォルダを開く", command=on_open)
+        open_button.pack(side="left", padx=4)
+    copy_button: Any = None
+    if advice.copy_text and on_copy is not None:
+        copy_button = ttk.Button(buttons, text="エラー内容をコピー", command=on_copy)
+        copy_button.pack(side="left", padx=4)
+    return {
+        "buttons": buttons,
+        "path_entry": path_entry,
+        "open_button": open_button,
+        "copy_button": copy_button,
+    }
 
 
 class PokeConDialogue:

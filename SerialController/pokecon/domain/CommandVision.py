@@ -100,8 +100,8 @@ def _imread_or_raise(template_path: str, flags: int) -> np.ndarray:
         if not path.isfile(filespec):
             reason = "ファイルがありません"
             hint = (
-                f"画像を {TEMPLATE_PATH} からの相対で置いてください "
-                f"（例: {path.join(TEMPLATE_PATH, 'my-pack', 'a.png')}）。"
+                "画像は Template の下に相対パスで置きます"
+                "（例: Template/my-pack/a.png）。"
                 "配布物は `Template/<パッケージ名>/` に置く規約です。"
                 "パスの書き間違いを直す場合は「中止」し、スクリプトを"
                 "修正して再読み込み（F5）してから実行し直してください"
@@ -113,9 +113,12 @@ def _imread_or_raise(template_path: str, flags: int) -> np.ndarray:
                 "直した画像で「再試行」できます"
             )
         raise TemplateImageError(
-            f"テンプレート画像を読み込めませんでした（{reason}）: {filespec}\n"
-            f"指定: {template_path!r} / 既定の置き場所: {TEMPLATE_PATH}",
+            f"テンプレート画像を読み込めませんでした（{reason}）: {filespec}"
+            f"（指定: {template_path!r}）",
             hint=hint,
+            path=filespec,
+            root=TEMPLATE_PATH,
+            reason=reason,
         )
     image.flags.writeable = False  # 共有配列を誤って書き換えないための保険
     return image

@@ -4,13 +4,32 @@ import os
 import tkinter as tk
 from tkinter import ttk
 
+from pokecon import paths
+
 
 # ポケモンホームからデータを引っ張ってくるGUI
+def _load_json(path: str) -> object:
+    """保存済みの JSON を UTF-8 で読む。
+
+    `json.load(fp, encoding=...)` は Python 3 では TypeError になる
+    （エンコーディングは open 側の責務）。過去データを使う経路が
+    これで落ちていたため、読み書きをここへ集約する。
+    """
+    with open(path, "r", encoding="utf-8") as file:
+        return json.load(file)
+
+
+def _save_json(path: str, data: object) -> None:
+    """JSON を UTF-8・非 ASCII そのままで書く（人が読める形を保つ）。"""
+    with open(path, "w", encoding="utf-8") as file:
+        json.dump(data, file, indent=4, ensure_ascii=False)
+
+
 def get_rank_match_result():
     # 起動を速くするため requests は通信時まで読まない。
     import requests
 
-    path = "db/rank_match.json"
+    path = os.path.join(paths.BASE_DIR, "db", "rank_match.json")
     headers_rank_match_list = {
         "accept": "application/json, text/javascript, */*; q=0.01",
         "countrycode": "304",
@@ -46,20 +65,17 @@ def get_rank_match_result():
             )
             print("完了。保存中…", end="")
             data_ = response.json()
-            with open(path, "w") as outfile:
-                json.dump(data_, outfile, indent=4)
+            _save_json(path, data_)
             print("完了。")
         except Exception:
             data_ = None
             print("Error: レスポンスが得られませんでした。")
             if os.path.exists(path):
                 print("過去にDLしたデータを利用してデータ取得を試みます。")
-                with open(path, "r") as json_file:
-                    data_ = json.load(json_file, encoding="utf-8")
+                data_ = _load_json(path)
     else:
         print("過去にDLしたランクマッチのデータを利用します。")
-        with open(path, "r") as json_file:
-            data_ = json.load(json_file, encoding="utf-8")
+        data_ = _load_json(path)
     return data_
 
 
@@ -413,9 +429,12 @@ class GetFromHomeGUI:
         # 起動を速くするため pandas はこの画面を開くまで読まない。
         import pandas as pd
 
-        f = open("db/pokedex.json", "r", encoding="utf-8")
-        json_data = json.load(f)
-        df = pd.read_csv("db/poke_form_name.csv", dtype=str)
+        pokedex_path = os.path.join(paths.BASE_DIR, "db", "pokedex.json")
+        with open(pokedex_path, "r", encoding="utf-8") as f:
+            json_data = json.load(f)
+        df = pd.read_csv(
+            os.path.join(paths.BASE_DIR, "db", "poke_form_name.csv"), dtype=str
+        )
         df = df.fillna(" ")
 
         self.ja_pokes = json_data["dex"]["ja"]
@@ -499,8 +518,10 @@ class GetFromHomeGUI:
 
     def dl_rank_poke_data(self, isSingle, rst, ts2):
         rule = "Single" if self.isSingle.get() == "シングル" else "Double"
-        path = (
-            "db/pokedata_Season" + self.season.get() + "_" + rule + "Battle" + ".json"
+        path = os.path.join(
+            paths.BASE_DIR,
+            "db",
+            "pokedata_Season" + self.season.get() + "_" + rule + "Battle" + ".json",
         )
         headers_rank_poke_data = {
             "user-agent": "Mozilla/5.0 (Linux; Android 8.0; Pixel 2 Build/OPD3.170816.012) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/83.0.4103.61 Mobile Safari/537.36",
@@ -548,19 +569,16 @@ class GetFromHomeGUI:
                     print("{}/5 完了".format(i))
                     poke_dic.update(_)
                 print("保存中…", end="")
-                with open(path, "w") as outfile:
-                    json.dump(poke_dic, outfile, indent=4)
+                _save_json(path, poke_dic)
                 print("完了。")
             except Exception:
                 print("Error: レスポンスが得られませんでした。")
                 if os.path.exists(path):
                     print("過去にDLしたデータを利用します。")
-                    with open(path, "r") as json_file:
-                        poke_dic = json.load(json_file, encoding="utf-8")
+                    poke_dic = _load_json(path)
         else:
             print("過去にDLしたデータを利用します。")
-            with open(path, "r") as json_file:
-                poke_dic = json.load(json_file, encoding="utf-8")
+            poke_dic = _load_json(path)
 
         return poke_dic
 

@@ -56,6 +56,12 @@ class RecoveryAdvice:
     title: str
     detail: str = ""
     hint: str = ""
+    #: 見出しの下に「独立した行」で出すパス（長いので本文と混ぜない）。
+    path: str = ""
+    #: 開発者へそのまま貼れる診断テキスト（版・環境・対象）。
+    copy_text: str = ""
+    #: 「フォルダを開く」で開く場所。空ならボタンを出さない。
+    open_path: str = ""
     retry_label: str = "再試行"
     abort_label: str = "中止"
     auto_attempts: int = 0
@@ -80,6 +86,53 @@ class RecoveryAdvice:
     def message(self) -> str:
         """見出しを含む全文。ログやテストで使う。"""
         return "\n".join(part for part in (self.title, self.body()) if part)
+
+
+def build_report(
+    *, target: str = "", root: str = "", reason: str = "", hint: str = ""
+) -> str:
+    """開発者へ貼るための診断テキストを作る（GUI・Tk 非依存）。
+
+    利用者は「画像が読めない」としか言えない。こちら側で分かる情報
+    （版・実行環境・対象パス・存在と大きさ・判定理由）を1枚にまとめ、
+    コピーできるようにする。環境の取得に失敗しても、分かる範囲で返す。
+    """
+    import os
+    import platform
+    import sys
+
+    lines = ["pokecon テンプレート読み込みエラー"]
+    try:
+        from pokecon import __version__
+
+        lines.append(f"app: {__version__}")
+    except Exception:
+        lines.append("app: (取得できません)")
+    lines.append(f"python: {sys.version.split()[0]}")
+    try:
+        import cv2
+
+        lines.append(f"opencv: {cv2.__version__}")
+    except Exception:
+        lines.append("opencv: (取得できません)")
+    lines.append(f"platform: {platform.platform()}")
+    lines.append(f"cwd: {os.getcwd()}")
+    if root:
+        lines.append(f"template_root: {root}")
+    if target:
+        lines.append(f"target: {target}")
+        exists = os.path.isfile(target)
+        lines.append(f"exists: {exists}")
+        if exists:
+            try:
+                lines.append(f"size: {os.path.getsize(target)} bytes")
+            except OSError:
+                lines.append("size: (取得できません)")
+    if reason:
+        lines.append(f"reason: {reason}")
+    if hint:
+        lines.append(f"hint: {hint}")
+    return "\n".join(lines)
 
 
 class RecoverableError(Exception):
@@ -111,11 +164,35 @@ class TemplateImageError(RecoverableError, FileNotFoundError):
     title = "テンプレート画像を読み込めません"
     auto_attempts = 0
 
+    def __init__(
+        self,
+        message: str = "",
+        *,
+        hint: str = "",
+        path: str = "",
+        root: str = "",
+        reason: str = "",
+    ) -> None:
+        super().__init__(message, hint=hint)
+        self.path = path
+        self.root = root
+        self.reason = reason
+
     def advice(self) -> RecoveryAdvice:
+        import os
+
         return RecoveryAdvice(
             title=self.title,
-            detail=str(self),
+            detail=self.reason or str(self),
             hint=self.hint,
+            path=self.path,
+            open_path=(os.path.dirname(self.path) if self.path else self.root),
+            copy_text=build_report(
+                target=self.path,
+                root=self.root,
+                reason=self.reason,
+                hint=self.hint,
+            ),
             auto_attempts=self.auto_attempts,
         )
 
