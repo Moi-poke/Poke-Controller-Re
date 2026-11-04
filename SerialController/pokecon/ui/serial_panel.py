@@ -1982,10 +1982,18 @@ class SerialPanelMixin:
         """
         self.root.bind("<FocusIn>", self.onFocusInController)
         self.root.bind("<FocusOut>", self.onFocusOutController)
-        self._syncKeyboardFocus()
+        # 結線直後は「まだどの部品にもフォーカスが無い」ことがある。
+        # ここでフックを外すと、有効化した直後に止まってしまうため、
+        # 門だけ合わせる（フックを外すのは実際に窓外へ出たとき）。
+        self._syncKeyboardFocus(stop_hook=False)
 
     def _unbindKeyboardFocus(self) -> None:
-        """フォーカス追従を外し、門を下ろす。"""
+        """フォーカス追従を外し、門を下ろす。
+
+        フックの停止は呼び出し側（停止・切断）が行う。ここで止めると、
+        接続直後の opening/hello でも止めてしまい、ready 後に
+        フォーカスが動くまでキーボード操作が復帰しない。
+        """
         self.root.unbind("<FocusIn>")
         self.root.unbind("<FocusOut>")
         self._kb_window_active.clear()
@@ -2025,9 +2033,19 @@ class SerialPanelMixin:
             self.root.after(100, self._syncKeyboardFocus)
         except Exception:
             self._kb_window_active.clear()
+            self._stopKeyboardHook()
 
-    def _syncKeyboardFocus(self) -> None:
-        """遅延判定：いま窓内のどこにも無ければ下ろす。"""
+    def _syncKeyboardFocus(self, *, stop_hook: bool = True) -> None:
+        """遅延判定：いま窓内のどこにも無ければ下ろす。
+
+        窓外では低レベルキーボードフック自体を外す。pynput のフックは
+        OS 全体の入力経路で同期的に走るため、窓外でも残しておくと
+        Start メニューなど他アプリの打鍵を巻き込む（pynput #15 の
+        取りこぼし）。窓内へ戻ったら onFocusInController が作り直す。
+
+        stop_hook=False は結線直後の同期用。フォーカスがまだどの部品にも
+        無いだけで、アプリは前面のままのことがある。
+        """
         try:
             widget = self.root.focus_get()
             focused = widget is not None and not _is_text_input(widget)
@@ -2037,6 +2055,24 @@ class SerialPanelMixin:
             self._kb_window_active.set()
         else:
             self._kb_window_active.clear()
+            if stop_hook:
+                self._stopKeyboardHook()
+
+    def _stopKeyboardHook(self) -> None:
+        """窓外なので OS 全体のキーフックを外す（設定は変えない）。
+
+        チェック（is_use_keyboard）は触らない。窓へ戻ったときに
+        onFocusInController が同じ設定のまま作り直す。
+        """
+        try:
+            enabled = bool(self.is_use_keyboard.get())
+        except Exception:
+            enabled = False
+        if not enabled:
+            return
+        if self.serial.keyboard is None:
+            return
+        self.serial.stop_keyboard()
 
     def createControllerWindow(self) -> None:
         """仮想コントローラを別ウィンドウで開く（タブの埋め込みから移す）。"""
