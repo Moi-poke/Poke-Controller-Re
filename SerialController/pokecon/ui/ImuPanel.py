@@ -23,7 +23,9 @@ from collections.abc import Callable
 from tkinter import font as tkfont, ttk
 from typing import Any
 
+from pokecon.domain.controller_preview import PreviewControls, controls_from_pad
 from pokecon.ui.collapsible import CollapsibleSection
+from pokecon.ui.imu_preview import MotionPreview
 
 # 通常運用では使わない入力源。デバッグ時だけ選べる。
 DEBUG_SOURCES = frozenset({"sine", "step", "rest", "manual"})
@@ -117,6 +119,10 @@ class ImuPanel:
         # 再生は「記録の再生」源として同じ送出ループに渡す。
         self._recorder: Any = None
         self._player: Any = None
+        self._motion_preview: MotionPreview | None = None
+        self._preview_controls = PreviewControls()
+        self._preview_controls_at = 0.0
+        self._preview_control_reader: Any = None
         self._playing = False
         self._source_error = ""
         # 開始時にGUIスレッドで読み取った値。作業スレッドからTk変数を
@@ -152,8 +158,13 @@ class ImuPanel:
             frame, textvariable=self._stats_var, wraplength=180, justify=tk.LEFT
         )
         self._stats_label.grid(row=0, column=1, sticky=tk.W, padx=2)
-        self._btn_toggle = ttk.Button(frame, text="開始", command=self._on_toggle)
-        self._btn_toggle.grid(row=0, column=2, sticky=tk.EW, padx=0)
+        controls = ttk.Frame(frame)
+        controls.grid(row=0, column=2, sticky=tk.E)
+        ttk.Button(controls, text="3Dプレビュー", command=self._on_motion_preview).pack(
+            side=tk.LEFT, padx=(0, 4)
+        )
+        self._btn_toggle = ttk.Button(controls, text="開始", command=self._on_toggle)
+        self._btn_toggle.pack(side=tk.LEFT)
 
         self._settings = CollapsibleSection(frame, "ジャイロ設定")
         self._settings.grid(row=1, column=0, columnspan=3, sticky=tk.EW, pady=(4, 0))
@@ -813,6 +824,22 @@ class ImuPanel:
         except Exception as e:
             self._queue.put(("log", f"STEP発火に失敗: {e!r}"))
 
+    def _on_motion_preview(self) -> None:
+        """送出とは独立した3D表示を開く。"""
+        preview = self._motion_preview
+        if preview is not None and preview.is_alive():
+            return
+        if preview is not None:
+            preview.close()
+        preview = MotionPreview()
+        try:
+            preview.start()
+        except Exception as exc:
+            preview.close()
+            self._queue.put(("log", f"3Dプレビューを開けません: {exc!r}"))
+            return
+        self._motion_preview = preview
+
     def _on_detail_toggled(self) -> None:
         """詳細表示の切替。ONでジャイロ設定の中へ展開、OFFで畳む。送出は続ける。"""
         try:
@@ -1066,15 +1093,46 @@ class ImuPanel:
         except Exception:
             pass
 
+    def _read_preview_controls(self) -> tuple[PreviewControls, float]:
+        """同じ入力源の受信済み状態を読む。ハンドルを開き直さない。"""
+        reader = self._sensor_reader
+        now = time.monotonic()
+        if reader is not self._preview_control_reader:
+            self._preview_control_reader = reader
+            self._preview_controls = PreviewControls()
+            self._preview_controls_at = 0.0
+        if reader is None:
+            return self._preview_controls, self._preview_controls_at
+        if now - self._preview_controls_at >= 0.020:
+            read_pad = getattr(reader, "read_pad", None)
+            try:
+                self._preview_controls = (
+                    controls_from_pad(read_pad())
+                    if callable(read_pad)
+                    else PreviewControls()
+                )
+            except Exception:
+                # ボタンの読み取り失敗は姿勢表示・ジャイロ送出を止めない。
+                self._preview_controls = PreviewControls()
+            self._preview_controls_at = now
+        return self._preview_controls, self._preview_controls_at
+
     def _push_view(self, sample: tuple[int, int, int, int, int, int]) -> None:
-        """詳細表示へ1件渡す。窓が無ければ何もしない。"""
+        """可視化へ1件渡す。表示の失敗で送出は止めない。"""
+        preview = getattr(self, "_motion_preview", None)
+        if preview is not None:
+            try:
+                controls, controls_at = self._read_preview_controls()
+                preview.push(sample, controls, controls_at)
+            except Exception as exc:
+                self._motion_preview = None
+                self._queue.put(("preview_error", (preview, exc)))
         view = getattr(self, "_gyro_view", None)
-        if view is None:
-            return
-        try:
-            view.push_raw(*sample)
-        except Exception:
-            pass
+        if view is not None:
+            try:
+                view.push_raw(*sample)
+            except Exception:
+                pass
 
     @staticmethod
     def _sample_transform(
@@ -1399,6 +1457,9 @@ class ImuPanel:
         self._playing = False
         self._player = None
         reader, self._sensor_reader = self._sensor_reader, None
+        self._preview_control_reader = None
+        self._preview_controls = PreviewControls()
+        self._preview_controls_at = 0.0
         self._step_gen = None
         if reader is None:
             return
@@ -1435,6 +1496,13 @@ class ImuPanel:
         if self._stop:
             return
         try:
+            preview = self._motion_preview
+            if preview is not None and not preview.is_alive():
+                self._motion_preview = None
+                error = preview.last_error
+                preview.close()
+                if error:
+                    self._log(f"3Dプレビューを停止しました: {error}")
             while True:
                 try:
                     kind, payload = self._queue.get_nowait()
@@ -1445,6 +1513,10 @@ class ImuPanel:
                         self._log(str(payload))
                     except Exception:
                         pass
+                elif kind == "preview_error":
+                    preview, exc = payload
+                    preview.close()
+                    self._log(f"3Dプレビューを停止しました: {exc!r}")
                 elif kind == "state":
                     try:
                         if payload == "streaming":
@@ -1552,6 +1624,9 @@ class ImuPanel:
     def close(self) -> None:
         """送出を止めて予約を消す。例外は投げない。"""
         self._stop = True
+        preview, self._motion_preview = self._motion_preview, None
+        if preview is not None:
+            preview.close()
         try:
             self._collapse_detail()
         except Exception:

@@ -186,3 +186,256 @@ def test_sensor_sdl_ensure_failure_logs_once(monkeypatch):
     finally:
         logger.remove(handler)
     assert sum("SDLを初期化できません" in m for m in messages) == 1
+
+
+def _bit(name):
+    from pokecon.domain.controller_preview import CONTROL_NAMES
+
+    return 1 << CONTROL_NAMES.index(name)
+
+
+class _FakePadLib:
+    """GameController の既存ハンドルだけを使う読取の偽SDL。"""
+
+    def __init__(self, buttons=(), axes=None):
+        self.handle = object()
+        self.joy = object()
+        self.attached = 1
+        self.buttons = set(buttons)
+        self.axes = dict(axes or {})
+        self.opened = 0
+        self.closed = 0
+        self.sensor_enabled = []
+        self.attached_handles = []
+        self.joy_handles = []
+        self.button_calls = []
+        self.axis_calls = []
+
+    def SDL_GameControllerGetAttached(self, handle):
+        self.attached_handles.append(handle)
+        return self.attached
+
+    def SDL_GameControllerGetJoystick(self, handle):
+        self.joy_handles.append(handle)
+        return self.joy
+
+    def SDL_GameControllerGetButton(self, handle, num):
+        self.button_calls.append(num)
+        return 1 if num in self.buttons else 0
+
+    def SDL_JoystickGetAxis(self, joy, axis):
+        self.axis_calls.append(axis)
+        return self.axes.get(axis, 0)
+
+    def SDL_GameControllerOpen(self, index):
+        self.opened += 1
+        return self.handle
+
+    def SDL_GameControllerClose(self, handle):
+        self.closed += 1
+
+    def SDL_GameControllerSetSensorEnabled(self, handle, kind, enabled):
+        self.sensor_enabled.append((kind, enabled))
+        return 0
+
+
+def _pad_reader(lib):
+    from pokecon.domain.sdl_sensor import SdlSensorReader
+
+    reader = SdlSensorReader()
+    reader._ready = True
+    reader._lib = lib
+    reader._handle = lib.handle
+    return reader
+
+
+def test_read_pad_uses_existing_handle_without_open_or_close():
+    """センサーが開いたハンドルをそのまま読み、開閉しない。"""
+    from pokecon.domain.controller_preview import controls_from_pad
+    from pokecon.domain.xinput import (
+        BTN_A,
+        BTN_DPAD_LEFT,
+        BTN_DPAD_UP,
+        BTN_LEFT_SHOULDER,
+        BTN_LEFT_THUMB,
+        BTN_RIGHT_SHOULDER,
+        BTN_RIGHT_THUMB,
+        BTN_START,
+    )
+
+    lib = _FakePadLib(buttons={0, 6, 5, 15, 9, 10, 7, 8, 11, 13})
+    reader = _pad_reader(lib)
+    reader._ready = False
+    calls = []
+    reader._ensure = lambda: calls.append(True) or False  # type: ignore[method-assign]
+
+    state = reader.read_pad()
+
+    assert state.connected is True
+    assert calls == []
+    assert lib.opened == 0
+    assert lib.closed == 0
+    assert lib.attached_handles == [lib.handle]
+    assert lib.joy_handles == [lib.handle]
+    assert state.pressed == frozenset(
+        {
+            "A",
+            "START",
+            "HOME",
+            "CAPTURE",
+            "LEFT_SHOULDER",
+            "RIGHT_SHOULDER",
+            "LEFT_THUMB",
+            "RIGHT_THUMB",
+            "DPAD_UP",
+            "DPAD_LEFT",
+        }
+    )
+    assert state.buttons == (
+        BTN_A
+        | BTN_START
+        | BTN_LEFT_SHOULDER
+        | BTN_RIGHT_SHOULDER
+        | BTN_LEFT_THUMB
+        | BTN_RIGHT_THUMB
+        | BTN_DPAD_UP
+        | BTN_DPAD_LEFT
+    )
+    # 描画側の割当でも同じボタンが落ちない。
+    assert controls_from_pad(state).buttons == (
+        _bit("A")
+        | _bit("PLUS")
+        | _bit("HOME")
+        | _bit("CAPTURE")
+        | _bit("L")
+        | _bit("R")
+        | _bit("LCLICK")
+        | _bit("RCLICK")
+        | _bit("UP")
+        | _bit("LEFT")
+    )
+
+
+def test_read_pad_axes_follow_raw_joystick_order_and_invert_y():
+    from pokecon.domain.sdl_sensor import _trigger_to_byte
+
+    lib = _FakePadLib(
+        axes={0: 32767, 1: 32767, 2: -32768, 3: -32768, 4: 32767, 5: -32768}
+    )
+    state = _pad_reader(lib).read_pad()
+
+    assert state.connected is True
+    assert sorted(lib.axis_calls) == [0, 1, 2, 3, 4, 5]
+    assert state.thumb_lx == 32767
+    assert state.thumb_ly == -32767
+    assert state.thumb_rx == -32767
+    assert state.thumb_ry == 32767
+    assert state.left_trigger == _trigger_to_byte(1.0)
+    assert state.right_trigger == _trigger_to_byte(-1.0)
+    assert state.raw_axes == (1.0, 1.0, -1.0, -1.0, 1.0, -1.0)
+
+
+def test_read_pad_packet_advances_only_on_content_change():
+    lib = _FakePadLib(axes={0: 0, 1: 0}, buttons={0})
+    reader = _pad_reader(lib)
+
+    first = reader.read_pad()
+    second = reader.read_pad()
+    assert first.connected and second.connected
+    assert second.packet == first.packet
+
+    lib.buttons.add(1)
+    third = reader.read_pad()
+    assert third.packet == first.packet + 1
+    assert "B" in third.pressed
+
+
+def test_read_pad_disconnected_returns_neutral_state():
+    lib = _FakePadLib()
+    lib.attached = 0
+    state = _pad_reader(lib).read_pad()
+
+    assert state.connected is False
+    assert state.buttons == 0
+    assert state.thumb_lx == state.thumb_ly == 0
+    assert lib.button_calls == []
+    assert lib.axis_calls == []
+    assert lib.opened == 0
+    assert lib.closed == 0
+
+
+def test_read_pad_without_handle_is_disconnected():
+    from pokecon.domain.sdl_sensor import SdlSensorReader
+
+    lib = _FakePadLib()
+    reader = SdlSensorReader()
+    reader._ready = True
+    reader._lib = lib
+
+    state = reader.read_pad()
+    assert state.connected is False
+    assert lib.attached_handles == []
+    assert lib.opened == 0
+
+
+def test_read_pad_holds_lock_while_using_handle():
+    """読取中に close がハンドルを閉じない（錠が待たせる）。"""
+    import threading
+    import time
+
+    class _BlockingLib(_FakePadLib):
+        def __init__(self):
+            super().__init__()
+            self.entered = threading.Event()
+            self.release = threading.Event()
+
+        def SDL_GameControllerGetJoystick(self, handle):
+            self.entered.set()
+            self.release.wait(2.0)
+            return self.joy
+
+    lib = _BlockingLib()
+    reader = _pad_reader(lib)
+    results = []
+    closed = []
+    close_started = False
+    read_thread = threading.Thread(target=lambda: results.append(reader.read_pad()))
+    close_thread = threading.Thread(target=lambda: closed.append(reader.close()))
+    read_thread.start()
+    try:
+        assert lib.entered.wait(1.0)
+        close_thread.start()
+        close_started = True
+        # 読取がハンドルを握っている間は close が完了できない。
+        time.sleep(0.05)
+        assert closed == []
+        assert lib.closed == 0
+    finally:
+        lib.release.set()
+        read_thread.join(2.0)
+        if close_started:
+            close_thread.join(2.0)
+    assert read_thread.is_alive() is False
+    assert close_thread.is_alive() is False
+    assert results and results[0].connected is True
+    assert closed == [None]
+    assert lib.closed == 1
+
+
+def test_read_pad_query_exception_returns_disconnected():
+    """途中のボタン・軸の問い合わせ失敗を connected な部分状態にしない。"""
+
+    class _BrokenButtons(_FakePadLib):
+        def SDL_GameControllerGetButton(self, handle, num):
+            raise RuntimeError("button query failed")
+
+    class _BrokenAxis(_FakePadLib):
+        def SDL_JoystickGetAxis(self, joy, axis):
+            raise RuntimeError("axis query failed")
+
+    for lib in (_BrokenButtons(), _BrokenAxis()):
+        state = _pad_reader(lib).read_pad()
+        assert state.connected is False
+        assert state.buttons == 0
+        assert state.pressed == frozenset()
+        assert state.packet == 0

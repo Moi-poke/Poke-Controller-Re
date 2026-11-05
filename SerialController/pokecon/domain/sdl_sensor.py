@@ -33,6 +33,14 @@ import threading
 from typing import Any
 
 from loguru import logger
+from pokecon.domain.sdl_pad import (
+    _BUTTON_BITS,
+    _GC_BUTTON_NAMES,
+    _axis_to_short,
+    _normalize_axis,
+    _trigger_to_byte,
+)
+from pokecon.domain.xinput import PadState
 
 STANDARD_GRAVITY = 9.80665
 RAD_TO_DEG = 57.29577951308232
@@ -111,6 +119,12 @@ def _bind(lib: Any) -> None:
     ]
     lib.SDL_GameControllerGetAttached.argtypes = [ctypes.c_void_p]
     lib.SDL_GameControllerGetAttached.restype = ctypes.c_int
+    lib.SDL_GameControllerGetButton.argtypes = [ctypes.c_void_p, ctypes.c_int]
+    lib.SDL_GameControllerGetButton.restype = ctypes.c_ubyte
+    lib.SDL_GameControllerGetJoystick.argtypes = [ctypes.c_void_p]
+    lib.SDL_GameControllerGetJoystick.restype = ctypes.c_void_p
+    lib.SDL_JoystickGetAxis.argtypes = [ctypes.c_void_p, ctypes.c_int]
+    lib.SDL_JoystickGetAxis.restype = ctypes.c_int16
     lib.SDL_GameControllerUpdate.argtypes = []
     lib.SDL_GameControllerUpdate.restype = None
 
@@ -147,6 +161,9 @@ class SdlSensorReader:
         # 同じ失敗の警告を1回だけ出す（openの再試行で洪水にしない）。
         self._warned: set[str] = set()
         self._warn_lock = threading.Lock()
+        # read_pad の内容が変わったときだけ進める連番。
+        self._pad_packet = 0
+        self._pad_key: Any | None = None
 
     def _warn_once(self, key: str, message: str) -> None:
         """同じ理由の警告を1回だけ出す。"""
@@ -308,6 +325,80 @@ class SdlSensorReader:
                 return bool(self._lib.SDL_GameControllerGetAttached(self._handle))
             except Exception:
                 return False
+
+    def read_pad(self) -> PadState:
+        """開いているハンドルからボタン・スティックを読む。失敗は未接続。
+
+        read() の直後に呼ぶ前提。SDL_GameControllerUpdate と
+        pygame.event.pump は read() 側が済ませているため、ここでは
+        イベント処理も再オープンもせず、同じハンドルのキャッシュ値を
+        読むだけに留める。close と競合しないよう錠を保持したまま読む。
+        """
+        with self._lock:
+            lib = self._lib
+            handle = self._handle
+            if lib is None or handle is None:
+                return PadState()
+            try:
+                # 抜き差し直後のハンドルを読まない。装着していなければ
+                # 未接続として扱い、次の open に任せる。
+                if not bool(lib.SDL_GameControllerGetAttached(handle)):
+                    return PadState()
+                joy = lib.SDL_GameControllerGetJoystick(handle)
+                if not joy:
+                    return PadState()
+                # ボタンは GameController の配置DBで読む（sdl_pad と同じ）。
+                # 途中で読めなくなったら部分的な押下を返さず、外側で
+                # 未接続へ畳む（偽の connected を作らない）。
+                pressed: set[str] = set()
+                for num, name in _GC_BUTTON_NAMES.items():
+                    if lib.SDL_GameControllerGetButton(handle, num):
+                        pressed.add(name)
+                # Pro コンの HOME/CAPTURE は標準名で出る個体がある。
+                if "GUIDE_HOME" in pressed:
+                    pressed.discard("GUIDE_HOME")
+                    pressed.add("HOME")
+                if "MISC_CAPTURE" in pressed:
+                    pressed.discard("MISC_CAPTURE")
+                    pressed.add("CAPTURE")
+                bits = 0
+                for name in pressed:
+                    bits |= _BUTTON_BITS.get(name, 0)
+                # 軸は生joystick から読む。GameController の軸は SDL 2.28
+                # の Pro コン配置で Y が張り付く実測がある（sdl_pad 参照）。
+                # 生の順は 0/1=左XY・2/3=右XY・4/5=トリガ、Y は上が負。
+                # 読めない軸を既定値で埋めると押下の有無を偽るため、
+                # 1軸でも問い合わせに失敗したら外側で未接続へ畳む。
+                axes = [
+                    _normalize_axis(lib.SDL_JoystickGetAxis(joy, axis))
+                    for axis in range(6)
+                ]
+                lx = _axis_to_short(axes[0])
+                ly = _axis_to_short(-axes[1])
+                rx = _axis_to_short(axes[2])
+                ry = _axis_to_short(-axes[3])
+                lt = _trigger_to_byte(axes[4])
+                rt = _trigger_to_byte(axes[5])
+                key = (bits, lt, rt, lx, ly, rx, ry, frozenset(pressed))
+                if key != self._pad_key:
+                    self._pad_key = key
+                    self._pad_packet += 1
+                return PadState(
+                    connected=True,
+                    buttons=bits,
+                    left_trigger=lt,
+                    right_trigger=rt,
+                    thumb_lx=lx,
+                    thumb_ly=ly,
+                    thumb_rx=rx,
+                    thumb_ry=ry,
+                    packet=self._pad_packet,
+                    pressed=frozenset(pressed),
+                    raw_axes=tuple(round(float(v), 4) for v in axes),
+                )
+            except Exception:
+                # 抜き差しの瞬間など。次回 open し直せるよう未接続を返す。
+                return PadState()
 
     def read_raw(
         self,
