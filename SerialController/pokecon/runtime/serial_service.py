@@ -733,6 +733,23 @@ class SerialService:
             return False, False
         self._publish(generation, opened=True)
         if is_bcon_transport(target):
+            # 低速の保存設定から接続しても、探索後の1Mbps引き上げを通す。
+            # 手動の速度変更・HELLO再確認では選択した速度を維持する。
+            hunt = getattr(target, "baud_hunt", None)
+            if baud < 1000000 and callable(hunt):
+                if not target.hold_input(True) or not self._current(generation):
+                    return False, False
+                rate = hunt(candidates=list(BAUD_TABLE.values()))
+                if not self._current(generation):
+                    return False, False
+                if rate is None:
+                    self._clear_connection(
+                        generation,
+                        "failed",
+                        "通信速度を検出できませんでした。",
+                        opened=True,
+                    )
+                    return False, False
             if not self._establish_bcon(generation, target, sender):
                 return False, False
         else:

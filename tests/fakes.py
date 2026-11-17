@@ -173,6 +173,46 @@ class FakeCommand:
         return False
 
 
+class BconKeyboardSerial:
+    """BCON の実フレームを記録し、HELLO v0.13 だけ応答する疑似線。"""
+
+    def __init__(self, **kwargs: Any) -> None:
+        from threading import Lock
+
+        self.baudrate = kwargs.get("baudrate", 1000000)
+        self.is_open = True
+        self.written: list[bytes] = []
+        self._pending = bytearray()
+        self._lock = Lock()
+
+    @property
+    def in_waiting(self) -> int:
+        with self._lock:
+            return len(self._pending)
+
+    def read(self, size: int = 1) -> bytes:
+        with self._lock:
+            data = bytes(self._pending[:size])
+            del self._pending[:size]
+            return data
+
+    def write(self, data: bytes) -> int:
+        from pokecon.domain.transport.bcon_protocol import (
+            T_HELLO,
+            T_HELLO_ACK,
+            frame_build,
+        )
+
+        with self._lock:
+            self.written.append(bytes(data))
+            if data[1] == T_HELLO:
+                self._pending.extend(frame_build(T_HELLO_ACK, bytes([4, 0, 13, 0]), 0))
+        return len(data)
+
+    def close(self) -> None:
+        self.is_open = False
+
+
 class FakeSer:
     """送り先の有無だけを切り替える偽物（REQUIRES_SERIAL 判定用）。"""
 

@@ -154,6 +154,8 @@ DETAIL_BUTTONS = (
     "_btn_bootsel",
     "_btn_keys",
     "_btn_color",
+    "_btn_kb_send",
+    "_btn_kb_release",
     "_btn_connect",
     "_btn_hunt",
     "_btn_retry_quick",
@@ -169,6 +171,7 @@ def detail_view(service: SnapshotService) -> Any:
     # 初回の本体色取得が済んだ画面で、状態通知による表示更新を確認する。
     view._color_loaded = True
     view._command_busy = lambda: False
+    view._keyboard_enabled = lambda: False
     view._visible = True
     view._visibility_revision = 0
     view._closed = False
@@ -187,6 +190,10 @@ def detail_view(service: SnapshotService) -> Any:
         "_imu_label",
         "_vib_label",
         "_seconds_input",
+        "_kb_text",
+        "_kb_interval_input",
+        "_kb_focus_note",
+        "_kb_mode_note",
     ):
         setattr(view, name, Widget())
     view._color_entries = [Widget() for _ in range(4)]

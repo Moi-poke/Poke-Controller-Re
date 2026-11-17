@@ -32,6 +32,7 @@ class BconPanelMixin:
     tab_bcon: Any
     serial: SerialService
     runner: Any
+    is_use_keyboard: Any
     transport_name: Any
     _bcon_setup: BconSetup | None
 
@@ -75,6 +76,7 @@ class BconPanelMixin:
                     self.serial,
                     embedded=True,
                     command_busy=lambda: self.runner.is_busy(),
+                    keyboard_enabled=lambda: bool(self.is_use_keyboard.get()),
                     on_show_serial=self._show_serial_for_recovery,
                     on_emulate_role=self._on_bcon_emulate_role,
                     success_dispatch=self._queue_bcon_success,

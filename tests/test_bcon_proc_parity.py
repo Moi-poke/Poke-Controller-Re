@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 import inspect
+from typing import Any
 
+import pytest
+from pokecon.domain.transport import bcon_proc
 from pokecon.domain.transport.bcon import BconTransport
 from pokecon.domain.transport.bcon_proc import _ALLOWED_CALLS, BconProcTransport
+from pokecon.domain.transport.bcon_protocol import BAUD_TABLE
 
 #: proc 側が自前で持つ（本家へ転送しない）公開メンバー。
 #: 転送するのは会話系（hello/config/last_* など）だけで、フレーム送出と
@@ -98,3 +102,129 @@ def test_binary_transports_expose_no_raw_serial() -> None:
     # ASCII の M をバイナリ列へ混ぜない契約（run_journal.raw_serial_for_m が使う）。
     assert BconTransport.get_raw_serial(object.__new__(BconTransport)) is None
     assert BconProcTransport.get_raw_serial(object.__new__(BconProcTransport)) is None
+
+
+def test_keyboard_round_trips_through_child_rpc(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Given: 生存中の子 / When: 8Bを送る / Then: 子のwrite結果をRPCで受け取ること。"""
+    made = BconProcTransport()
+    calls: list[tuple[str, tuple, float]] = []
+
+    def fake_call(
+        method: str,
+        args: tuple = (),
+        timeout: float | None = None,
+        margin: float | None = None,
+    ) -> tuple[bool, object]:
+        calls.append((method, tuple(args), float(timeout or 0.0)))
+        return True, True
+
+    monkeypatch.setattr(made, "_call", fake_call)
+    body = bytearray([0, 0, 4, 0, 0, 0, 0, 0])
+    assert made.send_keyboard(body)
+    body[2] = 5
+    # 呼出し側の bytearray を書き換えても送った内容は変わらない（写しを渡す）。
+    assert calls == [("send_keyboard", (bytes([0, 0, 4, 0, 0, 0, 0, 0]),), 2.0)]
+    assert "send_keyboard" in _ALLOWED_CALLS
+
+
+@pytest.mark.parametrize(
+    ("reply", "expected"),
+    [
+        ((True, True), True),
+        ((True, False), False),
+        ((True, None), False),
+        ((False, None), False),
+        ((False, True), False),
+    ],
+)
+def test_keyboard_returns_child_write_outcome(
+    monkeypatch: pytest.MonkeyPatch,
+    reply: tuple[bool, object],
+    expected: bool,
+) -> None:
+    """Given: 子の応答が成功/拒否/エラー / When: キーボードを送る / Then: 子の結果だけを返すこと。"""
+    made = BconProcTransport()
+    monkeypatch.setattr(made, "_call", lambda *a, **k: reply)
+    assert made.send_keyboard(bytes(8)) is expected
+
+
+@pytest.mark.parametrize(
+    "body", [b"", bytes(7), bytes(9), None, 8, "12345678", [256] * 8]
+)
+def test_keyboard_rejects_bad_report_before_rpc(
+    monkeypatch: pytest.MonkeyPatch, body: object
+) -> None:
+    """Given: 8Bでないレポート / When: 送る / Then: RPCを出さずFalseを返すこと。"""
+    made = BconProcTransport()
+    calls: list[object] = []
+
+    def call(*args: object, **kwargs: object) -> tuple[bool, bool]:
+        calls.append(args)
+        return True, True
+
+    monkeypatch.setattr(made, "_call", call)
+    assert made.send_keyboard(body) is False  # type: ignore[arg-type]
+    assert calls == []
+
+
+def test_keyboard_rejects_dead_worker_and_unavailable_queue(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Given: 子が死んでいる/指令キューが無い / When: 送る / Then: Falseで落ちないこと。"""
+    made = BconProcTransport()
+    assert not made.send_keyboard(bytes(8))
+    monkeypatch.setattr(made, "_worker_alive", lambda: True)
+    # 子が生存していても指令キューが無ければRPCを送れない。
+    assert not made.send_keyboard(bytes(8))
+
+
+@pytest.mark.parametrize(
+    ("candidates", "per"),
+    [
+        (None, 0.5),
+        (list(BAUD_TABLE.values()), 0.5),
+        (list(BAUD_TABLE.values()), 2.0),
+        (None, float("nan")),
+        (None, float("inf")),
+        (None, "不正"),
+        ([115200, 1000000] * 8, 2.0),
+    ],
+)
+def test_baud_hunt_rpc_timeout_covers_child_scan_and_upgrade(
+    candidates: Any, per: Any
+) -> None:
+    """Given: 候補と timeout_per / When: RPC待ちを見積もる / Then: scan+昇格/復帰に足りること。"""
+    limit = bcon_proc._baud_hunt_rpc_timeout(candidates, per)
+    # 子の最悪: 候補ごとに quick HELLO 0.15s＋呼び水 0.7s＋HELLO 2回(最大per=2.0)、
+    # lock 後の昇格2.0s＋復帰確認（HELLO 0.5s×2＋呼び水0.7s）。
+    attempts = len(candidates) if candidates is not None else len(BAUD_TABLE)
+    bound = float(attempts) * (0.15 + 0.7 + 2.0 * 2.0) + 2.0 + 0.5 * 2 + 0.7
+    # 以前の固定30sを上回り、昇格込みの最悪見積もりにも余裕があること。
+    assert limit > 30.0
+    assert limit >= bound
+
+
+def test_baud_hunt_passes_candidates_and_derived_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Given: 候補指定 / When: baud_huntする / Then: 子へそのまま渡し、見積もった待ちで待つこと。"""
+    made = BconProcTransport()
+    seen: dict[str, Any] = {}
+
+    def fake_call(
+        method: str,
+        args: tuple = (),
+        timeout: float | None = None,
+        margin: float | None = None,
+    ) -> tuple[bool, object]:
+        seen.update(method=method, args=args, timeout=timeout)
+        return True, 1000000
+
+    monkeypatch.setattr(made, "_call", fake_call)
+    candidates = [115200, 1000000]
+    assert made.baud_hunt(candidates, timeout_per=0.5) == 1000000
+    assert seen["method"] == "baud_hunt"
+    assert seen["args"] == (candidates, 0.5)
+    assert seen["timeout"] == bcon_proc._baud_hunt_rpc_timeout(candidates, 0.5)
