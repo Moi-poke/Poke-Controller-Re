@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import queue
+import threading
 import time
 import tkinter as tk
 import tkinter.messagebox as tkmsg
@@ -25,6 +26,7 @@ from pokecon.domain.procon_color import (
     parse_color_hex as parse_color_hex,
     send_config_frame as send_config_frame,
 )
+from pokecon.domain.serial import bcon_keyboard
 from pokecon.domain.transport.bcon import decode_rumble
 from pokecon.domain.transport.bcon_protocol import (
     T_BEACON_START,
@@ -334,6 +336,7 @@ class BconSetup:
         *,
         embedded: bool = False,
         command_busy: Callable[[], bool] | None = None,
+        keyboard_enabled: Callable[[], bool] | None = None,
         on_show_serial: Callable[[], None] | None = None,
         on_emulate_role: Callable[[int], None] | None = None,
         success_dispatch: Callable[[Callable[[], None]], None] | None = None,
@@ -348,6 +351,9 @@ class BconSetup:
         """
         self._service = service
         self._command_busy = command_busy or (lambda: False)
+        self._keyboard_enabled = keyboard_enabled or (lambda: True)
+        self._kb_cancel = threading.Event()
+        self._kb_pending = threading.Event()
         self._show_serial = on_show_serial
         self._on_emulate_role = on_emulate_role
         self._success_dispatch = success_dispatch
@@ -792,6 +798,49 @@ class BconSetup:
         log_scroll.grid(row=0, column=1, sticky=tk.NS)
         self._log.configure(yscrollcommand=log_scroll.set)
 
+        grp_keyboard = CollapsibleSection(
+            col_info, "キーボード入力（検証）", on_toggle=self._reflow_columns
+        )
+        self._grp_keyboard = grp_keyboard
+        grp_keyboard.pack(fill=tk.X, pady=(px(self.window, GAP_GROUP), 0))
+        kb_body = grp_keyboard.body
+        for column in range(2):
+            kb_body.columnconfigure(column, weight=1, uniform="kb")
+        self._kb_text = ttk.Entry(kb_body)
+        self._kb_text.grid(row=0, column=0, columnspan=2, sticky=tk.EW, pady=2)
+        interval_row = ttk.Frame(kb_body)
+        interval_row.grid(row=1, column=0, columnspan=2, sticky=tk.W, pady=2)
+        ttk.Label(interval_row, text="間隔(ms)").pack(side=tk.LEFT)
+        self._kb_interval = tk.IntVar(value=50)
+        self._kb_interval_input = ttk.Spinbox(
+            interval_row,
+            from_=20,
+            to=200,
+            increment=10,
+            textvariable=self._kb_interval,
+            width=5,
+        )
+        self._kb_interval_input.pack(side=tk.LEFT, padx=2)
+        self._btn_kb_send = ttk.Button(
+            kb_body, text="入力して送信", command=self._on_keyboard_send
+        )
+        self._btn_kb_send.grid(row=2, column=0, sticky=tk.EW, padx=2, pady=2)
+        self._btn_kb_release = ttk.Button(
+            kb_body, text="キー解放", command=self._on_keyboard_release
+        )
+        self._btn_kb_release.grid(row=2, column=1, sticky=tk.EW, padx=2, pady=2)
+        self._kb_note = ttk.Label(
+            kb_body,
+            text="US 配列の ASCII のみ。有線モード専用。日本語は送れません。",
+            wraplength=250,
+            justify=tk.LEFT,
+        )
+        self._kb_note.grid(row=3, column=0, columnspan=2, sticky=tk.W)
+        self._kb_focus_note = ttk.Label(kb_body, wraplength=250, justify=tk.LEFT)
+        self._kb_focus_note.grid(row=4, column=0, columnspan=2, sticky=tk.W)
+        self._kb_mode_note = ttk.Label(kb_body, wraplength=250, justify=tk.LEFT)
+        self._kb_mode_note.grid(row=5, column=0, columnspan=2, sticky=tk.W)
+
         # 取り消せない操作だけ集める。他のボタンはここへ置かない
         # （押し間違いを防ぐための隔離であり、処理は何も変えない）。
         # 作る順＝Tab の移動順なので、状態・色・診断の後（最下部）に作る。
@@ -953,6 +1002,7 @@ class BconSetup:
             getattr(self, "_grp_pair", None),
             getattr(self, "_grp_diag", None),
             getattr(self, "_grp_color", None),
+            getattr(self, "_grp_keyboard", None),
             getattr(self, "_grp_danger", None),
         ]
         for group in groups:
@@ -1020,6 +1070,9 @@ class BconSetup:
             "_imu_label",
             "_vib_label",
             "_reason_label",
+            "_kb_note",
+            "_kb_focus_note",
+            "_kb_mode_note",
         ):
             label = getattr(self, name, None)
             if label is None:
@@ -1124,6 +1177,10 @@ class BconSetup:
         """窓を閉じる。二重に呼ばれても安全にする。"""
         if getattr(self, "_closed", False):
             return
+        self._kb_cancel.set()
+        # 送信中ならそのジョブの finally が離鍵する。待たずに Tk を閉じる。
+        if not self._kb_pending.is_set():
+            self._service.run_bcon_operation("キー解放", self._release_keyboard)
         self.set_visible(False)
         self.inbox.close()
         self._closed = True
@@ -1201,6 +1258,8 @@ class BconSetup:
             "_btn_bootsel",
             "_btn_keys",
             "_btn_color",
+            "_btn_kb_send",
+            "_btn_kb_release",
         ):
             self._apply_state(getattr(self, name), tk.NORMAL if ready else tk.DISABLED)
         serial_btn = getattr(self, "_btn_serial", None)
@@ -1225,7 +1284,24 @@ class BconSetup:
         self._apply_state(
             self._btn_beacon, tk.NORMAL if ready and saved else tk.DISABLED
         )
-        for widget in [self._seconds_input, *self._color_entries]:
+        self._apply_text(
+            self._kb_focus_note,
+            "キーボード操作が ON です。入力欄の外では打鍵がコントローラ操作にも送られます。"
+            if self._keyboard_enabled()
+            else "",
+        )
+        self._apply_text(
+            self._kb_mode_note,
+            "無線モードでは Switch に届きません。"
+            if snapshot.status and not wired
+            else "",
+        )
+        for widget in [
+            self._seconds_input,
+            self._kb_text,
+            self._kb_interval_input,
+            *self._color_entries,
+        ]:
             self._apply_state(widget, tk.NORMAL if ready else tk.DISABLED)
         for widget in (self._btn_connect, self._btn_hunt):
             self._apply_state(widget, tk.NORMAL if recovery else tk.DISABLED)
@@ -1463,6 +1539,7 @@ class BconSetup:
         self._visible = visible
         self._visibility_revision += 1
         if not visible:
+            self._kb_cancel.set()
             for name in ("_connection_unsub", "_log_unsub"):
                 unsubscribe = getattr(self, name)
                 setattr(self, name, None)
@@ -2166,6 +2243,107 @@ class BconSetup:
             == "yes"
         ):
             self._send_config(T_KEY_DELETE, b"", "ペア鍵削除中", "ペア鍵削除")
+
+    def _keyboard_sender(
+        self, transport: Any, log: Callable[[str], None]
+    ) -> Callable[[bytes], bool] | None:
+        if not is_bcon_transport(transport) or not callable(
+            getattr(transport, "send_keyboard", None)
+        ):
+            log("この通信方式はキーボード入力に対応していません。")
+            return None
+        snapshot = self._service.connection_snapshot()
+        if not transport.hello_established() or snapshot.hello_ack is None:
+            log("先に接続（HELLO→開始）を実行してください")
+            return None
+        minor = snapshot.hello_ack[2]
+        if minor < 13:
+            log("PicoのFWが古い（0.13未満）。書き込んでください")
+            return None
+        if minor < 15:
+            log("FW15未満はキーボード取りこぼし対策前です。")
+        return lambda body: bool(transport.send_keyboard(body))
+
+    def _on_keyboard_send(self) -> None:
+        if not self._admit():
+            return
+        # Entry の読取りと操作世代の固定は GUI スレッドで済ませる。
+        text = self._kb_text.get()
+        interval_s = self._keyboard_interval_s()
+        if interval_s is None:
+            return
+        generation = self._service.connection_snapshot().generation
+        log = self._operation_log()
+        cancel = threading.Event()
+        self._kb_cancel = cancel
+
+        def cancelled() -> bool:
+            snapshot = self._service.connection_snapshot()
+            return (
+                cancel.is_set()
+                or snapshot.generation != generation
+                or not snapshot.opened
+                or snapshot.phase != "ready"
+            )
+
+        def work(transport: Any) -> bool:
+            try:
+                send = self._keyboard_sender(transport, log)
+                if send is None:
+                    return False
+                try:
+                    result = bcon_keyboard.send_text(
+                        send, text, interval_s=interval_s, cancelled=cancelled
+                    )
+                except ValueError as exc:
+                    log(str(exc))
+                    return False
+                log(
+                    f"キーボード送信: {result.sent}/{len(text)}文字を通信へ書き込みました。"
+                    + (result.error or "")
+                )
+                return result.error is None
+            finally:
+                self._kb_pending.clear()
+
+        self._kb_pending.set()
+        if not self._run(work, "キーボード送信"):
+            self._kb_pending.clear()
+
+    def _release_keyboard(
+        self, transport: Any, interval_s: float = bcon_keyboard.KEY_INTERVAL_S
+    ) -> bool:
+        log = self._operation_log()
+        send = self._keyboard_sender(transport, log)
+        if send is None:
+            return False
+        error = bcon_keyboard.release_keys(send, interval_s=interval_s)
+        log(
+            f"キー解放に失敗しました: {error}"
+            if error
+            else "キー解放を通信へ書き込みました。"
+        )
+        return error is None
+
+    def _keyboard_interval_s(self) -> float | None:
+        try:
+            interval_ms = self._kb_interval.get()
+            if 20 <= interval_ms <= 200:
+                return interval_ms / 1000
+        except (tk.TclError, ValueError):
+            pass
+        self._queue.put(("log", "間隔は20〜200msで入力してください。"))
+        return None
+
+    def _on_keyboard_release(self) -> None:
+        if not self._admit():
+            return
+        interval_s = self._keyboard_interval_s()
+        if interval_s is not None:
+            self._run(
+                lambda transport: self._release_keyboard(transport, interval_s),
+                "キー解放",
+            )
 
     def _on_color(self) -> None:
         if not self._admit():

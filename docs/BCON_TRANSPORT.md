@@ -115,6 +115,14 @@ Pico は未確定のあいだ各 rate に 150ms ずつ留まり、同じ滞在�
 （0.5 秒毎）では永久に確定しない（2026-10-05 実機で 0/5）。
 実機確認は `tools/probes/bcon_hunt_probe.py`（BREAK→`baud_hunt`→STATUS）。
 
+低速で確定した場合は探索の送出抑止を解除してから、`BAUD_SET` で 1Mbps への引き上げを試す。
+旧速度で ACK を受け、guard 後に双方の速度を切り替え、`HELLO` で採用を確認する。
+成功時は 1Mbps を最終速度とし、次の探索で優先する。
+失敗時は既存の復帰手順で元の速度に戻り、`HELLO` を再確認できた場合だけその速度で接続を続ける。
+115200bps のみ通る変換器でも、元の速度を確認できれば接続できる。
+1Mbps 未満の設定で新しく接続する場合も、この探索を通してから HELLO と live 送信を開始し、最終速度を接続ログに出す。
+接続後の手動の速度変更と「HELLO をやり直す」は選択済みの速度を維持する。
+
 ## BCON 設定の使い方
 
 BCON 系の通信方式を選ぶと、メイン画面の「シリアル」の隣に
@@ -141,7 +149,7 @@ BCON 系の通信方式を選ぶと、メイン画面の「シリアル」の隣
 確保し、下の折りたたみを動かさない。
 
 詳細は「接続モード・ペアリング」「通信テスト・詳細ログ」「本体色」
-「保守（取り消せない操作）」の折りたたみにまとめ、初回は閉じる。
+「キーボード入力（検証）」「保守（取り消せない操作）」の折りたたみにまとめ、初回は閉じる。
 開閉しても下書き・選択・ログは消えない。保守は最下部、既定で閉じ、
 開閉状態は保存しない。別ウィンドウでは従来の 2 列を維持する。
 
@@ -205,6 +213,67 @@ ACK、STATUS、LED、振動の表示を消す。
 CONFIG の結果は操作前後の STATUS を比較して判断する。`errcode` は過去の
 エラーを保持する場合があり、前後で `errcode`・`err_drop`・`err_crc` が
 変わらなければ、残った `errcode` だけで今回の操作を拒否と判定しない。
+
+## キーボード入力（検証）
+
+有線 USB キーボード対応ファーム（v0.13 以降）で、BCON タブの「キーボード入力（検証）」を開き、文字列を入力して「入力して送信」を押す。US 配列の ASCII に対応する。日本語・IME は未対応で、未対応文字が1文字でもあれば全文を送らず、その文字と位置をログに出す。無線モードではフレームを受理しても Switch に文字は届かない。
+`HELLO_ACK` の FW minor が 13 未満なら送信を拒否し、書き込みを案内する。
+13〜14 は送信できるが、FW15 未満はキーボード取りこぼし対策前と警告する。
+
+「キーボード操作」が ON でも、入力欄にフォーカスがある間は、打鍵をコントローラ操作へ送らない。入力欄の外では通常のコントローラ操作が有効になるため、注意を表示する。文字入力の検証中は「キーボード操作」を OFF にすると確認しやすい。
+
+各文字は押下 → 50ms 待機 → キー解放 → 50ms 待機の順で送る（既定で毎秒 10 文字）。
+「間隔(ms)」で 20〜200ms を 10ms 刻みで選べる。送信開始時に値を読み、実行中は入力欄とともに無効にする。
+最後に全ゼロの neutral を指定間隔で 2 回送る。「キー解放」も同じ neutral を 2 回送る。
+送信失敗、タブの非表示、窓の閉鎖、接続世代の変更で送信を中止したときも解放を試みる。切断済みや入力抑止中には送れないため、再接続後にキーが残っていれば「キー解放」を押す。
+
+ログの文字数は通信への書き込みが成功した押下レポート数であり、Switch に入力された文字数ではない。
+`switch-bcon-proc` も子プロセスが送信処理を実行した結果を待つ。入力抑止や HELLO 未確認による子の拒否は成功に数えない。
+Pico の受信と USB 出力は、この結果だけでは確認できない。実機ではファームの `kbr` / `kbd` と Switch の入力結果を確認する。
+
+### API とフレーム
+
+`BconTransport.send_keyboard(report: bytes) -> bool` は HID boot keyboard の8Bレポートを、`T_KEYBOARD=0x3C`、LEN=8 の1フレームで送る。payload は修飾キー1B、予約0の1B、HID Usage ID 6個の順。既存の STATE／IMU／会話フレームと SEQ を共有し、1回の `write()` で送る。HELLO は引き続き `PROTO_VER=4` を使い、ファーム minor 13 を受け付ける。
+
+`BconProcTransport.send_keyboard` も同じ8Bを受け付け、既存の `call` RPC で子の `send_keyboard` を呼び、実行結果を返す。入力行のフックや入力ログ、STATE の最新姿勢には混ぜない。
+
+`pokecon.domain.serial.bcon_keyboard` は `report(mod, key)`、`NEUTRAL`、`prepare_text(text)`、`send_text(send, text, interval_s=0.050)`、`release_keys(send, interval_s=0.050)` を提供する（`interval_s` はキーワード引数）。大文字と記号は US 配列の Shift を使い、`\n`／`\r` は Enter、`\b` は Backspace、`\t` は Tab、`\x1b` は Esc に写す。`send_text` は全文検証後に送信し、書き込めた文字数と失敗理由を返す。
+
+### 実機確認手順（未実施）
+
+この変更では Switch、有線対応ファームを載せた Pico、COM ポートを使用できないため、以下の1～9は未確認である。自動テストの疑似線での成功は、Switch への入力成功を保証しない。
+
+1. 有線 USB キーボード対応ファームを書き込み、`WIRED_MODE=1` で再起動する。Pico USB を Switch ドックへ、PC をデータ UART へ接続する。
+2. 通信方式を `switch-bcon` にしてデータ COM を開く。HELLO と live 開始が完了し、最終速度のログが 1Mbps、診断の HELLO_ACK が v0.15 以上であることを確認する。必要なら「HELLO をやり直す」を使う。115200bps のみ対応する変換器では引き上げ失敗後に元の速度で接続できることを確認する。
+3. 設定の「キーボード操作」を OFF にする。ON の場合は入力欄のフォーカス中にコントローラ操作が送られないことも確認する。
+4. Switch の文字入力対応画面を開く。BCON の入力欄に `abc123` を入れて「入力して送信」を押し、同じ文字が入ることを確認する。
+5. `Hello` と空白を確認する。1行の入力欄で直接入力できない Backspace・Enter は、下記の PowerShell 例で確認する。
+6. Pico のログ UART0 で `kbr`（受信）/ `kbd`（USB 送出）が増えることを確認する。
+7. 「キー解放」を押し、キーが残らないことを確認する。
+8. 連続した文字列を送信し、完了後に「キー解放」を押す。その後、Pico と Switch ドックを結ぶ USB を抜き差しする。Pico は mount 時に現在の状態を再送するため、再列挙後にキーが残らないことを確認する。押下中に突然 USB が外れる場合の復帰も別途確認する。
+9. 無線モードでは Switch に文字が入力されないことを確認する。有線へ戻し、通信方式を `switch-bcon-proc` に変更して再接続し、手順3～8を繰り返す。
+
+手順5の制御文字は、PokeCon のシリアル接続を切断してから、リポジトリのルートで次を実行する。`COM9` を実際のデータ COM に置き換える。別プロセス版では `BconProcTransport` に置き換える。終了後は PokeCon から再接続する。
+
+```powershell
+@'
+import sys
+sys.path.insert(0, "SerialController")
+from pokecon.domain.transport.bcon import BconTransport
+from pokecon.domain.transport.bcon_proc import BconProcTransport
+from pokecon.domain.serial.bcon_keyboard import send_text, release_keys
+
+transport = BconTransport()
+try:
+    if not transport.open(0, "COM9", 1000000) or not transport.hello():
+        raise RuntimeError("COM または HELLO の接続失敗")
+    # 空白を押して Backspace で消し、Enter を送る。
+    print(send_text(transport.send_keyboard, "Hello \b\n"))
+finally:
+    release_keys(transport.send_keyboard)
+    transport.close()
+'@ | uv run --frozen python -
+```
 
 ## 計測と不具合対応
 

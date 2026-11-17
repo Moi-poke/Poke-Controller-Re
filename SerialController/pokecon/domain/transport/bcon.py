@@ -34,6 +34,7 @@ from pokecon.domain.transport.bcon_protocol import (
     T_HELLO,
     T_HELLO_ACK,
     T_IMU_SAMPLE,
+    T_KEYBOARD,
     T_NEUTRAL,
     T_PING,
     T_PLAYER_INFO,
@@ -75,6 +76,10 @@ HUNT_PRIME_S = 0.7
 HUNT_PRIME_GAP_S = 0.005
 # 既に同じrateで確定済みなら呼び水は要らない。最初の確認だけ短く待つ。
 HUNT_QUICK_HELLO_S = 0.15
+# 低いrateでlockした後の引き上げ。scan完了・STATE抑え解除後に
+# set_baud_index(既定index=1Mbps)を1回だけ試す。失敗時の復帰確認は
+# 旧rateのHELLO 1往復（呼び水を1回挟む）で行う。
+HUNT_UPGRADE_CONFIRM_S = 0.5
 
 # 姿勢空間（Keys.Button・Senderの持つ姿勢・PicoのS行）からwire空間
 # （Modified行の<btn-hex>）へのbit写像。添字が姿勢bit・値がwire bit。
@@ -564,6 +569,35 @@ class BconTransport(Transport):
                 # Switch に届いていないので記録に残さない（TextSerialの
                 # _write_one が送った行だけ _notify するのと同じ約束）。
                 self._notify_tx(note if isinstance(note, str) else "")
+
+    def send_keyboard(self, report: bytes) -> bool:
+        """HID boot keyboard report 8B を KEYBOARD 1発で送る。成否を返す。"""
+        try:
+            if len(report) != 8:
+                return False
+            body = bytes(report)
+            if len(body) != 8:
+                return False
+        except Exception:
+            return False
+        with self._write_lock:
+            with self._lock:
+                if self._tx_hold or self._input_hold or not self._hello_established:
+                    return False
+                ser = self.ser
+            if ser is None:
+                return False
+            seq = self._take_seq()
+            frame = frame_build(T_KEYBOARD, body, seq)
+            # 入力行ではないため、Sender のフック・通知・live の状態は触らない。
+            return self._write_frame(
+                frame,
+                row="bcon:KEYBOARD",
+                measure_perf=False,
+                begin=None,
+                end=None,
+                ser=ser,
+            )
 
     def send_imu(
         self,
@@ -1988,6 +2022,9 @@ class BconTransport(Transport):
         値は表index、それ以外はbps値として読む。hunt中はSTATE送出を
         抑える（send_rowは捨てる。HELLO等の会話は通す）。lock・失敗の
         いずれでも抑えを解く。成功はbps、失敗はNone＋可視log。
+        低いrateでlockした場合は、scan完了・抑え解除後にBAUD_SET
+        （set_baud_index）で既定1Mbpsへ引き上げを試す。成功は1M、
+        失敗は旧rateでHELLOを確認できた場合だけ旧rateを返す。
         例外は投げない。BREAK受信時もここへ回す。
         """
         try:
@@ -2064,6 +2101,7 @@ class BconTransport(Transport):
                     self._tx_hold = True
                     self._live_pending = None
                     self._live_latest = None
+            locked: int | None = None
             try:
                 for rate in order:
                     try:
@@ -2080,13 +2118,16 @@ class BconTransport(Transport):
                             continue
                         with self._lock:
                             self._last_good_baud = int(rate)
-                        msg = f"bconのbaudを{rate}bpsでlockしました(2連続有効)。"
-                        print(msg)
-                        self._logger.info(msg)
-                        return int(rate)
+                        locked = int(rate)
+                        break
                     except Exception:
                         self._logger.debug("hunt1候補で例外", exc_info=True)
                         continue
+            finally:
+                with self._write_lock:
+                    with self._lock:
+                        self._tx_hold = False
+            if locked is None:
                 msg = (
                     f"bconのbaud huntに失敗しました(候補={order})。"
                     "配線・電源を確認してください。"
@@ -2094,13 +2135,84 @@ class BconTransport(Transport):
                 print(msg)
                 self._logger.warning(msg)
                 return None
-            finally:
-                with self._write_lock:
-                    with self._lock:
-                        self._tx_hold = False
+            # scanと抑え解除が終わってから昇格する。set_baud_indexも同じ
+            # _tx_holdを立てるため、scan中に呼ぶと抑えが早く解けてしまう。
+            return self._upgrade_hunted_baud(locked)
         except Exception as e:
             self._logger.debug(f"baud_huntで例外: {e!r}", exc_info=True)
             return None
+
+    def _confirm_hunted_baud(self, rate: int, timeout: float) -> bool:
+        """lockしたrateへ戻してHELLOで確認する。失敗はFalse。"""
+        if self._current_baud() != rate:
+            if not self._set_baud(rate):
+                return False
+            with self._lock:
+                self._parser = BconParser()
+        if self.hello(timeout=timeout, quiet=True):
+            return True
+        # 昇格失敗の直後はPicoがhuntへ戻っていることがある。単発HELLO
+        # では2連続が揃わないため、呼び水を1回だけ打ってから確かめる。
+        self._prime_hunt()
+        return self.hello(timeout=timeout, quiet=True)
+
+    def _upgrade_hunted_baud(self, locked: int) -> int | None:
+        """huntでlockしたrateから既定baud（1Mbps）へ引き上げる。
+
+        lockが既定以上なら何もせず、そのrateを可視log付きで返す。1M未満
+        なら set_baud_index(DEFAULT_BAUD_INDEX) の既存契約（旧rateでACK→
+        guard→双方切替→HELLO adopt確認→失敗時は旧rateへ復帰）をそのまま
+        使う。成功は1Mを返す。失敗は旧rateでHELLOを確認できた場合だけ
+        旧rateを返し、確認できなければNone（速度不明）を返す。例外は
+        投げない。
+        """
+        target = int(BAUD_TABLE[DEFAULT_BAUD_INDEX])
+        if locked >= target:
+            msg = f"bconのbaudを{locked}bpsでlockしました(2連続有効)。"
+            print(msg)
+            self._logger.info(msg)
+            return locked
+        self._logger.info(f"bconのbaudを{locked}bpsから{target}bpsへ引き上げます。")
+        try:
+            upgraded = bool(self.set_baud_index(DEFAULT_BAUD_INDEX))
+        except Exception:
+            self._logger.debug("baud引き上げで例外", exc_info=True)
+            upgraded = False
+        if upgraded:
+            with self._lock:
+                self._last_good_baud = target
+            msg = (
+                f"bconのbaudを{target}bpsでlockしました"
+                f"({locked}bpsから引き上げ・HELLOでadopt確認)。"
+            )
+            print(msg)
+            self._logger.info(msg)
+            return target
+        # 失敗時、set_baud_indexはhost側を旧rateへ戻している。旧rateで
+        # HELLOが通るまでは復帰と見なさない（速度変更UIと同じ約束）。
+        try:
+            confirmed = self._confirm_hunted_baud(locked, HUNT_UPGRADE_CONFIRM_S)
+        except Exception:
+            self._logger.debug("hunt復帰確認で例外", exc_info=True)
+            confirmed = False
+        if confirmed:
+            with self._lock:
+                self._last_good_baud = locked
+            msg = (
+                f"bconのbaudを{locked}bpsのまま採用しました"
+                f"({target}bpsへ引き上げできず、旧rateでHELLO確認済み)。"
+            )
+            print(msg)
+            self._logger.warning(msg)
+            return locked
+        msg = (
+            f"bconのbaudを{target}bpsへ引き上げられず、"
+            f"{locked}bpsでの復帰もHELLOで確認できませんでした。"
+            "配線・電源を確認して再huntしてください。"
+        )
+        print(msg)
+        self._logger.warning(msg)
+        return None
 
     def set_baud_index(self, index: int, timeout: float = 2.0) -> bool:
         """BAUD_SETでPicoとhostのbaudを切り替える。失敗はFalse＋可視log。

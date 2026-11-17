@@ -144,6 +144,34 @@ def test_connect_success_and_disconnect() -> None:
     assert service.key_press is None
 
 
+def test_low_baud_connection_upgrades_or_keeps_confirmed_rate(monkeypatch) -> None:
+    from pokecon.domain.transport.bcon import BconTransport
+    from test_bcon_session import _HuntUpgradeSer
+
+    class Wire(_HuntUpgradeSer):
+        def close(self) -> None:
+            self.is_open = False
+
+    for adopt, expected in ((True, 1000000), (False, 115200)):
+        wire = Wire(adopt_1m=adopt)
+        monkeypatch.setattr(
+            "pokecon.domain.transport.bcon.serial.Serial", lambda **kwargs: wire
+        )
+        service, notices = make_service()
+        line = BconTransport()
+        service.sender = Sender.Sender(is_show_serial=False, transport=line)
+        try:
+            connected, _ = service.connect(0, "fake", 115200, False, "")
+            assert connected
+            snapshot = service.connection_snapshot()
+            assert snapshot.phase == "ready"
+            assert snapshot.baud == expected
+            assert line.current_baud() == expected
+            assert any(f"{expected}bps、HELLO 確認済み" in text for text in notices)
+        finally:
+            service.shutdown()
+
+
 def test_connect_bcon_runs_hello_automatically(monkeypatch) -> None:
     """ACK 前に入力が流れず、live 開始まで済んだ ready を待つ。"""
     import time
