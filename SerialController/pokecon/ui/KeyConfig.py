@@ -578,6 +578,9 @@ class PokeKeycon:
         self.kc.deiconify()
         self.kc.focus_force()
 
+    def winfo_exists(self) -> int:
+        return int(self.kc.winfo_exists())
+
 
 if __name__ == "__main__":
     root = tk.Tk()

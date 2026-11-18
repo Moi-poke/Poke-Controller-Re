@@ -1481,7 +1481,8 @@ button.run:hover { background: #17793a; }
     document.addEventListener('click', function (ev) {
       if (!moreOpen) { return; }
       var t = ev && ev.target;
-      if (t && t === byId('morebtn')) { return; }
+      var btn = byId('morebtn');
+      if (t && btn && (t === btn || (typeof btn.contains === 'function' && btn.contains(t)))) { return; }
       var menu = byId('moremenu');
       if (menu && typeof menu.contains === 'function' && t && menu.contains(t)) { return; }
       moreClose(false);
@@ -1726,7 +1727,8 @@ button.run:hover { background: #17793a; }
       if (!quickOpen) { return; }
       var box = byId('quick');
       var t = ev && ev.target;
-      if (t && t === byId('quickbtn')) { return; }
+      var btn = byId('quickbtn');
+      if (t && btn && (t === btn || (typeof btn.contains === 'function' && btn.contains(t)))) { return; }
       if (box && typeof box.contains === 'function' && t && box.contains(t)) { return; }
       quickClose(false);
     });

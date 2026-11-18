@@ -318,18 +318,19 @@ class ImuPanel:
         for i, (name, dflt) in enumerate(
             zip(("AX", "AY", "AZ", "GX", "GY", "GZ"), self._manual_values)
         ):
+            r, c = divmod(i, 3)
             ttk.Label(manual_body, text=name).grid(
-                row=0, column=i * 2, sticky=tk.W, padx=(4 if i else 0, 2), pady=4
+                row=r, column=c * 2, sticky=tk.W, padx=(8 if c else 0, 4), pady=4
             )
             var = tk.StringVar(value=str(dflt))
             spin = ttk.Spinbox(
                 manual_body,
                 from_=-32768,
                 to=32767,
-                width=7,
+                width=6,
                 textvariable=var,
             )
-            spin.grid(row=0, column=i * 2 + 1, sticky=tk.W, padx=(0, 4), pady=4)
+            spin.grid(row=r, column=c * 2 + 1, sticky=tk.W, padx=(0, 4), pady=4)
             normalize = self._make_manual_normalizer(i, var)
             spin.bind("<FocusOut>", normalize, add="+")
             spin.bind("<Return>", normalize, add="+")

@@ -358,3 +358,19 @@ def test_a_short_tabs_pane_scrolls_inside_itself(host: _Host) -> None:
     # Then: スクロールは設定タブの欄の中だけに出る。本体は窓の高さに収まる。
     assert host.tabs_scroll.vbar.winfo_ismapped()
     assert host.frame_1.winfo_height() <= host.root.winfo_height()
+
+
+def test_tabs_right_split_rounds_fractional_video_height_for_sashpos(
+    host: _Host,
+) -> None:
+    """プレビュー幅が 16 の倍数でない場合でも tabs_right の上下仕切り計算が整数で設定されること。"""
+    # Given: tabs_right 配置で、16 の倍数にならないプレビュー幅になる窓サイズ。
+    host.applyArrangement("tabs_right")
+    host.root.geometry("1003x760+0+0")
+    _settle(host)
+
+    # When/Then: _apply_tabs_right_split が浮動小数点を sashpos に渡して TclError を起こさない。
+    host._apply_tabs_right_split()
+    pane = host._pane_arranger.pane_for("V[preview,log]")
+    assert pane is not None
+    assert pane.sashpos(0) >= 1

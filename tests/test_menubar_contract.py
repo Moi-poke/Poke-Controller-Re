@@ -25,6 +25,7 @@ class _App:
         self.calls: list[str] = []
         self.layout_mode = tk.StringVar(master=root, value="standard")
         self.profile_color = tk.StringVar(master=root, value="")
+        self.profile = ""
         self.app_version = "9.9.9"
         self.arrangement = tk.StringVar(master=root, value="log_right")
         self.show_tabs_pane = tk.BooleanVar(master=root, value=True)
@@ -175,3 +176,18 @@ def test_the_view_menu_picks_the_arrangement_and_collapses_panes(
     # Then: アプリ側の入口に、選んだ値がそのまま渡る。
     assert ("applyArrangement", ("log_bottom",)) in app.args
     assert ("setPaneVisible", ("log", False)) in app.args
+
+
+def test_open_key_config_reuses_existing_window_instead_of_duplicating(
+    bar: tuple[PokeController_Menubar, _App],
+) -> None:
+    """キーコンフィグを続けて開いたとき、重複生成せず既存の窓を再利用すること。"""
+    menubar, _app = bar
+    try:
+        menubar.OpenKeyConfig()
+        first = menubar.key_config
+        assert first is not None
+        menubar.OpenKeyConfig()
+        assert menubar.key_config is first
+    finally:
+        menubar.closingKeyConfig()

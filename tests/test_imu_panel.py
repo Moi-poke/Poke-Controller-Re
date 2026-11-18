@@ -1262,3 +1262,33 @@ def test_mouse_settings_fit_narrow_window_and_record_path_follows_checkbox(
     finally:
         panel.close()
         root.destroy()
+
+
+def test_manual_settings_fit_narrow_window(tk_root: tk.Tk) -> None:
+    """狭い別窓や右列タブ（360px幅）でも手動入力の6軸すべての入力欄が見切れず収まること。"""
+    panel, root, _transport, _settings, _root = _make_panel(
+        tk_root, {"source": "manual"}
+    )
+    try:
+        root.geometry("360x650")
+        root.deiconify()
+        panel._settings.set_open(True)
+        if not panel._debug_var.get():
+            panel._debug_cb.invoke()
+        panel._source_var.set("手動入力")
+        panel._source_cb.event_generate("<<ComboboxSelected>>")
+        root.update()
+        assert panel._manual_frame.winfo_ismapped()
+        right_edge = root.winfo_rootx() + root.winfo_width()
+        spins = [
+            child
+            for child in panel._manual_frame.body.winfo_children()
+            if child.winfo_class() == "TSpinbox"
+        ]
+        assert len(spins) == 6
+        for spin in spins:
+            assert spin.winfo_ismapped()
+            assert spin.winfo_rootx() + spin.winfo_width() <= right_edge
+    finally:
+        panel.close()
+        root.destroy()

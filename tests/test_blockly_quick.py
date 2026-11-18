@@ -271,3 +271,29 @@ def test_insert_keeps_an_outer_undo_group() -> None:
         """
     )
     assert res["after"] == "outer-group"
+
+
+def test_quickbtn_inner_span_click_does_not_immediately_self_close() -> None:
+    """ボタン内部の span をクリックした伝播で外クリック判定が誤発火して即閉じしないこと。"""
+    res = run_editor(
+        """
+        const docClicks = [];
+        doc.addEventListener = (ev, fn) => { if (ev === 'click') docClicks.push(fn); };
+        boot();
+        await flush(300);
+        const span = doc.createElement('span');
+        doc.getElementById('quickbtn').contains = (node) => node === els.quickbtn || node === span;
+        doc.getElementById('quick').contains = (node) => node === els.quick;
+        // 実ブラウザと同様に quickbtn の click → document の click 伝播を再現する
+        els.quickbtn.handlers.click({ target: span });
+        docClicks.forEach((fn) => fn({ target: span }));
+        const afterButtonClick = els.quick.style.display;
+        // 本当の外側クリックでは閉じることも対照確認する
+        const outside = doc.createElement('div');
+        docClicks.forEach((fn) => fn({ target: outside }));
+        const afterOutsideClick = els.quick.style.display;
+        done({ afterButtonClick, afterOutsideClick });
+        """
+    )
+    assert res["afterButtonClick"] == "block"
+    assert res["afterOutsideClick"] == "none"
