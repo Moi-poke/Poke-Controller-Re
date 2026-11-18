@@ -11,12 +11,9 @@ tkinterを触らず、ファイル書きの結果だけをJSONで返す。再読
 
 from __future__ import annotations
 
-import base64
 import functools
-import hashlib
 import http.server
 import itertools
-import json
 import math
 import queue
 import socket
@@ -29,26 +26,21 @@ from concurrent.futures import Future
 from pathlib import Path
 from typing import Any
 
-from pokecon.domain import blockly_headless, blockly_validate, inputs as input_specs
 from pokecon.runtime import (
-    blockly_author,
-    blockly_capture,
-    blockly_color,
     blockly_live,
-    blockly_match,
     blockly_record,
     blockly_run,
     blockly_save,
-    blockly_templates,
 )
-from pokecon.ui import WindowUtils, input_dialog
+from pokecon.ui import WindowUtils as WindowUtils, input_dialog as input_dialog
+from pokecon.ui.blockly import (
+    BlocklyLiveRoutesMixin,
+    BlocklyMediaRoutesMixin,
+    BlocklyWorkspaceRoutesMixin,
+    save_blockly_gyro,
+)
 
 _BLOCKLY_DIR = Path(WindowUtils.APP_DIR) / "assets" / "blockly"
-
-#: Blockly の記録で作るジャイロ（.pgyro）の置き場。保存される `.py` と同じ
-#: フォルダに置き、コマンド一式を複写すればジャイロも付いてくるようにする。
-_BLOCKLY_GYRO_REL = Path("Commands") / "PythonCommands"
-_BLOCKLY_GYRO_PERIOD_US = 5000
 
 
 def _save_blockly_gyro(
@@ -56,35 +48,8 @@ def _save_blockly_gyro(
     origin: float | None,
     end: float | None = None,
 ) -> dict[str, Any] | None:
-    """記録中のIMUサンプルを .pgyro に書く。失敗は例外（呼び出し側が拾う）。
-
-    end はマクロの終わり（最後の操作＋余韻）。最後のサンプルより後ろも
-    そこで静止させ、マクロの残り時間ぶん最後の角速度を積分し続けない。
-    """
-    from pokecon.domain.motion_track import MotionRecorder, resample_to_grid
-
-    t0, events = take
-    offset_us, samples = resample_to_grid(
-        events,
-        origin if origin is not None else t0,
-        end_s=(end + 0.2) if end is not None else None,
-    )
-    if not samples:
-        return None
-    stamp = time.strftime("%Y%m%d-%H%M%S")
-    millis = int(time.time() * 1000) % 1000
-    name = f"blockly_{stamp}_{millis:03d}.pgyro"
-    rel = _BLOCKLY_GYRO_REL / name
-    path = Path(WindowUtils.APP_DIR) / rel
-    with MotionRecorder(str(path), start_offset_us=offset_us) as recorder:
-        for sample in samples:
-            recorder.write(sample)
-    return {
-        "file": rel.as_posix(),
-        "count": len(samples),
-        "offset_us": offset_us,
-        "duration_ms": len(samples) * (_BLOCKLY_GYRO_PERIOD_US // 1000),
-    }
+    """記録中の IMU サンプルを .pgyro に書く（実体は ui/blockly/gyro_export.py）。"""
+    return save_blockly_gyro(WindowUtils.APP_DIR, take, origin, end)
 
 
 #: POST本文の上限（/save・/delete・/template用）。localhost用の安全弁。
@@ -407,8 +372,13 @@ def _run_state(since: int) -> dict[str, Any]:
     return state
 
 
-class _Handler(http.server.SimpleHTTPRequestHandler):
-    """静的配信＋`/save`受け口。ログは出さない。"""
+class _Handler(
+    BlocklyLiveRoutesMixin,
+    BlocklyMediaRoutesMixin,
+    BlocklyWorkspaceRoutesMixin,
+    http.server.SimpleHTTPRequestHandler,
+):
+    """静的配信＋`/save`・ライブ編集・試し実行・記録の受け口。ログは出さない。"""
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, directory=str(_BLOCKLY_DIR), **kwargs)
@@ -416,1052 +386,70 @@ class _Handler(http.server.SimpleHTTPRequestHandler):
     def log_message(self, *args: Any) -> None:
         return
 
-    #: 受け付ける Host 名。localhost 専用の受け口のため、それ以外の名前で
-    #: 届いた要求（DNSリバインディング）は断る。
-    _LOCAL_HOSTS = frozenset({"127.0.0.1", "localhost"})
-
-    def _refuse_foreign(self, *, is_post: bool) -> bool:
-        """よそのページからの要求なら403で断り、真を返す。
-
-        `/save` は `.py` を書き、一覧の作り直しで読み込まれる（＝コード実行）。
-        待ち受け番号は固定のため、閲覧中の別サイトから狙われないよう、
-        Host・Origin・JSON種別で同じオリジンの編集画面だけを通す。
-        JSON種別はブラウザでは事前確認（preflight）が要り、ここは応じないため
-        no-cors の単純POSTも届かない。
-        """
-        # 待ち受けは常に IPv4 の (host, port) 組（_bind_server・試験とも）。
-        port = self.server.server_address[1]  # type: ignore[index]
-        host = str(self.headers.get("Host", "") or "")
-        name = host.rsplit(":", 1)[0] if host.count(":") == 1 else host
-        reason = ""
-        if host and name.lower() not in self._LOCAL_HOSTS:
-            reason = "Host が違います"
-        if is_post and not reason:
-            origin = self.headers.get("Origin")
-            allowed = {f"http://{h}:{port}" for h in self._LOCAL_HOSTS}
-            if origin is not None and origin not in allowed:
-                reason = "別のページからの要求です"
-            ctype = str(self.headers.get("Content-Type", "") or "").lower()
-            if not reason and not ctype.startswith("application/json"):
-                reason = "JSON 以外の要求です"
-        if not reason:
-            return False
-        if is_post:
-            # 未読のまま閉じるとRSTで応答が届かないため、上限つきで読み捨てる。
-            try:
-                remaining = int(str(self.headers.get("Content-Length", "0")).strip())
-                remaining = min(max(remaining, 0), MAX_UPLOAD_BODY_BYTES + 65536)
-                while remaining > 0:
-                    chunk = self.rfile.read(min(65536, remaining))
-                    if not chunk:
-                        break
-                    remaining -= len(chunk)
-            except Exception:
-                pass
-        body = json.dumps(
-            {"ok": False, "message": f"受け付けません: {reason}"}, ensure_ascii=False
-        ).encode("utf-8")
-        self.close_connection = True
-        self.send_response(403)
-        self.send_header("Content-Type", "application/json; charset=utf-8")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
-        return True
-
     def end_headers(self) -> None:
         # アプリ更新後に古い資産・一覧をブラウザが使い回さないよう、都度取り直させる。
         self.send_header("Cache-Control", "no-store")
-        # 他サイトのiframeへの埋め込みを断る（重ねたクリック誘導で削除等をさせない）。
+        # 他サイトの iframe への埋め込みを断る（重ねたクリック誘導で削除等をさせない）。
         self.send_header("X-Frame-Options", "DENY")
         self.send_header("Content-Security-Policy", "frame-ancestors 'none'")
         super().end_headers()
 
     def do_GET(self) -> None:
-        """`/list`・`/load`の受け口。それ以外は静的配信に任せる。"""
+        """API 受け口へ振り分け、該当しなければ静的配信に任せる。"""
         if self._refuse_foreign(is_post=False):
             return
         path = urllib.parse.urlsplit(self.path).path
-        if path == "/list":
-            stems = blockly_save.list_blockly(WindowUtils.APP_DIR)
-            # 置き場ごとの識別子。番地を固定したため、別インストールの編集画面とも
-            # ブラウザ内の保存領域を共有する。控えをこれで分ける（中身は推測不能でよい）。
-            app_id = hashlib.sha256(
-                str(Path(WindowUtils.APP_DIR).resolve()).encode("utf-8")
-            ).hexdigest()[:16]
-            self._reply(True, "", {"stems": stems, "appId": app_id})
-            return
-        if path == "/load":
-            query = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
-            stem = query.get("stem", [""])[0]
-            res = blockly_save.load_blockly(WindowUtils.APP_DIR, stem)
-            if res.status != "ok":
-                self._reply(False, res.message)
-                return
-            # 手編集検出は保存時の要約値との比較（上書き保存で消えるため知らせる）。
-            extra: dict[str, Any] = {
-                "stem": stem,
-                "workspaceJson": res.workspace_json,
-                "externalEdit": res.external_edit,
-            }
-            self._reply(True, res.message, extra)
-            return
-        if path == "/samples":
-            # 作例ギャラリー用。壊れていても空の一覧で返す（編集は続けられる）。
-            try:
-                samples = blockly_save.list_samples(WindowUtils.APP_DIR)
-            except Exception:
-                samples = []
-            self._reply(True, "", {"samples": samples})
-            return
-        if path == "/run/state":
-            query = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
-            try:
-                since = int(query.get("since", ["0"])[0])
-            except ValueError:
-                since = 0
-            self._reply(True, "", _run_state(since))
-            return
-        if path == "/templates":
-            names = blockly_templates.list_image_templates(WindowUtils.APP_DIR)
-            self._reply(True, "", {"templates": names})
-            return
-        if path == "/live/state":
-            snapshot = _LIVE.snapshot()
-            if snapshot is None:
-                self._reply(
-                    False,
-                    "エディタの状態がまだありません（開いて少し待ってください）",
-                )
-                return
-            self._reply(
-                True,
-                "",
-                {
-                    "revision": snapshot["revision"],
-                    "workspace": snapshot["workspace"],
-                    "dirty": snapshot["dirty"],
-                    "client": snapshot["client"],
-                    "queued": snapshot["queued"],
-                    "active": snapshot["active"],
-                },
-            )
-            return
-        if path == "/live/next":
-            query = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
-            client = query.get("client", [""])[0]
-            if not client:
-                self._reply(False, "client がありません")
-                return
-            self._reply(True, "", _LIVE.next_request(client))
-            return
-        if path == "/frame":
-            getter = _GET_FRAME
-            if getter is None:
-                self._reply(False, blockly_capture.NO_CAMERA_MESSAGE)
-                return
-            try:
-                png = getter()
-            except Exception:
-                png = None
-            if png is None:
-                self._reply(False, blockly_capture.FRAME_FAIL_MESSAGE)
-                return
-            self.send_response(200)
-            self.send_header("Content-Type", "image/png")
-            self.send_header("Content-Length", str(len(png)))
-            self.end_headers()
-            self.wfile.write(png)
-            return
-        if path == "/template_image":
-            query = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
-            name = query.get("name", [""])[0]
-            reason = blockly_capture.validate_template_name(name.strip())
-            if reason is not None:
-                self._reply(False, f"画像を出せません: {reason}")
-                return
-            base = Path(WindowUtils.APP_DIR) / "Template"
-            target = (base / Path(str(name).replace("\\", "/"))).resolve()
-            try:
-                target.relative_to(base.resolve())
-            except ValueError:
-                self._reply(False, "画像を出せません: `..` は使えません")
-                return
-            content_types = {
-                ".png": "image/png",
-                ".jpg": "image/jpeg",
-                ".jpeg": "image/jpeg",
-                ".bmp": "image/bmp",
-            }
-            ctype = content_types.get(target.suffix.lower())
-            if ctype is None or not target.is_file():
-                self._reply(False, f"画像を出せません: Template/{name} がありません")
-                return
-            try:
-                body = target.read_bytes()
-            except OSError as e:
-                self._reply(False, f"画像を出せません: {e}")
-                return
-            self.send_response(200)
-            self.send_header("Content-Type", ctype)
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
+        routes = {
+            "/list": self._handle_list,
+            "/load": self._handle_load,
+            "/samples": self._handle_samples,
+            "/templates": self._handle_templates,
+            "/run/state": self._handle_run_state,
+            "/live/state": self._handle_live_state,
+            "/live/next": self._handle_live_next,
+            "/frame": self._handle_frame,
+            "/template_image": self._handle_template_image,
+        }
+        handler = routes.get(path)
+        if handler is not None:
+            handler()
             return
         super().do_GET()
 
-    def _read_json(self, max_bytes: int = MAX_BODY_BYTES) -> dict[str, Any] | None:
-        """POST本文を読む。壊れていたら応答済みで None を返す。"""
-        try:
-            length = int(str(self.headers.get("Content-Length", "0")).strip())
-        except (TypeError, ValueError) as e:
-            self._reply(False, f"保存できません: {e}")
-            return None
-        if length < 0 or length > max_bytes:
-            # 未読のまま閉じるとRSTで応答が届かないため読み捨てる。
-            # 申告どおりに全部読むと巨大申告で固まるため、上限＋64KBで打ち切る。
-            try:
-                remaining = min(length, max_bytes + 65536)
-                while remaining > 0:
-                    chunk = self.rfile.read(min(65536, remaining))
-                    if not chunk:
-                        break
-                    remaining -= len(chunk)
-            except Exception:
-                pass
-            self.close_connection = True
-            self._reply(False, "保存できません: 本文が大きすぎます")
-            return None
-        try:
-            # 形は下で確かめるまで分からない（配列・数値も読める）。
-            payload: Any = json.loads(self.rfile.read(length).decode("utf-8"))
-        except (ValueError, UnicodeDecodeError) as e:
-            self._reply(False, f"保存できません: {e}")
-            return None
-        if not isinstance(payload, dict):
-            # 配列などは各口の .get で落ち、応答なしで切れるため、ここで断る。
-            self._reply(
-                False,
-                "受け付けません: JSONの形が違います（オブジェクトではありません）",
-            )
-            return None
-        return payload
-
     def do_POST(self) -> None:
+        """JSON 本文を読み取り、ルートごとの処理へ振り分ける。"""
         if self._refuse_foreign(is_post=True):
             return
-        if urllib.parse.urlsplit(self.path).path == "/live/snapshot":
-            payload = self._read_json()
-            if payload is None:
-                return
-            self._live_snapshot(payload)
+        path = urllib.parse.urlsplit(self.path).path
+        if path == "/record/start":
+            if self._read_json() is not None:
+                self._start_record()
             return
-        if urllib.parse.urlsplit(self.path).path == "/live/result":
-            payload = self._read_json()
-            if payload is None:
-                return
-            self._live_result(payload)
+        if path == "/record/stop":
+            if self._read_json() is not None:
+                self._stop_record()
             return
-        if urllib.parse.urlsplit(self.path).path == "/live/patch":
-            payload = self._read_json()
-            if payload is None:
-                return
-            self._live_patch(payload)
+        routes: dict[str, tuple[int, Any]] = {
+            "/live/snapshot": (MAX_BODY_BYTES, self._live_snapshot),
+            "/live/result": (MAX_BODY_BYTES, self._live_result),
+            "/live/patch": (MAX_BODY_BYTES, self._live_patch),
+            "/run": (MAX_BODY_BYTES, self._start_trial),
+            "/run/control": (MAX_BODY_BYTES, self._control_trial),
+            "/delete": (MAX_BODY_BYTES, self._handle_delete),
+            "/save": (MAX_BODY_BYTES, self._handle_save),
+            "/template": (MAX_BODY_BYTES, self._handle_save_template),
+            "/match": (MAX_UPLOAD_BODY_BYTES, self._handle_match),
+            "/color_ratio": (MAX_UPLOAD_BODY_BYTES, self._handle_color_ratio),
+            "/filter_preview": (MAX_UPLOAD_BODY_BYTES, self._handle_filter_preview),
+        }
+        entry = routes.get(path)
+        if entry is None:
+            self.send_error(404)
             return
-        if urllib.parse.urlsplit(self.path).path == "/run":
-            payload = self._read_json()
-            if payload is None:
-                return
-            self._start_trial(payload)
-            return
-        if urllib.parse.urlsplit(self.path).path == "/run/control":
-            payload = self._read_json()
-            if payload is None:
-                return
-            self._control_trial(payload)
-            return
-        if urllib.parse.urlsplit(self.path).path == "/delete":
-            payload = self._read_json()
-            if payload is None:
-                return
-            res = blockly_save.delete_blockly(
-                WindowUtils.APP_DIR, str(payload.get("stem", ""))
-            )
-            print(res.message)
-            self._reply(res.status == "deleted", res.message)
-            return
-        if urllib.parse.urlsplit(self.path).path == "/template":
-            payload = self._read_json()
-            if payload is None:
-                return
-            getter = _GET_FRAME
-            if getter is None:
-                self._reply(False, blockly_capture.NO_CAMERA_MESSAGE)
-                return
-            try:
-                png = getter()
-            except Exception:
-                png = None
-            if png is None:
-                self._reply(False, blockly_capture.FRAME_FAIL_MESSAGE)
-                return
-            res = blockly_capture.save_template(
-                WindowUtils.APP_DIR,
-                str(payload.get("name", "")),
-                png,
-                payload.get("rect"),
-            )
-            print(res.message)
-            extra = {"path": res.rel} if res.status == "saved" else {}
-            self._reply(res.status == "saved", res.message, extra)
-            return
-        if urllib.parse.urlsplit(self.path).path == "/match":
-            payload = self._read_json(MAX_UPLOAD_BODY_BYTES)
-            if payload is None:
-                return
-            source = str(payload.get("source", "frame"))
-            frame: Any = None
-            if source == "upload":
-                try:
-                    # 復号は1回だけ（decode→ndarray→matchへ受渡し）。
-                    # 文言は従来のbytes APIと同一に保つ。
-                    frame = blockly_match.decode_upload_array(
-                        str(payload.get("image", ""))
-                    )
-                except ValueError as e:
-                    self._reply(False, f"照合できません: {e}")
-                    return
-            else:
-                getter = _GET_FRAME
-                if getter is None:
-                    self._reply(False, blockly_capture.NO_CAMERA_MESSAGE)
-                    return
-                try:
-                    frame = getter()
-                except Exception:
-                    frame = None
-                if frame is None:
-                    self._reply(False, blockly_capture.FRAME_FAIL_MESSAGE)
-                    return
-            res = blockly_match.match_template(
-                WindowUtils.APP_DIR,
-                frame,
-                str(payload.get("template", "")),
-                payload.get("threshold", 0.7),
-                bool(payload.get("use_gray", True)),
-                payload.get("crop", None),
-            )
-            print(res.message)
-            extra = (
-                {
-                    "score": res.score,
-                    "matched": res.matched,
-                    "count": res.count,
-                    "rect": res.rect,
-                }
-                if res.status == "ok"
-                else {}
-            )
-            self._reply(res.status == "ok", res.message, extra)
-            return
-        if urllib.parse.urlsplit(self.path).path == "/color_ratio":
-            payload = self._read_json(MAX_UPLOAD_BODY_BYTES)
-            if payload is None:
-                return
-            source = str(payload.get("source", "frame"))
-            frame = None
-            if source == "upload":
-                try:
-                    # 復号は1回だけ（decode→ndarray→ratioへ受渡し）。
-                    # 文言は従来のbytes APIと同一に保つ。
-                    frame = blockly_match.decode_upload_array(
-                        str(payload.get("image", ""))
-                    )
-                except ValueError as e:
-                    self._reply(False, f"色を見られません: {e}")
-                    return
-            else:
-                getter = _GET_FRAME
-                if getter is None:
-                    self._reply(False, blockly_capture.NO_CAMERA_MESSAGE)
-                    return
-                try:
-                    frame = getter()
-                except Exception:
-                    frame = None
-                if frame is None:
-                    self._reply(False, blockly_capture.FRAME_FAIL_MESSAGE)
-                    return
-            ratio, err = blockly_color.ratio_on_png(
-                frame,
-                payload.get("lower"),
-                payload.get("upper"),
-                payload.get("crop", None),
-            )
-            if err is not None:
-                self._reply(False, f"色を見られません: {err}")
-                return
-            message = f"割合 {ratio * 100:.1f}%"
-            print(message)
-            self._reply(True, message, {"ratio": ratio})
-            return
-        if urllib.parse.urlsplit(self.path).path == "/filter_preview":
-            payload = self._read_json(MAX_UPLOAD_BODY_BYTES)
-            if payload is None:
-                return
-            source = str(payload.get("source", "frame"))
-            frame = None
-            if source == "upload":
-                try:
-                    # 復号は1回だけ（decode→ndarray→filterへ受渡し）。
-                    # 文言は従来のbytes APIと同一に保つ。
-                    frame = blockly_match.decode_upload_array(
-                        str(payload.get("image", ""))
-                    )
-                except ValueError as e:
-                    self._reply(False, f"色を見られません: {e}")
-                    return
-            else:
-                getter = _GET_FRAME
-                if getter is None:
-                    self._reply(False, blockly_capture.NO_CAMERA_MESSAGE)
-                    return
-                try:
-                    frame = getter()
-                except Exception:
-                    frame = None
-                if frame is None:
-                    self._reply(False, blockly_capture.FRAME_FAIL_MESSAGE)
-                    return
-            out, ratio, err = blockly_color.filter_png(
-                frame,
-                payload.get("lower"),
-                payload.get("upper"),
-                payload.get("mode"),
-                payload.get("crop", None),
-            )
-            if err is not None or out is None:
-                self._reply(False, f"色を見られません: {err}")
-                return
-            message = f"割合 {ratio * 100:.1f}%"
-            print(message)
-            image = base64.b64encode(out).decode("ascii")
-            self._reply(True, message, {"ratio": ratio, "image": image})
-            return
-        if urllib.parse.urlsplit(self.path).path == "/save":
-            payload = self._read_json()
-            if payload is None:
-                return
-            res = blockly_save.save_blockly(
-                WindowUtils.APP_DIR,
-                str(payload.get("stem", "")),
-                str(payload.get("workspaceJson", "")),
-                str(payload.get("pythonCode", "")),
-            )
-            print(res.message)
-            self._reply(res.status == "saved", res.message, {"warnings": res.warnings})
-            return
-        if urllib.parse.urlsplit(self.path).path == "/record/start":
-            payload = self._read_json()
-            if payload is None:
-                return
-            self._start_record()
-            return
-        if urllib.parse.urlsplit(self.path).path == "/record/stop":
-            payload = self._read_json()
-            if payload is None:
-                return
-            self._stop_record()
-            return
-        self.send_error(404)
-
-    def _live_snapshot(self, payload: dict[str, Any]) -> None:
-        """ブラウザの現在のワークスペースと版を受け取る。"""
-        client = payload.get("client")
-        revision = payload.get("revision")
-        workspace = payload.get("workspace")
-        if not isinstance(client, str) or not client:
-            self._reply(False, "client がありません")
-            return
-        if not isinstance(revision, str) or not revision:
-            self._reply(False, "revision がありません")
-            return
-        if not isinstance(workspace, dict):
-            self._reply(False, "workspace がありません")
-            return
-        leased = _LIVE.update(client, revision, workspace, bool(payload.get("dirty")))
-        self._reply(True, "", {"leased": leased})
-
-    def _live_result(self, payload: dict[str, Any]) -> None:
-        """ブラウザの適用結果を受け取る。"""
-        client = payload.get("client")
-        request_id = payload.get("id")
-        if not isinstance(client, str) or not client:
-            self._reply(False, "client がありません")
-            return
-        if isinstance(request_id, bool) or not isinstance(request_id, int):
-            self._reply(False, "id がありません")
-            return
-        revision = payload.get("revision")
-        workspace = payload.get("workspace")
-        accepted = _LIVE.complete(
-            client,
-            request_id,
-            ok=payload.get("ok") is True,
-            revision=revision if isinstance(revision, str) else "",
-            workspace=workspace if isinstance(workspace, dict) else None,
-            error=str(payload.get("error") or ""),
-            status=str(payload.get("status") or ""),
-        )
-        self._reply(accepted, "" if accepted else "要求が切り替わっています")
-
-    def _live_patch(self, payload: dict[str, Any]) -> None:
-        """CLIの要求を検証し、開いているエディタへ渡して結果を待つ。"""
-        base_revision = payload.get("baseRevision")
-        operations = payload.get("operations")
-        if not isinstance(base_revision, str) or not base_revision:
-            self._reply(False, "baseRevision を書いてください", {"status": "usage"})
-            return
-        snapshot = _LIVE.snapshot()
-        if snapshot is None:
-            self._reply(
-                False,
-                "エディタの状態がまだありません（開いて少し待ってください）",
-                {"status": "unavailable"},
-            )
-            return
-        if snapshot["revision"] != base_revision:
-            self._reply(
-                False,
-                "エディタの内容が変わっています（読み直してください）",
-                {
-                    "status": "conflict",
-                    "revision": snapshot["revision"],
-                    "workspace": snapshot["workspace"],
-                },
-            )
-            return
-        catalog = blockly_headless.catalog(WindowUtils.APP_DIR)
-        if not catalog.ok or catalog.data is None:
-            self._reply(
-                False,
-                (catalog.errors or ["カタログを取得できませんでした"])[0],
-                {"status": "failed"},
-            )
-            return
-        patched = blockly_author.patch_workspace(
-            snapshot["workspace"], operations, catalog.data
-        )
-        if not patched.ok or patched.workspace is None:
-            self._reply(
-                False,
-                (patched.errors or ["操作を適用できませんでした"])[0],
-                {"status": "failed", "errors": patched.errors},
-            )
-            return
-        structural = any(change.get("op") != "set_field" for change in patched.changes)
-        live_ops: list[dict[str, Any]] = []
-        if not structural:
-            for change in patched.changes:
-                block_id = change.get("blockId")
-                if not isinstance(block_id, str) or not block_id:
-                    self._reply(
-                        False,
-                        "ブロックIDがありません（エディタで読み直してください）",
-                        {"status": "failed"},
-                    )
-                    return
-                live_ops.append(
-                    {
-                        "blockId": block_id,
-                        "field": change["field"],
-                        "value": change.get("liveValue"),
-                    }
-                )
-        checked = blockly_author.check_workspace(patched.workspace, WindowUtils.APP_DIR)
-        if not checked.ok or checked.workspace is None:
-            self._reply(
-                False,
-                (checked.errors or ["検査に通りませんでした"])[0],
-                {"status": "failed", "errors": checked.errors},
-            )
-            return
-        request_id, error = _LIVE.enqueue(
-            live_ops,
-            base_revision,
-            mode="load" if structural else "ops",
-            workspace=patched.workspace,
-        )
-        if request_id is None:
-            latest = _LIVE.snapshot() or snapshot
-            self._reply(
-                False,
-                error,
-                {
-                    "status": "unavailable",
-                    "revision": latest["revision"],
-                    "workspace": latest["workspace"],
-                },
-            )
-            return
-        result = _LIVE.wait(request_id, timeout=blockly_live.REQUEST_SECONDS + 2.0)
-        if result.get("ok") is True:
-            self._reply(
-                True,
-                "AIの変更を適用しました（保存はまだです）",
-                {
-                    "status": "applied",
-                    "revision": result.get("revision", ""),
-                    "workspace": result.get("workspace"),
-                    "changes": patched.changes,
-                    "code": checked.code,
-                },
-            )
-            return
-        latest = _LIVE.snapshot() or snapshot
-        self._reply(
-            False,
-            result.get("error") or "AIの変更を適用できませんでした",
-            {
-                "status": result.get("status", "failed"),
-                "revision": latest["revision"],
-                "workspace": latest["workspace"],
-                "changes": patched.changes,
-            },
-        )
-
-    def _start_trial(self, payload: dict[str, Any]) -> None:
-        """保存せずに今の組み立てを本体の実行器で走らせる（試し実行）。
-
-        実行時引数（`POKECON_INPUTS`）があるときは、開始前に
-        answers → ポリシー（dialog / default / fail）で確定する。
-        dialog は GUI スレッドで表示を予約してすぐ応答し、結果は
-        `/run/state` で返す（HTTP 応答を待たせない）。
-        """
-        global _TRIAL, _BREAKPOINTS
-        host = _RUN_HOST
-        if host is None:
-            self._reply(
-                False,
-                "本体と繋がっていないため試し実行できません（保存して本体で実行してください）",
-            )
-            return
-        if _RECORDER.recording:
-            # 記録中に走らせると、試し実行の操作まで記録に混ざる。
-            self._reply(
-                False,
-                "操作の記録中は試し実行できません（記録を止めてから試してください）",
-            )
-            return
-        current = _TRIAL
-        if current is not None and current.session.awaiting_input:
-            self._reply(
-                False,
-                "実行時引数の入力中です（先に閉じてください）",
-            )
-            return
-        allowed, max_seconds, reason = _parse_max_seconds(payload)
-        if not allowed:
-            self._reply(False, reason)
-            return
-        policy = payload.get("inputPolicy", "dialog")
-        if not isinstance(policy, str) or policy not in input_specs.POLICIES:
-            self._reply(
-                False,
-                "inputPolicy は dialog / default / fail のどれかにしてください",
-            )
-            return
-        answers = payload.get("answers", {})
-        if answers is None:
-            answers = {}
-        if not isinstance(answers, dict):
-            self._reply(False, "answers は key → 値のオブジェクトで書いてください")
-            return
-        code = str(payload.get("code", ""))
-        raw_spec, spec_errors = input_specs.raw_spec_from_code(code)
-        if spec_errors:
-            self._reply(False, "実行できません:\n- " + "\n- ".join(spec_errors))
-            return
-        specs, spec_errors = input_specs.parse_spec(raw_spec, WindowUtils.APP_DIR)
-        if spec_errors:
-            self._reply(False, "実行時引数が不正です:\n- " + "\n- ".join(spec_errors))
-            return
-        input_errors = blockly_validate.validate_input_code(code, WindowUtils.APP_DIR)
-        if input_errors:
-            self._reply(False, "実行時引数が不正です:\n- " + "\n- ".join(input_errors))
-            return
-        resolution = input_specs.resolve(specs, answers, policy, WindowUtils.APP_DIR)
-        if resolution.errors:
-            self._reply(
-                False, "実行時引数が不正です:\n- " + "\n- ".join(resolution.errors)
-            )
-            return
-        if resolution.missing and policy in ("fail", "default"):
-            self._reply(
-                False,
-                "実行時引数が足りません",
-                {
-                    "status": "input_required",
-                    "inputRequired": resolution.missing,
-                },
-            )
-            return
-        if "breakpoints" in payload:
-            _BREAKPOINTS = _as_ids(payload.get("breakpoints"))
-        session = blockly_run.TrialSession(next(_RUN_IDS))
-        session.breakpoints = _BREAKPOINTS
-        run_to = payload.get("runTo", "")
-        if isinstance(run_to, str) and run_to:
-            # 行き先が来なくても止まらないだけ（走らせる前に断らない）。
-            session.run_to = run_to
-        cls, errors = blockly_run.build_trial_class(code, session)
-        if cls is None:
-            self._reply(False, "実行できません:\n- " + "\n- ".join(errors))
-            return
-        trial = _Trial(session, cls)
-
-        def _finish_start(
-            values: dict[str, Any], sources: dict[str, str]
-        ) -> str | None:
-            """期限を引数確定後に取り、実行器へ渡す。"""
-            global _TRIAL
-            session.inputs = dict(values)
-            session.input_sources = dict(sources)
-            session.input_status = "accepted" if specs else "none"
-            session.awaiting_input = False
-            if max_seconds is not None:
-                session.deadline = time.monotonic() + max_seconds
-            try:
-                message = host.start_external_command(cls, values)
-            except Exception:
-                # 開始の後の手順で落ちても、走っていれば追跡する。
-                if _our_command(trial) is not None:
-                    _TRIAL = trial
-                raise
-            if not message:
-                _TRIAL = trial
-            return message
-
-        def _begin() -> str | None:
-            """混雑の確認・開始・公開をまとめて GUI スレッドで行う。"""
-            if host.runner.is_busy():
-                return "本体で別のコマンドが実行中です（止めてから試してください）"
-            if input_dialog.is_open():
-                return "実行時引数の入力中です（先に閉じてください）"
-            return _finish_start(resolution.values, resolution.sources)
-
-        if not resolution.missing:
-            try:
-                message = _call_on_gui(_begin)
-            except Exception as e:
-                if _TRIAL is trial:
-                    self._reply(
-                        True,
-                        f"試し実行を始めました（本体で注意: {e}）",
-                        {"runId": session.run_id},
-                    )
-                    return
-                self._reply(False, f"本体が応答しません: {e}")
-                return
-            if message:
-                self._reply(False, str(message))
-                return
-            self._reply(True, "試し実行を始めました", {"runId": session.run_id})
-            return
-
-        # dialog ポリシー: 表示だけ予約し、HTTP はすぐ返す。
-        def _show_input() -> None:
-            root = getattr(host, "root", None)
-            try:
-                result = input_dialog.prompt(
-                    root, raw_spec, WindowUtils.APP_DIR, initial=resolution.values
-                )
-            except Exception as e:
-                session.awaiting_input = False
-                session.input_status = "failed"
-                session.fail(f"実行時引数の入力を開けません: {e}")
-                session.end("エラー")
-                return
-            if result.values is None:
-                session.awaiting_input = False
-                if result.error:
-                    session.input_status = "failed"
-                    session.fail(result.error)
-                    session.end("エラー")
-                else:
-                    session.input_status = "canceled"
-                    session.log("実行時引数の入力を取り消しました")
-                    session.end("停止")
-                return
-            resolved = input_specs.resolve(
-                specs,
-                answers,
-                "dialog",
-                WindowUtils.APP_DIR,
-                dialog_values=result.values,
-            )
-            if resolved.errors or resolved.missing:
-                session.awaiting_input = False
-                session.input_status = "failed"
-                session.fail(
-                    "実行時引数が不正です: "
-                    + "; ".join(
-                        resolved.errors + [item["key"] for item in resolved.missing]
-                    )
-                )
-                session.end("エラー")
-                return
-            try:
-                message = _finish_start(resolved.values, resolved.sources)
-            except Exception as e:
-                session.fail(f"試し実行を開始できません: {e}")
-                session.end("エラー")
-                return
-            if message:
-                session.fail(message)
-                session.end("エラー")
-
-        def _reserve() -> str | None:
-            global _TRIAL
-            if host.runner.is_busy():
-                return "本体で別のコマンドが実行中です（止めてから試してください）"
-            if input_dialog.is_open():
-                return "実行時引数の入力中です（先に閉じてください）"
-            root = getattr(host, "root", None)
-            if root is None:
-                return "本体の画面が無いため引数ダイアログを開けません"
-            _TRIAL = trial
-            session.awaiting_input = True
-            session.input_status = "awaiting"
-            session.inputs = dict(resolution.values)
-            session.input_sources = dict(resolution.sources)
-            root.after(0, _show_input)
-            return None
-
-        try:
-            message = _call_on_gui(_reserve)
-        except Exception as e:
-            self._reply(False, f"本体が応答しません: {e}")
-            return
-        if message:
-            self._reply(False, str(message))
-            return
-        self._reply(
-            True,
-            "実行時引数の入力を待っています",
-            {"runId": session.run_id, "status": "awaiting_input"},
-        )
-
-    def _control_trial(self, payload: dict[str, Any]) -> None:
-        """試し実行の停止・一時停止・再開・1つ進む・区切りの差し替え。
-
-        どの操作も「いまの試し実行の runId」を要求する。確かめるのは GUI スレッド
-        で操作する時点なので、待っている間に別の実行へ切り替わっていても、
-        古い画面の操作が新しい実行へかからない。
-        """
-        action = str(payload.get("action", ""))
-        if action not in _CONTROL_ACTIONS:
-            self._reply(False, f"知らない操作です: {action}")
-            return
-        run_id = payload.get("runId")
-        if not _is_run_id(run_id):
-            self._reply(False, RUN_SWITCHED_MESSAGE)
-            return
-
-        def _apply() -> tuple[bool, str]:
-            global _BREAKPOINTS
-            trial = _TRIAL
-            if trial is None or trial.session.run_id != run_id:
-                return (False, RUN_SWITCHED_MESSAGE)
-            session = trial.session
-            if action == "breakpoints":
-                _BREAKPOINTS = _as_ids(payload.get("breakpoints"))
-                session.breakpoints = _BREAKPOINTS
-                return (True, "")
-            if session.awaiting_input:
-                if action == "stop":
-                    # 表示中の引数ダイアログを閉じる。閉じた結果は
-                    # /run/state の inputStatus:"canceled" で見える。
-                    input_dialog.cancel()
-                    return (True, "")
-                return (False, "実行時引数の入力を待っています")
-            host = _RUN_HOST
-            cmd = _our_command(trial)
-            if host is None or cmd is None:
-                return (False, "試し実行は動いていません")
-            try:
-                if action == "stop":
-                    session.stop_requested = True
-                    host.stopPlay()
-                elif action == "pause":
-                    host.set_running_paused(True)
-                elif action == "resume":
-                    host.set_running_paused(False)
-                else:  # step
-                    # 次のブロックの手前で止まるよう頼んでから動かす。
-                    session.step_pending = True
-                    host.set_running_paused(False)
-            except Exception as e:
-                return (False, f"本体が応答しません: {e}")
-            return (True, "")
-
-        try:
-            ok, message = _call_on_gui(_apply)
-        except Exception as e:
-            self._reply(False, f"本体が応答しません: {e}")
-            return
-        self._reply(ok, message)
-
-    def _start_record(self) -> None:
-        """本体の送信線に記録を付ける（マクロ記録の開始）。"""
-        host = _RUN_HOST
-        if host is None:
-            self._reply(
-                False,
-                "本体と繋がっていないため記録できません（本体で操作してから試してください）",
-            )
-            return
-
-        def _attach() -> tuple[bool, str, bool]:
-            if _RECORDER.recording:
-                return (False, "既に記録中です（止めてから始めてください）", False)
-            if _our_command(_TRIAL) is not None:
-                # 試し実行の操作まで記録に混ざるため断る。
-                return (
-                    False,
-                    "試し実行中は記録できません（試し実行を止めてから始めてください）",
-                    False,
-                )
-            blocked = _RECORD_BLOCKED
-            if blocked is not None:
-                try:
-                    reason = blocked()
-                except Exception:
-                    reason = None
-                if reason:
-                    # 通常コマンドの操作まで記録に混ざるため断る。
-                    return (False, str(reason), False)
-            serial = getattr(host, "serial", None)
-            sender = getattr(serial, "sender", None)
-            transport = getattr(sender, "transport", None)
-            if transport is None:
-                return (
-                    False,
-                    "送信線が無いため記録できません（シリアルに接続してから試してください）",
-                    False,
-                )
-            if not _RECORDER.start(transport):
-                return (
-                    False,
-                    "この通信方式では記録できません（送信行を作らないため）",
-                    False,
-                )
-            # ジャイロ送出中かを返す（止まっていれば画面が先に知らせる）。
-            imu_on = False
-            try:
-                running = getattr(transport, "imu_loop_running", None)
-                imu_on = bool(running()) if callable(running) else False
-            except Exception:
-                imu_on = False
-            return (True, "記録を始めました（本体で操作してください）", imu_on)
-
-        try:
-            ok, message, imu_on = _call_on_gui(_attach)
-        except Exception as e:
-            self._reply(False, f"本体が応答しません: {e}")
-            return
-        self._reply(ok, message, {"imu": imu_on} if ok else None)
-
-    def _stop_record(self) -> None:
-        """記録を外し、手順を返す（マクロ記録の停止）。"""
-        host = _RUN_HOST
-        if host is None:
-            self._reply(
-                False,
-                "本体と繋がっていないため記録できません（本体で操作してから試してください）",
-            )
-            return
-
-        def _detach() -> tuple[
-            bool,
-            list[dict[str, Any]],
-            list[Any],
-            bool,
-            tuple[float, list[tuple[float, tuple[int, int, int, int, int, int]]]]
-            | None,
-            float | None,
-            float | None,
-        ]:
-            was = _RECORDER.recording
-            warnings: list[Any] = []
-            steps = _RECORDER.stop(warnings)
-            contaminated = bool(_RECORDER.contaminated)
-            gyro = _RECORDER.take_gyro()
-            origin = _RECORDER.timeline_origin()
-            end = _RECORDER.timeline_end()
-            return (
-                was,
-                steps if isinstance(steps, list) else [],
-                warnings,
-                contaminated,
-                gyro,
-                origin,
-                end,
-            )
-
-        try:
-            was_recording, steps, warnings, contaminated, gyro, origin, end = (
-                _call_on_gui(_detach)
-            )
-        except Exception as e:
-            self._reply(False, f"本体が応答しません: {e}")
-            return
-        if not was_recording:
-            self._reply(False, "記録していません（記録ボタンで始めてください）")
-            return
-        gyro_payload: dict[str, Any] | None = None
-        gyro_note = ""
-        if gyro is not None:
-            try:
-                gyro_payload = _save_blockly_gyro(gyro, origin, end)
-            except Exception as e:
-                gyro_note = f"ジャイロの保存に失敗しました: {e}"
-        if gyro_payload is None and not gyro_note:
-            if gyro is not None:
-                gyro_note = "ジャイロは操作の前だけだったため記録していません"
-            else:
-                gyro_note = (
-                    "ジャイロは記録されていません"
-                    "（ジャイロ送出を開始してから記録してください）"
-                )
-        message = f"{len(steps)} 個の操作を記録しました"
-        if gyro_payload is not None:
-            seconds = gyro_payload["duration_ms"] / 1000.0
-            message += f"、ジャイロ {seconds:.1f} 秒"
-        if contaminated:
-            message += "（本体側の操作が混ざった可能性があります）"
-        extra: dict[str, Any] = {"steps": steps}
-        if gyro_payload is not None:
-            extra["gyro"] = gyro_payload
-        if gyro_note:
-            extra["gyroNote"] = gyro_note
-        if warnings:
-            extra["warnings"] = warnings
-        if contaminated:
-            extra["contaminated"] = True
-        self._reply(True, message, extra)
-
-    def _reply(
-        self, ok: bool, message: str, extra: dict[str, Any] | None = None
-    ) -> None:
-        body = json.dumps(
-            {"ok": ok, "message": message, **(extra or {})}, ensure_ascii=False
-        ).encode("utf-8")
-        self.send_response(200)
-        self.send_header("Content-Type", "application/json; charset=utf-8")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
+        max_bytes, handler = entry
+        payload = self._read_json(max_bytes)
+        if payload is not None:
+            handler(payload)
 
 
 def _as_ids(value: Any) -> frozenset[str]:

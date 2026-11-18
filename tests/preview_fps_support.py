@@ -45,6 +45,7 @@ MEAN_HZ_SEMANTICS: Final[str] = (
 )
 SOURCE_PIN_PATHS: Final[tuple[str, ...]] = (
     "SerialController/pokecon/ui/preview_clock.py",
+    "SerialController/pokecon/domain/preview/win32_clock.py",
     "SerialController/pokecon/ui/GuiAssets.py",
     "SerialController/pokecon/app/Window.py",
     "SerialController/pokecon/domain/Camera.py",
