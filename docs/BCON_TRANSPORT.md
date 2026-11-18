@@ -105,6 +105,8 @@ CONFIG の結果は操作前後の STATUS を比較して判断する。`errcode
 
 各文字は押下 → 50ms 待機 → キー解放 → 50ms 待機の順で送る（既定で毎秒 10 文字）。
 「間隔(ms)」で 20〜200ms を 10ms 刻みで選べる。送信開始時に値を読み、実行中は入力欄とともに無効にする。
+間隔が100msを超える場合も、press保持中は **80ms周期**（`KEY_REFRESH_S`）で同じpress全状態を再送する。
+これは spec §5.14 の「非中立の間は100ms以内で同じ全状態を再送」を満たすためで、UART/CDCのフレーム欠落も次周期で復帰する。
 最後に全ゼロの neutral を指定間隔で 2 回送る。「キー解放」も同じ neutral を 2 回送る。
 送信失敗、タブの非表示、窓の閉鎖、接続世代の変更で送信を中止したときも解放を試みる。切断済みや入力抑止中には送れないため、再接続後にキーが残っていれば「キー解放」を押す。
 
@@ -118,7 +120,7 @@ Pico の受信と USB 出力は、この結果だけでは確認できない。�
 
 `BconProcTransport.send_keyboard` も同じ8Bを受け付け、既存の `call` RPC で子の `send_keyboard` を呼び、実行結果を返す。入力行のフックや入力ログ、STATE の最新姿勢には混ぜない。
 
-`pokecon.domain.serial.bcon_keyboard` は `report(mod, key)`、`NEUTRAL`、`prepare_text(text)`、`send_text(send, text, interval_s=0.050)`、`release_keys(send, interval_s=0.050)` を提供する（`interval_s` はキーワード引数）。大文字と記号は US 配列の Shift を使い、`\n`／`\r` は Enter、`\b` は Backspace、`\t` は Tab、`\x1b` は Esc に写す。`send_text` は全文検証後に送信し、書き込めた文字数と失敗理由を返す。
+`pokecon.domain.serial.bcon_keyboard` は `report(mod, key)`、`NEUTRAL`、`prepare_text(text)`、`send_text(send, text, interval_s=0.050, refresh_s=0.080)`、`release_keys(send, interval_s=0.050)` を提供する（`interval_s`/`refresh_s` はキーワード引数）。大文字と記号は US 配列の Shift を使い、`\n`／`\r` は Enter、`\b` は Backspace、`\t` は Tab、`\x1b` は Esc に写す。`send_text` は全文検証後に送信し、書き込めた文字数と失敗理由を返す。
 
 ### 実機確認手順（未実施）
 

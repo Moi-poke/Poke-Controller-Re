@@ -3,7 +3,7 @@
 import os
 import threading
 
-from fakes import CannedMonTransport, FakeTransport
+from fakes import CannedMonTransport, FakeTransport, _HuntUpgradeSer
 from pokecon.domain import transport as Transport
 from pokecon.domain.serial import sender as Sender
 from pokecon.runtime.serial_service import SenderSpec, SerialService
@@ -146,7 +146,6 @@ def test_connect_success_and_disconnect() -> None:
 
 def test_low_baud_connection_upgrades_or_keeps_confirmed_rate(monkeypatch) -> None:
     from pokecon.domain.transport.bcon import BconTransport
-    from test_bcon_session import _HuntUpgradeSer
 
     class Wire(_HuntUpgradeSer):
         def close(self) -> None:
