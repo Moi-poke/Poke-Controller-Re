@@ -160,16 +160,18 @@ def test_the_view_menu_picks_the_arrangement_and_collapses_panes(
     labels = [t for _k, t in _entries(view)]
 
     # Then: 並べ方は 3 択のラジオ（今の値に印が付く）、欄はチェックで出し入れ。
-    for label in ("ログを右", "右にタブとログ", "縦一列"):
+    for label in ("タブを右（全高）", "ログを右", "ログを下"):
         assert view.type(_index(view, label)) == "radiobutton"
+    assert "右にタブとログ" not in labels
+    assert "縦一列" not in labels
     for label in ("設定タブ", "ログ"):
         assert view.type(_index(view, label)) == "checkbutton"
-    assert labels.index("縦一列") < labels.index("設定タブ")
+    assert labels.index("ログを下") < labels.index("設定タブ")
 
     # When: an arrangement and a collapse are chosen.
-    view.invoke(_index(view, "縦一列"))
+    view.invoke(_index(view, "ログを下"))
     view.invoke(_index(view, "ログ"))
 
     # Then: アプリ側の入口に、選んだ値がそのまま渡る。
-    assert ("applyArrangement", ("stack",)) in app.args
+    assert ("applyArrangement", ("log_bottom",)) in app.args
     assert ("setPaneVisible", ("log", False)) in app.args

@@ -290,7 +290,7 @@ def test_a_closed_port_reads_as_not_connected(host: _Host) -> None:
 
 
 def test_rearranging_keeps_every_area_and_status_in_place(host: _Host) -> None:
-    for arrangement in ("side", "stack", "log_bottom", "log_right"):
+    for arrangement in ("tabs_right", "log_bottom", "side", "stack", "log_right"):
         # When: the user picks another arrangement.
         host.applyArrangement(arrangement)
         _settle(host)
@@ -334,11 +334,11 @@ def test_a_collapsed_pane_stays_collapsed_across_compact_and_back(host: _Host) -
     assert host.log_area.winfo_ismapped()
 
 
-def test_stack_fits_the_window_width_instead_of_scrolling_the_whole_window(
+def test_log_bottom_fits_the_window_width_instead_of_scrolling_the_whole_window(
     host: _Host,
 ) -> None:
-    # Given: the stack arrangement in a window narrower than the content request.
-    host.applyArrangement("stack")
+    # Given: the log_bottom arrangement in a window narrower than the content request.
+    host.applyArrangement("log_bottom")
     host.root.geometry("500x800+0+0")
     _settle(host)
 

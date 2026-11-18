@@ -88,7 +88,7 @@ class DisplaySettingsDialog(tk.Toplevel):
             value=self._color_name(normalize_profile_color(color))
         )
 
-        body = ttk.Frame(self, padding=10)
+        body = ttk.Frame(self, padding=12)
         body.grid(column=0, row=0, sticky="ew")
         body.columnconfigure(1, weight=1)
 
@@ -120,7 +120,7 @@ class DisplaySettingsDialog(tk.Toplevel):
             values=list(SHOW_SIZES),
             width=12,
         )
-        self.size_cb.grid(column=1, padx="5", pady=(8, 0), row=size_row, sticky="w")
+        self.size_cb.grid(column=1, padx=4, pady=(8, 0), row=size_row, sticky="w")
 
         # プロファイルの色。並べた窓を見分けるための識別子なので、
         # ここで選んだ色が帯とコンパクトバーの色チップに出る。
@@ -135,7 +135,7 @@ class DisplaySettingsDialog(tk.Toplevel):
             values=[name for name, _ in PROFILE_COLORS],
             width=12,
         )
-        self.color_cb.grid(column=1, padx="5", pady=(8, 0), row=color_row, sticky="w")
+        self.color_cb.grid(column=1, padx=4, pady=(8, 0), row=color_row, sticky="w")
         self.color_cb.bind("<<ComboboxSelected>>", self._sync_color, add="")
 
         # 選んだ色の見本。枠を 1 本引いて、空の「なし」も形が分かるようにする。
@@ -162,7 +162,7 @@ class DisplaySettingsDialog(tk.Toplevel):
             values=fps_values,
             width=12,
         )
-        self.fps_cb.grid(column=1, padx="5", pady=(8, 0), row=fps_row, sticky="w")
+        self.fps_cb.grid(column=1, padx=4, pady=(8, 0), row=fps_row, sticky="w")
 
         # 描画方式。面は起動時に 1 回だけ作るので、変更は再起動後に効く。
         renderers = tuple(WindowUtils.RENDERER_VALUES)
@@ -181,14 +181,14 @@ class DisplaySettingsDialog(tk.Toplevel):
             width=12,
         )
         self.renderer_cb.grid(
-            column=1, padx="5", pady=(8, 0), row=renderer_row, sticky="w"
+            column=1, padx=4, pady=(8, 0), row=renderer_row, sticky="w"
         )
         ttk.Label(
             body,
             text="（auto=GPU優先, sdl=GPU, gdi=CPU, photo=汎用 / 再起動後に反映）",
         ).grid(column=2, padx=(8, 0), pady=(8, 0), row=renderer_row, sticky="w")
 
-        buttons = ttk.Frame(self, padding=(10, 0, 10, 10))
+        buttons = ttk.Frame(self, padding=(12, 8, 12, 12))
         buttons.grid(column=0, row=1, sticky="e")
         specs = (
             ("適用", self._apply),
@@ -197,7 +197,7 @@ class DisplaySettingsDialog(tk.Toplevel):
         )
         for column, (text, command) in enumerate(specs):
             ttk.Button(buttons, text=text, command=command).grid(
-                column=column, padx="5", row=0
+                column=column, padx=4, row=0
             )
 
         self._sync_enabled()

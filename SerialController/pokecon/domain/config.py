@@ -112,8 +112,8 @@ def default_sections() -> dict[str, dict[str, Any]]:
             # プロファイルごとの色（#RRGGBB）。空文字なら色を出さない。
             # 候補は core.display_mode.PROFILE_COLORS が正。
             "profile_color": "",
-            # 欄の並べ方。log_right（ログを右）/ log_bottom（ログを下）/
-            # side（右にタブとログ）/ stack（縦一列）。
+            # 欄の並べ方。tabs_right（タブを右・全高）/ log_right（ログを右）/
+            # log_bottom（ログを下）。旧値 side / stack は読込時に自動移行する。
             # 候補は core.pane_arrangement.ARRANGEMENTS が正。
             "arrangement": DEFAULT_ARRANGEMENT,
             # 設定タブとログ欄の表示（False で折りたたむ）。
@@ -563,8 +563,8 @@ def complete_missing(
             if arrangement != "log_right":
                 window["arrangement"] = "log_right"
                 changed.append("Window.arrangement")
-        elif normalize_arrangement(arrangement) != arrangement:
-            window["arrangement"] = DEFAULT_ARRANGEMENT
+        elif (normalized_arr := normalize_arrangement(arrangement)) != arrangement:
+            window["arrangement"] = normalized_arr
             changed.append("Window.arrangement")
         sashes = window.get("pane_sashes", "")
         if sashes and format_sash_ratios(parse_sash_ratios(sashes)) != sashes:

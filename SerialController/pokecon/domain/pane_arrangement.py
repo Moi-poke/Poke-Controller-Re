@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """pane_arrangement.py - プレビュー・設定タブ・ログの並べ方を決める。
 
-配置のプリセット（ログを右 / 右に並べる / 縦一列）と、各欄の表示/非表示から、
+配置のプリセット（タブを右（全高） / ログを右 / ログを下）と、各欄の表示/非表示から、
 ttk.PanedWindow の入れ子の形を返す。組み立て（ui/pane_layout.py）はこの形を
 そのまま作るだけにして、「どの配置で何を並べるか」の判断をここ 1 箇所に閉じる。
 Tk には触れない（core 層）。
@@ -14,14 +14,19 @@ import json
 from dataclasses import dataclass
 from typing import Final
 
+from loguru import logger
+
 # (キー, メニューに出す名前)。キーは settings.ini の [Window] arrangement。
 ARRANGEMENTS: Final[tuple[tuple[str, str], ...]] = (
+    ("tabs_right", "タブを右（全高）"),
     ("log_right", "ログを右"),
     ("log_bottom", "ログを下"),
-    ("side", "右にタブとログ"),
-    ("stack", "縦一列"),
-    ("tabs_right", "タブを右（全高）"),
 )
+# 廃止した配置プリセット（整理で 3 種へ集約）。設定読込時に移行先へ自動変換する。
+_LEGACY_ARRANGEMENTS: Final[dict[str, str]] = {
+    "side": "tabs_right",
+    "stack": "log_bottom",
+}
 # 新規設定の既定は tabs_right。既存の settings.ini に arrangement が
 # 無い場合は Settings 側が legacy_arrangement=True で log_right を補う。
 # この2つは意図的に違う（新規だけ切り替え、既存の見た目を保つ）。
@@ -57,7 +62,11 @@ Node = Leaf | Split
 
 
 def normalize_arrangement(value: str) -> str:
-    """候補に無い配置は既定へ落とす（壊れた設定で起動を止めない）。"""
+    """候補に無い配置は既定へ落とす（旧プリセットは移行先へ変換する）。"""
+    if value in _LEGACY_ARRANGEMENTS:
+        mapped = _LEGACY_ARRANGEMENTS[value]
+        logger.info(f"廃止されたペイン配置 '{value}' を '{mapped}' へ移行しました。")
+        return mapped
     keys = [key for key, _label in ARRANGEMENTS]
     return value if value in keys else DEFAULT_ARRANGEMENT
 
@@ -85,13 +94,10 @@ def arrangement_tree(
     if key == "log_bottom":
         # Web 版の構図: 上段にプレビューとタブ、下段にログを横いっぱい。
         tree = _split(VERTICAL, [_split(HORIZONTAL, [preview, tabs]), log])
-    elif key == "side":
-        tree = _split(HORIZONTAL, [preview, _split(VERTICAL, [tabs, log])])
     elif key == "tabs_right":
         # タブを右列の上から下まで使い、左列は映像 + ログ。
-        tree = _split(HORIZONTAL, [_split(VERTICAL, [preview, log]), Leaf("tabs", 0)])
-    elif key == "stack":
-        tree = _split(VERTICAL, [preview, tabs, log])
+        tabs_leaf = Leaf("tabs", 0) if show_tabs else None
+        tree = _split(HORIZONTAL, [_split(VERTICAL, [preview, log]), tabs_leaf])
     else:
         tree = _split(HORIZONTAL, [_split(VERTICAL, [preview, tabs]), log])
     # preview は必ずあるので None にはならない。
