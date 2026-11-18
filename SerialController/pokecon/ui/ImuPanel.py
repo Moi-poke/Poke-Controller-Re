@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """ImuPanel.py - ジャイロ送出の操作面（BconSetupへ組み込む部品）。
 
-BconSetupのcol_infoへLabelFrameとして組み込む。入力源の選択・波形の
+BconSetupのcol_infoへ部品として組み込む。入力源の選択・波形の
 設定・送出の開始/停止・統計の表示を担う。線の操作は作業スレッドで行い、
 画面の更新だけafter()で戻す（BconSetupと同一規律）。
 
@@ -36,8 +36,9 @@ from pokecon.runtime.imu_service import (
     SOURCE_LABELS as SOURCE_LABELS,
     LiveTrim as _LiveTrim,
 )
-from pokecon.ui.collapsible import CollapsibleSection
+from pokecon.ui.collapsible import CollapsibleSection, SectionFrame
 from pokecon.ui.imu_preview import MotionPreview
+from pokecon.ui.spacing import GAP_GROUP, GAP_ITEM, px
 
 # マウスキャプチャ中だけ各ウィジェットの bindtags 先頭へ差し込むタグ。
 # ウィジェット自身のマウス処理（仮想パッドのスティック掴み等）より先に
@@ -171,28 +172,30 @@ class ImuPanel:
             heading.configure(font=bold)
         except Exception:
             pass
-        heading.grid(row=0, column=0, sticky=tk.W, padx=(0, 6))
+        heading.grid(row=0, column=0, sticky=tk.W, padx=(0, px(frame, GAP_GROUP)))
         self._stats_var = tk.StringVar(value="停止中")
         self._stats_label = ttk.Label(
             frame, textvariable=self._stats_var, wraplength=180, justify=tk.LEFT
         )
-        self._stats_label.grid(row=0, column=1, sticky=tk.W, padx=2)
+        self._stats_label.grid(row=0, column=1, sticky=tk.W, padx=4)
         controls = ttk.Frame(frame)
         controls.grid(row=0, column=2, sticky=tk.E)
         ttk.Button(controls, text="3Dプレビュー", command=self._on_motion_preview).pack(
-            side=tk.LEFT, padx=(0, 4)
+            side=tk.LEFT, padx=(0, px(frame, GAP_ITEM))
         )
         self._btn_toggle = ttk.Button(controls, text="開始", command=self._on_toggle)
         self._btn_toggle.pack(side=tk.LEFT)
 
         self._settings = CollapsibleSection(frame, "ジャイロ設定")
-        self._settings.grid(row=1, column=0, columnspan=3, sticky=tk.EW, pady=(4, 0))
+        self._settings.grid(
+            row=1, column=0, columnspan=3, sticky=tk.EW, pady=(px(frame, GAP_ITEM), 0)
+        )
         body = self._settings.body
         self._body = body
         body.columnconfigure(1, weight=1)
 
         ttk.Label(body, text="入力源").grid(
-            row=0, column=0, sticky=tk.W, padx=2, pady=2
+            row=0, column=0, sticky=tk.W, padx=4, pady=4
         )
         self._source_var = tk.StringVar(value="HID直結")
         self._source_cb = ttk.Combobox(
@@ -202,7 +205,7 @@ class ImuPanel:
             textvariable=self._source_var,
             values=[label for _, label in SOURCE_LABELS],
         )
-        self._source_cb.grid(row=0, column=1, sticky=tk.W, padx=2, pady=2)
+        self._source_cb.grid(row=0, column=1, sticky=tk.W, padx=4, pady=4)
 
         # パッド番号は SDL センサー入力のときだけ意味がある。行ごと
         # 出し分け、ラベルで説明しない（レイアウトで示す）。
@@ -309,24 +312,24 @@ class ImuPanel:
         # 送出スレッドはスナップショット(int6)だけを読む。
         self._manual_values = [0, 0, 4096, 0, 0, 0]
         self._manual_vars: list[tk.StringVar] = []
-        self._manual_frame = ttk.LabelFrame(
-            body, text="手動入力（生値 LSB）", padding=4
-        )
+        # 入れ子 LabelFrame を廃し、枠線なしの SectionFrame で見出しと余白だけでまとめる。
+        self._manual_frame = SectionFrame(body, "手動入力（生値 LSB）")
+        manual_body = self._manual_frame.body
         for i, (name, dflt) in enumerate(
             zip(("AX", "AY", "AZ", "GX", "GY", "GZ"), self._manual_values)
         ):
-            ttk.Label(self._manual_frame, text=name).grid(
-                row=0, column=i * 2, sticky=tk.W, padx=(4 if i else 2, 0)
+            ttk.Label(manual_body, text=name).grid(
+                row=0, column=i * 2, sticky=tk.W, padx=(4 if i else 0, 2), pady=4
             )
             var = tk.StringVar(value=str(dflt))
             spin = ttk.Spinbox(
-                self._manual_frame,
+                manual_body,
                 from_=-32768,
                 to=32767,
                 width=7,
                 textvariable=var,
             )
-            spin.grid(row=0, column=i * 2 + 1, sticky=tk.W, padx=(0, 2))
+            spin.grid(row=0, column=i * 2 + 1, sticky=tk.W, padx=(0, 4), pady=4)
             normalize = self._make_manual_normalizer(i, var)
             spin.bind("<FocusOut>", normalize, add="+")
             spin.bind("<Return>", normalize, add="+")
@@ -334,7 +337,11 @@ class ImuPanel:
             self._manual_vars.append(var)
         # 反転・感度の行（4）と重ねない。
         self._manual_frame.grid(
-            row=6, column=0, columnspan=3, sticky=tk.EW, pady=(4, 0)
+            row=6,
+            column=0,
+            columnspan=3,
+            sticky=tk.EW,
+            pady=(px(frame, GAP_GROUP), 0),
         )
         self._manual_frame.grid_remove()
         # マウス入力: 日常使う操作を先に、感度計算と詳細調整は必要時だけ開く。
@@ -412,7 +419,9 @@ class ImuPanel:
         self._mouse_cal_section = CollapsibleSection(
             self._mouse_frame, "感度を距離から計算"
         )
-        self._mouse_cal_section.grid(row=4, column=0, sticky=tk.EW, pady=(6, 0))
+        self._mouse_cal_section.grid(
+            row=4, column=0, sticky=tk.EW, pady=(px(frame, GAP_GROUP), 0)
+        )
         cal_row = ttk.Frame(self._mouse_cal_section.body)
         cal_row.pack(fill=tk.X)
         ttk.Label(cal_row, text="DPI").pack(side=tk.LEFT, padx=2)
