@@ -56,7 +56,7 @@ def _runner(
 
 
 def test_inventory_finds_switch_paths_and_ignores_other_pads() -> None:
-    from pokecon.domain.hidhide_setup import (
+    from pokecon.domain.hidhide_policy import (
         parse_inventory,
         switch_devices,
         switch_hide_paths,
@@ -71,7 +71,7 @@ def test_inventory_finds_switch_paths_and_ignores_other_pads() -> None:
 
 
 def test_inventory_matches_compatible_vid_without_vendor_name() -> None:
-    from pokecon.domain.hidhide_setup import parse_inventory, switch_hide_paths
+    from pokecon.domain.hidhide_policy import parse_inventory, switch_hide_paths
 
     text = json.dumps(
         [
@@ -87,7 +87,7 @@ def test_inventory_matches_compatible_vid_without_vendor_name() -> None:
 
 
 def test_inventory_survives_broken_or_prefixed_output() -> None:
-    from pokecon.domain.hidhide_setup import parse_inventory
+    from pokecon.domain.hidhide_policy import parse_inventory
 
     assert parse_inventory("") == ()
     assert parse_inventory("not json") == ()
@@ -97,7 +97,7 @@ def test_inventory_survives_broken_or_prefixed_output() -> None:
 
 
 def test_apply_registers_app_hides_devices_and_turns_cloak_on() -> None:
-    from pokecon.domain.hidhide_setup import apply_recommended
+    from pokecon.domain.hidhide_policy import apply_recommended
 
     calls: list[list[str]] = []
 
@@ -128,7 +128,7 @@ def test_apply_registers_app_hides_devices_and_turns_cloak_on() -> None:
 
 
 def test_read_game_devices_returns_run_failure() -> None:
-    from pokecon.domain.hidhide_setup import read_game_devices
+    from pokecon.domain.hidhide_policy import read_game_devices
 
     calls: list[list[str]] = []
 
@@ -144,7 +144,7 @@ def test_read_game_devices_returns_run_failure() -> None:
 
 
 def test_read_game_devices_parses_inventory() -> None:
-    from pokecon.domain.hidhide_setup import read_game_devices
+    from pokecon.domain.hidhide_policy import read_game_devices
 
     devices, run = read_game_devices(
         "/cli/HidHideCLI.exe", runner=_runner([], out=_INVENTORY)
@@ -155,7 +155,7 @@ def test_read_game_devices_parses_inventory() -> None:
 
 
 def test_cloak_is_toggled_without_touching_lists() -> None:
-    from pokecon.domain.hidhide_setup import set_cloak
+    from pokecon.domain.hidhide_policy import set_cloak
 
     calls: list[list[str]] = []
 
@@ -166,7 +166,7 @@ def test_cloak_is_toggled_without_touching_lists() -> None:
 
 
 def test_release_only_unhides_switch_devices_and_unregisters_app() -> None:
-    from pokecon.domain.hidhide_setup import release_setup
+    from pokecon.domain.hidhide_policy import release_setup
 
     calls: list[list[str]] = []
 
@@ -194,7 +194,7 @@ def test_release_only_unhides_switch_devices_and_unregisters_app() -> None:
 
 
 def test_missing_cli_is_reported_without_running_anything() -> None:
-    from pokecon.domain.hidhide_setup import failure_message, run_cli
+    from pokecon.domain.hidhide_policy import failure_message, run_cli
 
     run = run_cli("/does/not/exist/HidHideCLI.exe", ["--cloak-on"])
 
@@ -204,10 +204,10 @@ def test_missing_cli_is_reported_without_running_anything() -> None:
 
 
 def test_failed_run_keeps_the_cli_message_and_hint() -> None:
-    from pokecon.domain.hidhide_setup import failure_message
+    from pokecon.domain.hidhide_policy import failure_message
 
     calls: list[list[str]] = []
-    from pokecon.domain.hidhide_setup import run_cli
+    from pokecon.domain.hidhide_policy import run_cli
 
     run = run_cli(
         __file__, ["--cloak-on"], runner=_runner(calls, code=2, err="access denied")
@@ -219,7 +219,7 @@ def test_failed_run_keeps_the_cli_message_and_hint() -> None:
 
 
 def test_inventory_falls_back_to_os_enumeration_when_json_is_truncated() -> None:
-    from pokecon.domain.hidhide_setup import read_game_devices
+    from pokecon.domain.hidhide_policy import read_game_devices
 
     # Given: HidHideCLI 1.5.230 の実出力のように JSON が途中で止まる。
     truncated = (
@@ -237,7 +237,7 @@ def test_inventory_falls_back_to_os_enumeration_when_json_is_truncated() -> None
 
 
 def test_complete_inventory_does_not_use_the_fallback() -> None:
-    from pokecon.domain.hidhide_setup import read_game_devices
+    from pokecon.domain.hidhide_policy import read_game_devices
 
     def fail() -> tuple[str, ...]:
         raise AssertionError("完全な JSON で OS 列挙を呼んではいけない")
@@ -253,7 +253,7 @@ def test_complete_inventory_does_not_use_the_fallback() -> None:
 
 def test_current_device_must_be_in_the_hide_list() -> None:
     from pokecon.domain.hidhide import HidHideStatus
-    from pokecon.domain.hidhide_setup import GamingDevice, switch_hidden_in_status
+    from pokecon.domain.hidhide_policy import GamingDevice, switch_hidden_in_status
 
     current = GamingDevice(device_instance_path=_SWITCH_HID)
     stale = HidHideStatus(
@@ -299,7 +299,7 @@ def test_dialog_reflects_detected_status(
     tk_root: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from pokecon.domain.hidhide import HidHideStatus
-    from pokecon.domain.hidhide_setup import CliRun
+    from pokecon.domain.hidhide_policy import CliRun
     from pokecon.ui import hidhide_setup
 
     status = HidHideStatus(
@@ -317,7 +317,7 @@ def test_dialog_reflects_detected_status(
 
     window = hidhide_setup.HidHideSetupDialog(tk_root)
     try:
-        from pokecon.domain.hidhide_setup import GamingDevice
+        from pokecon.domain.hidhide_policy import GamingDevice
 
         window._update_status(
             status, (GamingDevice(device_instance_path=_SWITCH_HID),), ""
@@ -371,7 +371,7 @@ def test_dialog_notifies_the_app_after_a_successful_setup(tk_root: Any) -> None:
 
 def test_cli_stderr_is_a_failure_even_with_exit_code_zero() -> None:
     """HidHideCLI は検証エラーを stderr に出して 0 で終わることがある。"""
-    from pokecon.domain.hidhide_setup import run_cli
+    from pokecon.domain.hidhide_policy import run_cli
 
     run = run_cli(
         __file__,
