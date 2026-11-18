@@ -24,7 +24,7 @@ from collections.abc import Sequence
 from typing import Any, Final
 
 from pokecon.domain.controller_preview import CONTROL_NAMES, PreviewControls
-from pokecon.ui.controller_mesh import (
+from pokecon.domain.imu import (
     ATLAS_CELL as _ATLAS_CELL,
     ATLAS_COLUMNS as _ATLAS_COLUMNS,
     ATLAS_LABELS as _ATLAS_LABELS,

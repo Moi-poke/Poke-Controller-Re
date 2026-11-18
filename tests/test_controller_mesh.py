@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 from pokecon.domain.controller_preview import CONTROL_NAMES, PreviewControls
-from pokecon.ui.controller_mesh import (
+from pokecon.domain.imu import (
     MOTION_GROUP_COUNT,
     MotionGroup,
     build_model,
