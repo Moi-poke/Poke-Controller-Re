@@ -41,6 +41,94 @@ def _make_scripted_ser(feed_delay: float = 0.001):
     return ScriptedSer()
 
 
+class _HuntUpgradeSer:
+    """115200でlockした後、BAUD_SETで1Mへ移る疑似Pico（実機不要）。
+
+    - 確定後はpico_rateとhostのbaudrateが一致するHELLOにだけACKする。
+    - BAUD_SETは旧rateで受けたらSTATUS ACKを返し、成功時はpico_rateを
+      1Mへ進める。失敗（adopt_1m=False）は既定でpico_rateを据え置き、
+      hostが1Mへ切り替えた間のHELLOは届かない（復帰確認の検証用）。
+      revert_pico=FalseならPicoだけ1Mへ進んだ不明状態を真似る。
+    """
+
+    is_open = True
+
+    def __init__(
+        self,
+        *,
+        rate: int = 115200,
+        adopt_1m: bool = True,
+        ack_baud_set: bool = True,
+        revert_pico: bool = True,
+    ) -> None:
+        from pokecon.domain.transport.bcon_protocol import BAUD_TABLE
+
+        self._chunks: list[bytes] = []
+        self._lock = threading.Lock()
+        self.written: list[bytes] = []
+        self.baudrate = int(rate)
+        self.pico_rate = int(rate)
+        self.adopt_1m = bool(adopt_1m)
+        self.ack_baud_set = bool(ack_baud_set)
+        self.revert_pico = bool(revert_pico)
+        self.upgrade_rate = int(BAUD_TABLE[3])
+        self._seq = 0
+
+    def read(self, n: int) -> bytes:
+        _ = n
+        with self._lock:
+            if self._chunks:
+                return self._chunks.pop(0)
+        time.sleep(0.001)
+        return b""
+
+    @property
+    def in_waiting(self) -> int:
+        with self._lock:
+            return sum(len(c) for c in self._chunks)
+
+    def _reply(self, type_: int, payload: bytes) -> None:
+        from pokecon.domain.transport.bcon_protocol import frame_build
+
+        self._chunks.append(frame_build(type_, payload, self._seq))
+        self._seq = (self._seq + 1) & 0xFF
+
+    def write(self, data: bytes) -> int:
+        from pokecon.domain.transport.bcon_protocol import (
+            T_BAUD_SET,
+            T_HELLO,
+            T_HELLO_ACK,
+            T_STATUS,
+        )
+
+        with self._lock:
+            self.written.append(bytes(data))
+            if len(data) < 4 or data[0] != 0xAB:
+                return len(data)
+            if self.baudrate != self.pico_rate:
+                return len(data)
+            if data[1] == T_HELLO:
+                # 1Mへ進んだPicoがadoptを受けない場合はACKしない。
+                if self.baudrate != self.upgrade_rate or self.adopt_1m:
+                    self._reply(T_HELLO_ACK, bytes([0x04, 0x00, 0x01, 0x00]))
+            elif data[1] == T_BAUD_SET and int(data[3]) == 3:
+                if self.ack_baud_set:
+                    self._reply(T_STATUS, bytes(7))
+                if self.adopt_1m or not self.revert_pico:
+                    self.pico_rate = self.upgrade_rate
+            return len(data)
+
+
+def _open_hunt_upgrade_ser(**kwargs):
+    from pokecon.domain.transport import create_transport
+
+    made = create_transport("bcon")
+    ser = _HuntUpgradeSer(**kwargs)
+    made.ser = ser
+    made.start_rx_pump()
+    return made, ser
+
+
 def test_bcon_hello_and_ping_with_scripted_ser():
     from pokecon.domain.transport import create_transport
     from pokecon.domain.transport.bcon_protocol import T_HELLO, T_HELLO_ACK, frame_build
@@ -778,6 +866,115 @@ def test_bcon_set_baud_index_switches_on_adopt():
     finally:
         stop.set()
         worker.join(1.0)
+        made.stop_rx_pump()
+
+
+def test_bcon_baud_hunt_upgrades_low_lock_to_1m(capsys):
+    from pokecon.domain.transport.bcon_protocol import T_BAUD_SET, T_HELLO
+
+    made, ser = _open_hunt_upgrade_ser()
+    calls: list[tuple[int, bool]] = []
+    real = made.set_baud_index
+
+    def _spy(index, timeout=2.0):
+        calls.append((int(index), made._tx_hold))
+        return real(index, timeout=timeout)
+
+    made.set_baud_index = _spy
+    try:
+        locked = made.baud_hunt([115200], timeout_per=0.3)
+        chat = [f[1] for f in ser.written if len(f) >= 2 and f[0] == 0xAB]
+        out = capsys.readouterr().out
+        # Then: scanの2連続HELLO→BAUD_SET→adopt HELLOの順で1Mへ上がる。
+        assert locked == 1000000
+        assert ser.baudrate == 1000000
+        assert chat == [T_HELLO, T_HELLO, T_BAUD_SET, T_HELLO]
+        # 昇格はscan完了・STATE抑え解除後（_tx_hold=False）に1回だけ。
+        assert calls == [(3, False)]
+        assert made._last_good_baud == 1000000
+        assert made._tx_hold is False
+        assert "1000000bpsでlock" in out
+        assert "115200bpsでlock" not in out
+    finally:
+        made.stop_rx_pump()
+
+
+def test_bcon_baud_hunt_keeps_old_rate_when_1m_adopt_fails(capsys):
+    made, ser = _open_hunt_upgrade_ser(adopt_1m=False)
+    calls: list[tuple[int, bool]] = []
+    real = made.set_baud_index
+
+    def _spy(index, timeout=2.0):
+        calls.append((int(index), made._tx_hold))
+        return real(index, timeout=timeout)
+
+    made.set_baud_index = _spy
+    try:
+        locked = made.baud_hunt([115200], timeout_per=0.3)
+        out = capsys.readouterr().out
+        # Then: 1Mのadoptが無いので旧rateへ戻し、HELLO確認済みで採用する。
+        assert locked == 115200
+        assert ser.baudrate == 115200
+        assert calls == [(3, False)]
+        assert made._last_good_baud == 115200
+        assert made.hello_established() is True
+        assert "115200bpsのまま採用" in out
+    finally:
+        made.stop_rx_pump()
+
+
+def test_bcon_baud_hunt_keeps_old_rate_when_baud_set_unanswered():
+    made, ser = _open_hunt_upgrade_ser(ack_baud_set=False, adopt_1m=False)
+    calls: list[tuple[int, bool]] = []
+    real = made.set_baud_index
+
+    def _spy(index, timeout=2.0):
+        calls.append((int(index), made._tx_hold))
+        return real(index, timeout=timeout)
+
+    made.set_baud_index = _spy
+    try:
+        # Then: BAUD_SETのACKが無い（1Mへ切り替えられない）ので115200のまま。
+        assert made.baud_hunt([115200], timeout_per=0.3) == 115200
+        assert ser.baudrate == 115200
+        assert calls == [(3, False)]
+        assert made._last_good_baud == 115200
+    finally:
+        made.stop_rx_pump()
+
+
+def test_bcon_baud_hunt_at_1m_does_not_send_baud_set():
+    from pokecon.domain.transport.bcon_protocol import T_BAUD_SET
+
+    made, ser = _open_hunt_upgrade_ser(rate=1000000)
+    calls: list[int] = []
+    real = made.set_baud_index
+
+    def _spy(index, timeout=2.0):
+        calls.append(int(index))
+        return real(index, timeout=timeout)
+
+    made.set_baud_index = _spy
+    try:
+        # Then: 既に1Mなので引き上げもBAUD_SETも行わない。
+        assert made.baud_hunt([1000000], timeout_per=0.3) == 1000000
+        assert calls == []
+        assert not any(
+            len(f) >= 2 and f[0] == 0xAB and f[1] == T_BAUD_SET for f in ser.written
+        )
+    finally:
+        made.stop_rx_pump()
+
+
+def test_bcon_baud_hunt_none_when_failed_upgrade_old_rate_unconfirmed():
+    made, _ser = _open_hunt_upgrade_ser(adopt_1m=False, revert_pico=False)
+    try:
+        # Then: 旧rateのHELLOも通らない（Picoだけ1Mへ進んだ不明状態）なら
+        # 速度を偽らずNoneを返す。
+        assert made.baud_hunt([115200], timeout_per=0.3) is None
+        assert made._tx_hold is False
+        assert made.hello_established() is False
+    finally:
         made.stop_rx_pump()
 
 

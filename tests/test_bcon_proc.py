@@ -893,3 +893,32 @@ def test_proc_child_input_hold_and_current_baud(monkeypatch):
         stop.set()
         worker.join(1.0)
         made.close()
+
+
+def test_proc_baud_hunt_upgrades_low_lock_to_1m(monkeypatch):
+    """子プロセス側のhuntも1Mへ上がり、親は同じ結果を受け取る。"""
+    from pokecon.domain.transport.bcon_protocol import T_BAUD_SET, T_HELLO
+
+    made, sers, stop, worker = _open_proc_with_scripted_ser(monkeypatch)
+    try:
+        # Given: まず115200へ落とし、そのrateで確定できる子にする。
+        assert made.set_baud_index(0) is True
+        assert made.current_baud() == 115200
+        before = len(_all_written(sers))
+        # When: 115200だけを候補にhuntする
+        locked = made.baud_hunt(candidates=[115200], timeout_per=0.2)
+        frames = [
+            f for f in _all_written(sers)[before:] if len(f) >= 2 and f[0] == 0xAB
+        ]
+        # Then: scanのHELLOで確定した後にBAUD_SET(3)→adopt HELLOで1Mになる。
+        types = [f[1] for f in frames]
+        at = types.index(T_BAUD_SET)
+        assert locked == 1000000
+        assert made.current_baud() == 1000000
+        assert T_HELLO in types[:at]
+        assert T_HELLO in types[at + 1 :]
+        assert [int(f[3]) for f in frames if f[1] == T_BAUD_SET] == [3]
+    finally:
+        stop.set()
+        worker.join(1.0)
+        made.close()

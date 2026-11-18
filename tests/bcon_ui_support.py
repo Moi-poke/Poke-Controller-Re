@@ -1,5 +1,6 @@
 """BCON画面のサービス境界を調べる、Tk不要の検査体。"""
 
+import threading
 from dataclasses import replace
 from typing import Any
 
@@ -112,6 +113,9 @@ def setup(service: Service | None = None) -> Any:
     obj._visibility_revision = 0
     obj._color_loaded = False
     obj._command_busy = lambda: False
+    obj._keyboard_enabled = lambda: False
+    obj._kb_cancel = threading.Event()
+    obj._kb_pending = threading.Event()
     obj.inbox = UiInbox()
     obj._queue = DropOldestQueue(maxsize=BCON_QUEUE_MAX)
     obj._queue_dropped_total = 0
@@ -149,6 +153,13 @@ def setup(service: Service | None = None) -> Any:
         "_btn_bootsel",
         "_btn_keys",
         "_btn_color",
+        "_btn_kb_send",
+        "_btn_kb_release",
+        "_kb_text",
+        "_kb_note",
+        "_kb_focus_note",
+        "_kb_mode_note",
+        "_kb_interval_input",
         "_lamp_canvas",
     ):
         setattr(obj, name, Widget())

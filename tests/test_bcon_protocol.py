@@ -50,6 +50,30 @@ def test_bcon_hello_len_and_baud_table():
     assert len(frame) == 7
 
 
+def test_keyboard_frame_matches_firmware_vector_and_length() -> None:
+    from pokecon.domain.transport.bcon_protocol import (
+        T_KEYBOARD,
+        BconParser,
+        crc8,
+        frame_build,
+        proto_expected_len,
+    )
+
+    payload = bytes.fromhex("00 00 04 00 00 00 00 00")
+    assert T_KEYBOARD == 0x3C
+    assert proto_expected_len(T_KEYBOARD) == 8
+    frame = frame_build(T_KEYBOARD, payload, 0)
+    assert frame == bytes.fromhex("AB 3C 08 00 00 04 00 00 00 00 00 00 A6")
+    assert len(frame) == 13
+    assert frame[-1] == crc8(frame[1:-1])
+    assert BconParser().feed(frame_build(T_KEYBOARD, payload, 255)) == [
+        (T_KEYBOARD, payload, 255)
+    ]
+    parser = BconParser()
+    assert parser.feed(frame_build(T_KEYBOARD, bytes(7), 1)) == []
+    assert parser.err_crc == 1
+
+
 def test_bcon_parser_resyncs_with_sync_byte_in_payload():
     from pokecon.domain.transport.bcon_protocol import (
         T_PING,

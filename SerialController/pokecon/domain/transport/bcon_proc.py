@@ -18,6 +18,7 @@ from __future__ import annotations
 import atexit
 import base64
 import logging
+import math
 import os
 import pickle
 import queue
@@ -34,6 +35,7 @@ from typing import Any
 
 from pokecon.domain.transport.base import BCON_STATE, Transport
 from pokecon.domain.transport.bcon import IMU_INTERVAL_S, BconTransport
+from pokecon.domain.transport.bcon_protocol import BAUD_TABLE
 
 PROC_PRESET_NAME = "switch-bcon-proc"
 PROC_PRESET_DESCRIPTION = "Switch-bconを別プロセスで送出（GUI負荷切り離し）"
@@ -55,6 +57,17 @@ PROC_IMU_BATCH_MAX = 64
 #: 次バッチへ繰り越し、合計角度を落とさない。
 PROC_IMU_CHUNKS_MAX = 3
 
+#: baud hunt 1候補あたりの固定時間（子の quick HELLO 0.15s＋呼び水 0.7s）。
+PROC_HUNT_FIXED_S = 0.85
+#: lock 後の上位rate昇格（set_baud_index 最大2.0s・失敗時は旧rateへ戻す）
+#: ＋復帰確認（旧rate HELLO 0.5s を最大2回＋呼び水0.7s）。
+PROC_HUNT_UPGRADE_S = 3.8
+#: 候補間の_set_baud・子の直列化など端数の余裕。
+PROC_HUNT_SLACK_S = 2.0
+#: baud_hunt の RPC 待ち下限。子の全候補scan＋昇格/復帰の最悪見積もり
+#: （既定5候補・per=2.0で約30s）に余裕を持たせ、従来の固定30sより広く取る。
+PROC_BAUD_HUNT_MIN_TIMEOUT_S = 45.0
+
 # 子へ送ってよい会話op（親の公開口と1:1）。増やすときは子実装と同時に。
 _ALLOWED_CALLS = frozenset(
     {
@@ -74,6 +87,7 @@ _ALLOWED_CALLS = frozenset(
         "set_emulate_mode",
         "send_beacon",
         "send_config",
+        "send_keyboard",
         "start_live_loop",
         "stop_live_loop",
         "live_loop_running",
@@ -113,6 +127,38 @@ def _picklable(value: Any) -> bool:
     except Exception:
         return False
     return True
+
+
+def _baud_hunt_rpc_timeout(candidates: Any, timeout_per: Any) -> float:
+    """baud_hunt の RPC 待ち（秒）を子の最悪時間から見積もる。
+
+    子は候補ごとに quick HELLO(0.15s)→呼び水(0.7s)→HELLO(per) を
+    最大2回試し（呼び水の後の成功でもう一度確認するため）、lock 後に
+    set_baud_index(3)（最大2.0s・失敗時は旧rateへ戻す）と旧rateの
+    HELLO確認（0.5s×2＋呼び水0.7s）を足す。
+    scan の再走は無い。候補数は子が重複を削る前の件数で見積もる（上限）。
+    子の clamp と同じ範囲へ per を丸め、推定値が小さいときは従来の固定
+    30sより広い下限へ揃える。timeout_per の解釈は子（BconTransport）と揃える。
+    """
+    try:
+        per = float(timeout_per)
+    except (TypeError, ValueError):
+        per = 0.5
+    if math.isnan(per):
+        per = 0.5
+    elif math.isinf(per):
+        per = 2.0
+    else:
+        per = max(0.1, min(per, 2.0))
+    try:
+        attempts = len(candidates) if candidates is not None else len(BAUD_TABLE)
+    except TypeError:
+        attempts = len(BAUD_TABLE)
+    scan = max(1, int(attempts)) * (PROC_HUNT_FIXED_S + 2.0 * per)
+    return max(
+        PROC_BAUD_HUNT_MIN_TIMEOUT_S,
+        scan + PROC_HUNT_UPGRADE_S + PROC_HUNT_SLACK_S,
+    )
 
 
 def _enable_tcp_nodelay(sock: Any) -> None:
@@ -1551,6 +1597,28 @@ class BconProcTransport(Transport):
                 if self._emit_imu_locked(merged):
                     self._imu_mailbox.clear()
 
+    def send_keyboard(self, report: bytes) -> bool:
+        """8Bレポートを子の BconTransport へ渡し、子の write 成否を返す。
+
+        返信不要の専用キュー op ではなく会話op（RPC）で往復する。キーボードは
+        1文字あたり押下と離鍵の2レポートで最大20回/秒程度しか出ないため、
+        IMU(200Hz)と違って往復のコストは許容できる。True は「子が線へ
+        1フレーム書けた」で、Switch が入力として受理したことまでは保証しない
+        （ファームの取りこぼし・キー配列は別問題）。子の _input_hold・
+        _hello_established・write失敗はそのまま False になる。
+        子がbaud hunt等で詰まっている間は待つ（上限2.0＋余裕5.0秒）。
+        timeout時も子のキューに残ったcallは後で実行され得る（投入型と同じ）。
+        """
+        try:
+            if len(report) != 8:
+                return False
+            body = bytes(report)
+            if len(body) != 8:
+                return False
+        except Exception:
+            return False
+        return self._rpc_bool("send_keyboard", (body,), 2.0)
+
     def send_imu(
         self,
         ax: int,
@@ -1882,7 +1950,17 @@ class BconProcTransport(Transport):
         return {str(k): v for k, v in result.items()}
 
     def baud_hunt(self, candidates: Any = None, timeout_per: float = 0.5) -> int | None:
-        ok, result = self._call("baud_hunt", (candidates, timeout_per), timeout=30.0)
+        """子で scan し、lock 後の上位rate昇格まで含む結果を返す。
+
+        RPC待ちは候補数と timeout_per から見積もる（子は lock 後に
+        set_baud_index(3) と失敗時の復帰を行う）。子の BconTransport が
+        返した bps をそのまま返し、失敗・timeout は None。
+        """
+        ok, result = self._call(
+            "baud_hunt",
+            (candidates, timeout_per),
+            timeout=_baud_hunt_rpc_timeout(candidates, timeout_per),
+        )
         if not ok or result is None:
             return None
         try:
