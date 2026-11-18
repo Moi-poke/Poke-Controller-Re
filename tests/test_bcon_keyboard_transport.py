@@ -107,6 +107,25 @@ def test_concurrent_keyboard_and_state_keep_wire_sequence(
         threading.Event(),
         threading.Event(),
     )
+
+    class ObservedLock:
+        """2人目の取得試行をイベントで通知する write lock。"""
+
+        def __init__(self) -> None:
+            self._lock = threading.Lock()
+            self.attempted = threading.Event()
+
+        def __enter__(self) -> "ObservedLock":
+            if not self._lock.acquire(blocking=False):
+                self.attempted.set()
+                self._lock.acquire()
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            self._lock.release()
+
+    observed = ObservedLock()
+    transport._write_lock = observed  # type: ignore[assignment]
     original = wire.write
 
     def write(data: bytes) -> int:
@@ -124,7 +143,9 @@ def test_concurrent_keyboard_and_state_keep_wire_sequence(
     try:
         assert entered.wait(5)
         second.start()
-        assert not second_write.wait(0.1)
+        # 時計ではなく lock の待機イベントで「2人目が入れない」を固定する。
+        assert observed.attempted.wait(5)
+        assert not second_write.is_set()
     finally:
         release.set()
         first.join(5)

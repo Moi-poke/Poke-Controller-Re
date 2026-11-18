@@ -75,6 +75,49 @@ def test_press_release_order_and_final_duplicate_release() -> None:
     assert result.error is None
 
 
+def test_long_interval_refreshes_non_neutral_within_100ms() -> None:
+    events: list[bytes | float] = []
+
+    def send(body: bytes) -> bool:
+        events.append(body)
+        return True
+
+    def sleep(seconds: float) -> None:
+        events.append(round(seconds, 6))
+
+    result = send_text(send, "a", interval_s=0.2, sleep=sleep)
+    a = bytes.fromhex("00 00 04 00 00 00 00 00")
+    assert events == [
+        a,
+        0.08,
+        a,
+        0.08,
+        a,
+        0.04,
+        NEUTRAL,
+        0.2,
+        NEUTRAL,
+        0.2,
+        NEUTRAL,
+    ]
+    assert result.sent == 1
+    assert result.error is None
+
+
+def test_refresh_period_is_clamped_to_100ms() -> None:
+    events: list[bytes | float] = []
+
+    def send(body: bytes) -> bool:
+        events.append(body)
+        return True
+
+    result = send_text(send, "a", interval_s=0.2, refresh_s=0.5, sleep=events.append)
+    a = bytes.fromhex("00 00 04 00 00 00 00 00")
+    assert events[:5] == [a, 0.1, a, 0.1, NEUTRAL]
+    assert result.sent == 1
+    assert result.error is None
+
+
 @pytest.mark.parametrize("raises", [False, True])
 @pytest.mark.parametrize("fail_at", [1, 2, 3])
 def test_failed_press_or_release_stops_and_attempts_two_neutrals(
