@@ -161,20 +161,20 @@ class SerialPanelMixin(ControllerPanelMixin):
             )
         except tk.TclError:
             pass
-        self.serial_lf = ttk.Frame(self.tab_serial, padding=(6, 4))
+        self.serial_lf = ttk.Frame(self.tab_serial, padding=(8, 4))
         self.serial_lf.columnconfigure(0, weight=1)
 
         # 接続状態は下端の状態バーへ出す（タブ内に常時表示しない）。
         # ここには失敗理由・復旧操作だけを、起きたときに出す。
         # 失敗理由・復旧操作（成功時は空にして高さを空けない）。
         self.com_port_notice = ttk.Label(self.serial_lf, wraplength=300, justify="left")
-        self.com_port_notice.grid(row=1, column=0, sticky="ew", pady=(2, 2))
+        self.com_port_notice.grid(row=1, column=0, sticky="ew", pady=(0, 4))
         self.com_port_notice.grid_remove()
 
         # 通信方式とポートは、広いときは左右、狭いときは縦に並べる。
         # 縦を詰めたいが、狭い幅で横に詰めると入力欄が痩せるため。
         self._setup_row = ttk.Frame(self.serial_lf)
-        self._setup_row.grid(row=2, column=0, sticky="ew", pady=(4, 2))
+        self._setup_row.grid(row=2, column=0, sticky="ew", pady=(4, 4))
         self._transport_block = ttk.Frame(self._setup_row)
         self._transport_block.columnconfigure(0, weight=1)
         self.transport_label = ttk.Label(self._transport_block, text="通信方式")
@@ -206,9 +206,9 @@ class SerialPanelMixin(ControllerPanelMixin):
         self.refreshComPort = ttk.Button(
             port_row, text="一覧更新", command=self.refreshComPorts
         )
-        self.refreshComPort.grid(row=0, column=1, padx=(5, 0), sticky="e")
+        self.refreshComPort.grid(row=0, column=1, padx=(4, 0), sticky="e")
         self.port_empty = ttk.Label(self._port_block, text="", foreground="#6B6B6B")
-        self.port_empty.grid(row=2, column=0, columnspan=2, sticky="w", pady=(2, 0))
+        self.port_empty.grid(row=2, column=0, columnspan=2, sticky="w", pady=(4, 0))
         self.port_empty.grid_remove()
         Tooltip(
             self.refreshComPort,
@@ -218,7 +218,7 @@ class SerialPanelMixin(ControllerPanelMixin):
 
         # 主要操作。接続と再接続は同じボタン（状態で文字が変わる）。
         actions = ttk.Frame(self.serial_lf)
-        actions.grid(row=3, column=0, sticky="ew", pady=(2, 2))
+        actions.grid(row=3, column=0, sticky="ew", pady=(4, 4))
         actions.columnconfigure(0, weight=1)
         self.connect_hint = ttk.Label(
             actions, text="", foreground="#6B6B6B", wraplength=220
@@ -234,19 +234,19 @@ class SerialPanelMixin(ControllerPanelMixin):
         self.disconnectComPort = ttk.Button(
             buttons, text="切断", command=self.inactivateSerial
         )
-        self.disconnectComPort.pack(side="left", padx=(6, 0))
+        self.disconnectComPort.pack(side="left", padx=(8, 0))
         # 操作結果（失敗理由を含む）は押したボタンの直下へ。詳細ログは
         # 診断のまとまりに置き、結果を読むためにスクロールさせない。
         self.connection_result = ttk.Label(
             self.serial_lf, wraplength=300, justify="left"
         )
-        self.connection_result.grid(row=4, column=0, sticky="ew", pady=(0, 2))
+        self.connection_result.grid(row=4, column=0, sticky="ew", pady=(0, 4))
         self.connection_result.grid_remove()
         # 失敗時だけ出す復旧の導線（速度の探索は BCON の適用条件に従う）。
         self.recovery_button = ttk.Button(
             self.serial_lf, text="速度を探す", command=self.huntBconBaud
         )
-        self.recovery_button.grid(row=5, column=0, sticky="w", pady=(2, 0))
+        self.recovery_button.grid(row=5, column=0, sticky="w", pady=(4, 0))
         self.recovery_button.grid_remove()
 
         # Switch 側の状態は下端の状態バー（Pico↔Switch）に出す。
@@ -257,7 +257,7 @@ class SerialPanelMixin(ControllerPanelMixin):
             "通信の詳細設定",
             on_toggle=self._on_serial_section_toggled,
         )
-        self.serial_details.grid(row=7, column=0, sticky="ew", pady=(2, 0))
+        self.serial_details.grid(row=7, column=0, sticky="ew", pady=(4, 0))
         detail_body = self.serial_details.body
         detail_body.columnconfigure(0, weight=1)
         self.baud_rate_label = ttk.Label(detail_body, text="通信速度")
@@ -283,20 +283,20 @@ class SerialPanelMixin(ControllerPanelMixin):
         self.bcon_hunt_button = ttk.Button(
             baud_row, text="速度を探す", command=self.huntBconBaud
         )
-        self.bcon_hunt_button.pack(side="left", padx=(5, 0))
+        self.bcon_hunt_button.pack(side="left", padx=(4, 0))
         self.baud_rate_cb.bind("<<ComboboxSelected>>", self.applyBaudRate, add="")
         # 通信方式の説明は詳細へ（長文で主要操作を押し下げない）。
         self.transport_description = ttk.Label(
             detail_body, wraplength=280, justify="left"
         )
-        self.transport_description.grid(row=3, column=0, sticky="ew", pady=(6, 0))
+        self.transport_description.grid(row=3, column=0, sticky="ew", pady=(8, 0))
 
         self.serial_diagnostics = CollapsibleSection(
             self.serial_lf,
             "接続診断",
             on_toggle=self._on_serial_section_toggled,
         )
-        self.serial_diagnostics.grid(row=8, column=0, sticky="ew", pady=(2, 0))
+        self.serial_diagnostics.grid(row=8, column=0, sticky="ew", pady=(4, 0))
         self.connection_details = ttk.Label(
             self.serial_diagnostics.body, wraplength=280, justify="left"
         )

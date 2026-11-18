@@ -13,9 +13,9 @@ from typing import TYPE_CHECKING, Any
 from loguru import logger
 from pokecon.domain.gamepad_map import DEADZONE_MAX
 from pokecon.domain.pad_layout import AUTO, LAYOUTS, LAYOUT_LABELS, resolve_layout
-from pokecon.ui.collapsible import CollapsibleSection, SectionFrame
+from pokecon.ui.collapsible import SectionFrame
 from pokecon.ui.controller_dock import ControllerDock
-from pokecon.ui.spacing import TAB_PAD_X, TAB_PAD_Y, px
+from pokecon.ui.spacing import GAP_GROUP, GAP_ITEM, TAB_PAD_X, TAB_PAD_Y, px
 from pokecon.ui.tooltip import Tooltip
 
 #: 設定タブの最低の高さ（px）。
@@ -115,7 +115,7 @@ class ControllerPanelMixin:
             self.gamepad_row, textvariable=self.gamepad_status, width=8, anchor="e"
         )
         self.gamepad_status_label.grid(row=0, column=2, padx=(8, 0), sticky="e")
-        self.gamepad_reconnect_btn.grid(row=0, column=3, padx=(6, 0), sticky="e")
+        self.gamepad_reconnect_btn.grid(row=0, column=3, padx=(4, 0), sticky="e")
         Tooltip(
             self.gamepad_reconnect_btn,
             "ゲームパッドを探し直す（自動で拾えないとき）",
@@ -134,7 +134,7 @@ class ControllerPanelMixin:
             text="セットアップ",
             command=self._open_hidhide_setup,
         )
-        self.hidhide_setup_btn.pack(side="left", padx=(6, 0))
+        self.hidhide_setup_btn.pack(side="left", padx=(4, 0))
         Tooltip(
             self.hidhide_reason,
             "HidHide が未設定のため、ゲームパッド入力を Switch へ送れません。",
@@ -142,7 +142,13 @@ class ControllerPanelMixin:
         self._apply_hidhide_gamepad_gate()
 
         self.mouse_section = SectionFrame(self.control_lf, "マウス操作")
-        self.mouse_section.grid(row=8, column=0, columnspan=2, sticky="ew", pady=(6, 0))
+        self.mouse_section.grid(
+            row=8,
+            column=0,
+            columnspan=2,
+            sticky="ew",
+            pady=(px(self.control_lf, GAP_GROUP), 0),
+        )
         self.cb_left_stick_mouse = ttk.Checkbutton(
             self.mouse_section.body, command=self._on_left_stick_toggled
         )
@@ -163,7 +169,13 @@ class ControllerPanelMixin:
         Tooltip(self.cb_right_stick_mouse, "マウスを動かして右スティックを操作する")
 
         self.pad_section = SectionFrame(self.control_lf, "ゲームパッドの調整")
-        self.pad_section.grid(row=9, column=0, columnspan=2, sticky="ew", pady=(6, 0))
+        self.pad_section.grid(
+            row=9,
+            column=0,
+            columnspan=2,
+            sticky="ew",
+            pady=(px(self.control_lf, GAP_GROUP), 0),
+        )
         self.gamepad_dz_label = ttk.Label(
             self.pad_section.body, text="スティックの遊び"
         )
@@ -177,9 +189,9 @@ class ControllerPanelMixin:
             increment=100,
             width=8,
         )
-        self.gamepad_dz_spin.grid(row=0, column=1, sticky="w", padx=(6, 0))
+        self.gamepad_dz_spin.grid(row=0, column=1, sticky="w", padx=(8, 0))
         self.gamepad_dz_pct = ttk.Label(self.pad_section.body, text="5.0%")
-        self.gamepad_dz_pct.grid(row=0, column=2, sticky="w", padx=(6, 0))
+        self.gamepad_dz_pct.grid(row=0, column=2, sticky="w", padx=(8, 0))
         Tooltip(
             self.gamepad_dz_spin,
             "スティックの小さな傾きを無視する範囲。生の軸値 0〜16383、既定 1638 = 5%。勝手に動くときに上げる",
@@ -191,13 +203,17 @@ class ControllerPanelMixin:
         self.gamepad_dz_spin.bind("<FocusOut>", self._on_gamepad_dz_changed, add="")
         self.gamepad_dz_spin.bind("<Return>", self._on_gamepad_dz_changed, add="")
 
-        self.arbitration_section = CollapsibleSection(
+        # 単一コンボだけの折りたたみ（1項目折りたたみ）を廃し、常時見せる SectionFrame にする。
+        self.arbitration_section = SectionFrame(
             self.control_lf,
             "コマンド実行中の手動入力",
-            on_toggle=self._on_control_section_toggled,
         )
         self.arbitration_section.grid(
-            row=10, column=0, columnspan=2, sticky="ew", pady=(2, 0)
+            row=10,
+            column=0,
+            columnspan=2,
+            sticky="ew",
+            pady=(px(self.control_lf, GAP_GROUP), 0),
         )
         self.arbitration_label = ttk.Label(
             self.arbitration_section.body, text="入力調停"
@@ -205,7 +221,9 @@ class ControllerPanelMixin:
         self.arbitration_label.grid(row=0, column=0, sticky="w")
         self.arbitration_cb = ttk.Combobox(self.arbitration_section.body)
         self.arbitration_cb.config(state="readonly", width=24)
-        self.arbitration_cb.grid(row=1, column=0, sticky="ew")
+        self.arbitration_cb.grid(
+            row=1, column=0, sticky="ew", pady=(px(self.control_lf, GAP_ITEM), 0)
+        )
         self.arbitration_cb.bind("<<ComboboxSelected>>", self.applyArbitration, add="")
         Tooltip(
             self.arbitration_cb,
@@ -214,14 +232,16 @@ class ControllerPanelMixin:
         self.arbitration_hint = ttk.Label(
             self.arbitration_section.body, wraplength=300, justify="left"
         )
-        self.arbitration_hint.grid(row=2, column=0, sticky="ew", pady=(2, 0))
+        self.arbitration_hint.grid(
+            row=2, column=0, sticky="ew", pady=(px(self.control_lf, GAP_ITEM), 0)
+        )
 
         self.gyro_row = ttk.Frame(self.control_lf)
         self.gyro_row.columnconfigure(1, weight=1)
         ttk.Label(self.gyro_row, text="ジャイロ").grid(row=0, column=0, sticky="w")
         self.gyro_state = tk.StringVar(value="停止中")
         ttk.Label(self.gyro_row, textvariable=self.gyro_state).grid(
-            row=0, column=1, sticky="w", padx=(6, 0)
+            row=0, column=1, sticky="w", padx=(8, 0)
         )
         self.gyro_button = ttk.Button(
             self.gyro_row, text="開始", command=self._toggle_gyro
@@ -390,13 +410,6 @@ class ControllerPanelMixin:
             dock.set_layout(resolved)
         except Exception as e:
             logger.warning(f"操作盤の種類を切り替えられませんでした: {e}")
-
-    def _on_control_section_toggled(self) -> None:
-        """詳細の開閉で高さが変わるので、配置と操作盤の高さを測り直す。"""
-        try:
-            self.root.after_idle(self._fit_control_viewport)
-        except tk.TclError:
-            pass
 
     def _control_available_width(self) -> int:
         """コントローラタブで実際に見えている幅。"""

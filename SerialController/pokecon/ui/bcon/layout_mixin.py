@@ -315,7 +315,7 @@ class BconLayoutMixin:
             )
             self._btn_serial.grid(row=3, column=0, sticky=tk.EW, pady=(0, 4))
 
-        ttk.Separator(pair_body).grid(row=4, column=0, sticky=tk.EW, pady=6)
+        ttk.Separator(pair_body).grid(row=4, column=0, sticky=tk.EW, pady=8)
         ttk.Label(
             pair_body,
             text="無線ペアリング（無線モードのみ）",
@@ -349,7 +349,7 @@ class BconLayoutMixin:
             text="取込開始",
             command=self._on_capture,
         )
-        self._btn_cap.grid(row=0, column=3, sticky=tk.EW, padx=(6, 2), pady=2)
+        self._btn_cap.grid(row=0, column=3, sticky=tk.EW, padx=(8, 2), pady=2)
 
         self._btn_beacon = ttk.Button(
             pair_body,
@@ -620,7 +620,7 @@ class BconLayoutMixin:
         )
         self._keys_note.grid(row=2, column=0, columnspan=2, sticky=tk.W, padx=2)
         self._keys_note.grid_remove()
-        grp_danger.pack(fill=tk.X, pady=(4, 0))
+        grp_danger.pack(fill=tk.X, pady=(px(self.window, GAP_ITEM), 0))
 
     def _bind_tooltips(self) -> None:
         """各操作ボタンへ補足説明のツールチップを結ぶ。"""
