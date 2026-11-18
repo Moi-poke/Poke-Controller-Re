@@ -321,9 +321,17 @@ def test_pane_arrangement_defaults_and_sanitize() -> None:
     changed = config.complete_missing(parser)
     assert window["arrangement"] == "tabs_right"
     assert "Window.arrangement" in changed
-    window["arrangement"] = "stack"
+    window["arrangement"] = "log_bottom"
     assert config.complete_missing(parser) == []
-    assert window["arrangement"] == "stack"
+    assert window["arrangement"] == "log_bottom"
+    window["arrangement"] = "side"
+    changed = config.complete_missing(parser)
+    assert window["arrangement"] == "tabs_right"
+    assert "Window.arrangement" in changed
+    window["arrangement"] = "stack"
+    changed = config.complete_missing(parser)
+    assert window["arrangement"] == "log_bottom"
+    assert "Window.arrangement" in changed
 
 
 def test_pane_sashes_default_empty_and_broken_text_is_cleared() -> None:

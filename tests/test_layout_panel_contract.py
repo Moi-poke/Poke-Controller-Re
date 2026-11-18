@@ -290,7 +290,7 @@ def test_a_closed_port_reads_as_not_connected(host: _Host) -> None:
 
 
 def test_rearranging_keeps_every_area_and_status_in_place(host: _Host) -> None:
-    for arrangement in ("side", "stack", "log_bottom", "log_right"):
+    for arrangement in ("tabs_right", "log_bottom", "side", "stack", "log_right"):
         # When: the user picks another arrangement.
         host.applyArrangement(arrangement)
         _settle(host)
@@ -334,11 +334,11 @@ def test_a_collapsed_pane_stays_collapsed_across_compact_and_back(host: _Host) -
     assert host.log_area.winfo_ismapped()
 
 
-def test_stack_fits_the_window_width_instead_of_scrolling_the_whole_window(
+def test_log_bottom_fits_the_window_width_instead_of_scrolling_the_whole_window(
     host: _Host,
 ) -> None:
-    # Given: the stack arrangement in a window narrower than the content request.
-    host.applyArrangement("stack")
+    # Given: the log_bottom arrangement in a window narrower than the content request.
+    host.applyArrangement("log_bottom")
     host.root.geometry("500x800+0+0")
     _settle(host)
 
@@ -358,3 +358,19 @@ def test_a_short_tabs_pane_scrolls_inside_itself(host: _Host) -> None:
     # Then: スクロールは設定タブの欄の中だけに出る。本体は窓の高さに収まる。
     assert host.tabs_scroll.vbar.winfo_ismapped()
     assert host.frame_1.winfo_height() <= host.root.winfo_height()
+
+
+def test_tabs_right_split_rounds_fractional_video_height_for_sashpos(
+    host: _Host,
+) -> None:
+    """プレビュー幅が 16 の倍数でない場合でも tabs_right の上下仕切り計算が整数で設定されること。"""
+    # Given: tabs_right 配置で、16 の倍数にならないプレビュー幅になる窓サイズ。
+    host.applyArrangement("tabs_right")
+    host.root.geometry("1003x760+0+0")
+    _settle(host)
+
+    # When/Then: _apply_tabs_right_split が浮動小数点を sashpos に渡して TclError を起こさない。
+    host._apply_tabs_right_split()
+    pane = host._pane_arranger.pane_for("V[preview,log]")
+    assert pane is not None
+    assert pane.sashpos(0) >= 1

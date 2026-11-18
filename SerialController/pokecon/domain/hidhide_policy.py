@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""hidhide_setup.py - HidHide の設定を書き換える（Tkなし）。
+"""hidhide_policy.py - HidHide の設定を書き換える（Tkなし）。
 
 HidHideCLI.exe は管理者権限を必要としない。変更は 1 回の呼び出しに
 まとめて渡し、プロセスが正常終了した時点でまとめて書き込まれる
 （失敗すると後続のコマンドは適用されない）。ここでは引数の組み立て・
-実行・結果の解釈だけを持ち、状態検出は core.hidhide、画面は
+実行・結果の解釈だけを持ち、状態検出は domain.hidhide、画面は
 ui.hidhide_setup が持つ。
 
 自動インストールはしない。ドライバの導入は利用者が公式インストーラで

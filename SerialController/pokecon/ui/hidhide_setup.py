@@ -4,7 +4,7 @@
 
 状態を行で見せ、押せる項目だけにボタンを置く。説明文ではなく
 「何が済んでいて、何が残っているか」を配置で伝える。
-判断と CLI の実行は core.hidhide / core.hidhide_setup が持ち、
+判断と CLI の実行は domain.hidhide / domain.hidhide_policy が持ち、
 ここでは見せる・押されたら渡すだけにする（Window 本体は import しない）。
 
 CLI の往復で画面を固めないよう、検出・適用はワーカースレッドで行い、
@@ -23,7 +23,7 @@ from typing import Any
 
 from loguru import logger
 from pokecon.domain.hidhide import HidHideStatus, detect_hidhide
-from pokecon.domain.hidhide_setup import (
+from pokecon.domain.hidhide_policy import (
     CLIENT_HINT,
     INSTALL_URL,
     CliRun,

@@ -145,13 +145,14 @@ def test_window_puts_the_three_areas_on_draggable_panes() -> None:
 
 
 def test_transport_list_has_switch_bcon_without_pico() -> None:
-    """Transport候補はswitch-bcon表記でpico_uart無し。旧名も通る。"""
+    """Transport候補はswitch-bcon（別プロセス標準）とlegacy_textでpico_uart無し。旧名も通る。"""
     from pokecon.domain.transport import list_transports, resolve_transport_name
 
-    assert "switch-bcon" in list_transports()
-    assert "switch-bcon-proc" in list_transports()
+    assert list_transports() == ["legacy_text", "switch-bcon"]
+    assert "switch-bcon-proc" not in list_transports()
     assert "pico_uart" not in list_transports()
     assert resolve_transport_name("bcon") == "switch-bcon"
+    assert resolve_transport_name("switch-bcon-proc") == "switch-bcon"
 
 
 def test_setting_tab_change_releases_focus() -> None:

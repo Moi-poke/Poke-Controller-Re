@@ -477,8 +477,8 @@ class LayoutPanelMixin:
         video_h = min(width * 9 / 16, total - chrome - bar - log_min)
         video_h = max(80, video_h)
         desired_log = max(log_min, total - (chrome + video_h + bar))
-        # 上段＝左列の残り。sashpos は上段の高さ。
-        pane.sashpos(0, max(1, total - desired_log))
+        # 上段＝左列の残り。sashpos は整数のみ受け付けるため丸めて渡す。
+        pane.sashpos(0, max(1, round(total - desired_log)))
 
     def _on_tabs_right_sash_drag(self, _event: Any = None) -> None:
         self._tabs_right_log_locked = True

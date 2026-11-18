@@ -39,9 +39,9 @@ def test_input_logger_reads_s_rows_like_legacy() -> None:
 
 def test_bcon_notifies_sent_rows_once_and_skips_resends() -> None:
     """Given: bcon線＋聞き手 / When: 送る / Then: 送った行が1回だけ届き再送は削られること。"""
-    from pokecon.domain.transport import create_transport
+    from pokecon.domain.transport import BconTransport
 
-    made = create_transport("switch-bcon")
+    made = BconTransport()
     got: list[str] = []
     assert made.add_listener(got.append) is True
     # 重ね付けしても二重に届かない。
@@ -105,10 +105,10 @@ def test_sender_links_input_log_on_bcon_and_records() -> None:
 
     from pokecon.domain.Keys import Button, KeyPress
     from pokecon.domain.serial import sender as Sender
-    from pokecon.domain.transport import create_transport
+    from pokecon.domain.transport import BconTransport
 
     lines: list[str] = []
-    transport = create_transport("switch-bcon")
+    transport = BconTransport()
 
     class FakeSer:
         is_open = True

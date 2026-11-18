@@ -63,21 +63,32 @@ def test_log_right_puts_the_log_to_the_right_of_preview_and_tabs(areas: _Areas) 
     assert lx > px and lx > tx
 
 
-def test_side_puts_tabs_over_log_to_the_right_of_the_preview(areas: _Areas) -> None:
-    areas.apply("side")
-    px, _py, pw, _ph = areas.box("preview")
+def test_log_bottom_puts_log_below_preview_and_tabs(areas: _Areas) -> None:
+    areas.apply("log_bottom")
+    px, py, pw, ph = areas.box("preview")
     tx, ty, _tw, th = areas.box("tabs")
-    lx, ly, _lw, _lh = areas.box("log")
-    assert tx >= px + pw and lx == tx
-    assert ly >= ty + th
-
-
-def test_stack_puts_the_three_areas_top_to_bottom(areas: _Areas) -> None:
-    areas.apply("stack")
-    _px, py, _pw, ph = areas.box("preview")
-    _tx, ty, _tw, th = areas.box("tabs")
     _lx, ly, _lw, _lh = areas.box("log")
-    assert py + ph <= ty and ty + th <= ly
+    # Then: 上段に映像とタブを横並び、下段にログ。
+    assert tx >= px + pw
+    assert py + ph <= ly and ty + th <= ly
+
+
+def test_legacy_side_and_stack_migrate_cleanly(areas: _Areas) -> None:
+    # When: 旧プリセット side を渡すと tabs_right として組まれる。
+    areas.apply("side")
+    px, py, pw, ph = areas.box("preview")
+    lx, ly, _lw, _lh = areas.box("log")
+    tx, _ty, _tw, th = areas.box("tabs")
+    assert lx == px and ly >= py + ph
+    assert tx >= px + pw and th >= areas.parent.winfo_height() - 2
+
+    # When: 旧プリセット stack を渡すと log_bottom として組まれる。
+    areas.apply("stack")
+    px, py, pw, ph = areas.box("preview")
+    tx, ty, _tw, th = areas.box("tabs")
+    _lx, ly, _lw, _lh = areas.box("log")
+    assert tx >= px + pw
+    assert py + ph <= ly and ty + th <= ly
 
 
 def test_collapsed_areas_disappear_and_come_back(areas: _Areas) -> None:
@@ -101,7 +112,7 @@ def test_collapsed_areas_disappear_and_come_back(areas: _Areas) -> None:
 
 
 def test_rearranging_many_times_leaves_no_stale_panes(areas: _Areas) -> None:
-    for arrangement in ("side", "stack", "log_right") * 3:
+    for arrangement in ("tabs_right", "log_bottom", "log_right") * 3:
         areas.apply(arrangement)
 
     # Then: 組み直すたびに古い仕切りを壊す（残ると裏に溜まり続ける）。

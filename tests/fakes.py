@@ -6,9 +6,32 @@ collect 対象にしない（test_ で始まらない）ため、ここには
 
 import threading
 import time
+from collections.abc import Callable
 from typing import Any
 
-from pokecon.domain.transport import LEGACY_ROW, Transport
+from pokecon.domain.transport import LEGACY_ROW, PICO_LIVE_STATE, Transport
+from pokecon.domain.transport.text_serial import TextSerialTransport
+
+
+class FakeLiveTransport(TextSerialTransport):
+    """live worker 経路の検証用偽物。S行・バイナリ相当を間引かず送る。"""
+
+    name = "fake_live"
+    capability = PICO_LIVE_STATE
+
+    def add_listener(self, func: Callable[[str], None]) -> bool:
+        _ = func
+        return False
+
+    def remove_listener(self, func: Callable[[str], None]) -> None:
+        _ = func
+
+    def send_row(self, row: str, measure_perf: bool = True) -> None:
+        with self._lock:
+            begin = self._on_write_begin
+            end = self._on_write_end
+            ser = self.ser
+        self._write_one(row, measure_perf, begin, end, ser)
 
 
 class FakeTransport(Transport):

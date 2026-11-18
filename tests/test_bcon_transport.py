@@ -3,25 +3,33 @@
 
 def test_bcon_registers_and_opens_gracefully():
     from pokecon.domain.transport import (
+        BconTransport,
         create_transport,
         list_transports,
         resolve_transport_name,
     )
+    from pokecon.domain.transport.bcon_proc import BconProcTransport
 
     assert "switch-bcon" in list_transports()
+    assert "switch-bcon-proc" not in list_transports()
     assert "pico_uart" not in list_transports()
     assert resolve_transport_name("switch-bcon") == "switch-bcon"
+    assert resolve_transport_name("switch-bcon-proc") == "switch-bcon"
     assert resolve_transport_name("bcon") == "switch-bcon"
-    made = create_transport("bcon")
-    assert made.name == "bcon"
-    assert made.open(0, "", "not-a-number") is False
-    assert made.open(9999, "", 1000000) is False
+    made = create_transport("switch-bcon")
+    assert isinstance(made, BconProcTransport)
+    assert made.name == "switch-bcon"
+    assert isinstance(create_transport("switch-bcon-proc"), BconProcTransport)
+    assert isinstance(create_transport("bcon"), BconProcTransport)
+    inproc = BconTransport()
+    assert inproc.open(0, "", "not-a-number") is False
+    assert inproc.open(9999, "", 1000000) is False
 
 
 def test_bcon_send_row_builds_single_binary_frame():
-    from pokecon.domain.transport import create_transport
+    from pokecon.domain.transport import BconTransport
 
-    made = create_transport("bcon")
+    made = BconTransport()
     written: list[bytes] = []
 
     class FakeSer:
@@ -44,9 +52,9 @@ def test_bcon_send_row_builds_single_binary_frame():
 
 def test_bcon_open_closes_previous_port_and_resets_parser(monkeypatch):
     import serial as pyserial
-    from pokecon.domain.transport import create_transport
+    from pokecon.domain.transport import BconTransport
 
-    made = create_transport("bcon")
+    made = BconTransport()
 
     class FakeSer:
         is_open = True
@@ -85,39 +93,30 @@ def test_bcon_open_closes_previous_port_and_resets_parser(monkeypatch):
     assert len(made._parser._buf) == 0
 
 
-def test_bcon_get_raw_serial_is_none_and_wakelink_falls_back():
-    from pokecon.domain import WakeLink
-    from pokecon.domain.transport import create_transport
+def test_bcon_get_raw_serial_is_none():
+    from pokecon.domain.transport import BconTransport
 
-    made = create_transport("bcon")
-    written: list[bytes] = []
+    made = BconTransport()
 
     class FakeSer:
         is_open = True
 
         def write(self, data: bytes) -> int:
-            written.append(bytes(data))
             return len(data)
 
         def read(self, n: int) -> bytes:
             return b""
 
     made.ser = FakeSer()
-    # 送出形式の単体試験は HELLO 確立後を前提とする。
     made._hello_established = True
-    # バイナリ口をテキスト直読みへ渡さない。WakeLinkは例外なく失敗扱い。
+    # バイナリ口を生シリアル直読みへ渡さない。
     assert made.get_raw_serial() is None
-    assert WakeLink.send_line(made, "Q") is False
-    assert WakeLink.read_lines(made, 0.01) == []
-    assert WakeLink.expect(made, "Q", "QOK", timeout=0.05) is None
-    WakeLink.drain(made)
-    assert written == []
 
 
 def test_bcon_set_hooks_fire_on_send_row():
-    from pokecon.domain.transport import create_transport
+    from pokecon.domain.transport import BconTransport
 
-    made = create_transport("bcon")
+    made = BconTransport()
     calls: list[tuple[str, str]] = []
     made.set_hooks(
         lambda row, show=True: calls.append(("begin", row)),
@@ -140,9 +139,9 @@ def test_bcon_set_hooks_fire_on_send_row():
 
 def test_bcon_fallback_port_matches_legacy(monkeypatch):
     import serial as pyserial
-    from pokecon.domain.transport import TextSerialTransport, create_transport
+    from pokecon.domain.transport import BconTransport, TextSerialTransport
 
-    made = create_transport("bcon")
+    made = BconTransport()
     seen: dict[str, object] = {}
 
     class FakeSer:
@@ -168,7 +167,7 @@ def test_bcon_fallback_port_matches_legacy(monkeypatch):
 
 
 def test_bcon_use_len12_sends_len12_frame_while_default_stays_len8():
-    from pokecon.domain.transport import BconTransport, create_transport
+    from pokecon.domain.transport import BconTransport
 
     def _send_once(made, row="end"):
         written: list[bytes] = []
@@ -187,7 +186,7 @@ def test_bcon_use_len12_sends_len12_frame_while_default_stays_len8():
         assert len(written) == 1
         return written[0]
 
-    default = create_transport("bcon")
+    default = BconTransport()
     frame8 = _send_once(default)
     assert frame8[0] == 0xAB
     assert frame8[1] == 0x01

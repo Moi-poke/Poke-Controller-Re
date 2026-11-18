@@ -417,7 +417,13 @@ def test_transport_switch_reopens_using_destination_saved_baud(
         opened_rates.append(rate)
         return ReplyWire(rate)
 
+    from pokecon.domain.transport import BconTransport, registry
+
+    class FakeInprocBcon(BconTransport):
+        name = "switch-bcon"
+
     monkeypatch.setattr("pokecon.domain.transport.bcon.serial.Serial", open_wire)
+    monkeypatch.setitem(registry._REGISTRY["switch-bcon"], "factory", FakeInprocBcon)
     service = SerialService(
         notify_user=lambda text: None, base_dir=".", input_log_emit=None
     )

@@ -4,7 +4,7 @@ import math
 
 import numpy as np
 from pokecon.domain.controller_preview import CONTROL_NAMES, PreviewControls
-from pokecon.ui.controller_mesh import (
+from pokecon.domain.imu import (
     MotionGroup,
     _MeshBuilder,
     _add_stick,
@@ -60,7 +60,7 @@ def test_stick_click_and_tilt_follow_the_installed_shaft() -> None:
 
 
 def test_dpad_center_depression_is_not_occluded_by_a_flat_cap() -> None:
-    from pokecon.ui.controller_mesh import _add_pro_dpad
+    from pokecon.domain.imu import _add_pro_dpad
 
     mesh = _MeshBuilder()
     _add_pro_dpad(mesh, (0.0, 0.0, 0.0), (0.0, 0.0, 1.0))

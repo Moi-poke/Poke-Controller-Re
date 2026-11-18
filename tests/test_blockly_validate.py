@@ -61,7 +61,7 @@ def test_broken_json_rejected() -> None:
 
 def test_command_audio_and_sounddevice_accepted() -> None:
     code = (
-        "from Commands.CommandAudio import AudioPythonCommand\n"
+        "from Commands.PythonCommandBase import AudioPythonCommand\n"
         "import sounddevice\n" + good_code()
     )
     assert blockly_validate.validate_generated_code(code) == []

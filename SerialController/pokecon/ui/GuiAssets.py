@@ -90,7 +90,7 @@ _DIMENSION_MISMATCH = "dimension_mismatch"
 
 # live_sender が isOpened を再照会するまでの猶予(秒)。
 # マウス Motion は 8ms 間引き後も約125Hzで届き、そのたび isOpened を
-# 呼ぶと switch-bcon-proc では同期 RPC（最大8秒級）が Tk スレッドで
+# 呼ぶと switch-bcon（別プロセス送出）では同期 RPC（最大8秒級）が Tk スレッドで
 # 直列に積まれ、GUI が数十秒固まる。TTL 内は前回の判定を使い回し、
 # 嵐を O(1) 回の照会に畳む。タイマーは足さず、呼ばれたときにだけ
 # 期限を見る（lazy）。後方互換のため値は monkeypatch で変えられる。

@@ -25,6 +25,7 @@ class _App:
         self.calls: list[str] = []
         self.layout_mode = tk.StringVar(master=root, value="standard")
         self.profile_color = tk.StringVar(master=root, value="")
+        self.profile = ""
         self.app_version = "9.9.9"
         self.arrangement = tk.StringVar(master=root, value="log_right")
         self.show_tabs_pane = tk.BooleanVar(master=root, value=True)
@@ -160,16 +161,33 @@ def test_the_view_menu_picks_the_arrangement_and_collapses_panes(
     labels = [t for _k, t in _entries(view)]
 
     # Then: 並べ方は 3 択のラジオ（今の値に印が付く）、欄はチェックで出し入れ。
-    for label in ("ログを右", "右にタブとログ", "縦一列"):
+    for label in ("タブを右（全高）", "ログを右", "ログを下"):
         assert view.type(_index(view, label)) == "radiobutton"
+    assert "右にタブとログ" not in labels
+    assert "縦一列" not in labels
     for label in ("設定タブ", "ログ"):
         assert view.type(_index(view, label)) == "checkbutton"
-    assert labels.index("縦一列") < labels.index("設定タブ")
+    assert labels.index("ログを下") < labels.index("設定タブ")
 
     # When: an arrangement and a collapse are chosen.
-    view.invoke(_index(view, "縦一列"))
+    view.invoke(_index(view, "ログを下"))
     view.invoke(_index(view, "ログ"))
 
     # Then: アプリ側の入口に、選んだ値がそのまま渡る。
-    assert ("applyArrangement", ("stack",)) in app.args
+    assert ("applyArrangement", ("log_bottom",)) in app.args
     assert ("setPaneVisible", ("log", False)) in app.args
+
+
+def test_open_key_config_reuses_existing_window_instead_of_duplicating(
+    bar: tuple[PokeController_Menubar, _App],
+) -> None:
+    """キーコンフィグを続けて開いたとき、重複生成せず既存の窓を再利用すること。"""
+    menubar, _app = bar
+    try:
+        menubar.OpenKeyConfig()
+        first = menubar.key_config
+        assert first is not None
+        menubar.OpenKeyConfig()
+        assert menubar.key_config is first
+    finally:
+        menubar.closingKeyConfig()

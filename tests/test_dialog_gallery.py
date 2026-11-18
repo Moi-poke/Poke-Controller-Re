@@ -62,7 +62,7 @@ def test_choice_grid_selection_and_filter() -> None:
         pytest.skip(f"Tk unavailable: {exc}")
     root.withdraw()
     try:
-        from Commands.CommandDialog import _ChoiceGrid
+        from pokecon.ui.command_dialog import _ChoiceGrid
 
         top = tk.Toplevel(root)
         grid = _ChoiceGrid(
@@ -112,7 +112,7 @@ def test_choice_grid_single_keeps_one() -> None:
         pytest.skip(f"Tk unavailable: {exc}")
     root.withdraw()
     try:
-        from Commands.CommandDialog import _ChoiceGrid
+        from pokecon.ui.command_dialog import _ChoiceGrid
 
         top = tk.Toplevel(root)
         grid = _ChoiceGrid(
@@ -144,7 +144,7 @@ def test_int_limit_value_handles_unlimited() -> None:
         pytest.skip(f"Tk unavailable: {exc}")
     root.withdraw()
     try:
-        from Commands.CommandDialog import _IntLimitValue
+        from pokecon.ui.command_dialog import _IntLimitValue
 
         check = tk.BooleanVar(value=False)
         entry = tk.StringVar(value="5")
@@ -173,7 +173,7 @@ def test_dialog_with_int_limit_can_be_built() -> None:
         pytest.skip(f"Tk unavailable: {exc}")
     root.withdraw()
     try:
-        from Commands.CommandDialog import PokeConDialogue
+        from pokecon.ui.command_dialog import PokeConDialogue
 
         top = tk.Toplevel(root)
         root.after(100, top.destroy)

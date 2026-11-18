@@ -9,9 +9,9 @@ from pokecon.domain.transport.bcon_protocol import T_HELLO, frame_build
 
 
 def _hunt_with(ser: HuntingPicoSer) -> int | None:
-    from pokecon.domain.transport import create_transport
+    from pokecon.domain.transport import BconTransport
 
-    made = create_transport("bcon")
+    made = BconTransport()
     made.ser = ser
     made.start_rx_pump()
     try:

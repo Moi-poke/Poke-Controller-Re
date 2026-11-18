@@ -1,9 +1,8 @@
-"""set_procon_color の bcon 統一ベクタ（実機不要・RED）。
+"""set_procon_color の bcon 専用動作ベクタ（実機不要）。
 
-方針: bcon の口では O 行・query・WakeLink・direct_serial を使わず、
-統一の色読み（BconSetup 側）で 12B を組み立て send_config(0x32) を
-1 発だけ送り、直後に request_status を読んで errcode を
-describe_bcon_errcode で解く。いまの実装は O 行を送るため赤のはず。
+方針: bcon の口では統一の色読み（procon_color 側）で 12B を組み立て
+send_config(0x32) を 1 発だけ送り、直後の request_status を読んで
+errcode を describe_bcon_errcode で解く。非 bcon では何も送らず案内する。
 """
 
 from typing import Any
@@ -28,8 +27,6 @@ class _FakeBconTransport:
     capability = "BCON_STATE"
 
     def __init__(self) -> None:
-        # _color_transport が ser の有無を見るため空でも持たせる。
-        self.ser = object()
         self.send_config_calls: list[tuple[int, bytes]] = []
         self.request_status_calls = 0
 
@@ -52,75 +49,60 @@ class _FakeBconTransport:
         }
 
 
-def _make_script(
-    transport: Any,
-    monkeypatch: pytest.MonkeyPatch,
-) -> tuple[Any, list[str], dict[str, Any]]:
+def _make_script(transport: Any) -> tuple[Any, list[str], list[str]]:
     """ダイアログと出口を差し替えた検査体を作る。"""
-    import Commands.PythonCommands.set_procon_color as mod
-
     script = SetProconColor()
-    # 送り口は bcon の偽物だけに結ぶ。
     script.keys = type("Keys", (), {})()
     script.keys.ser = type("Sender", (), {})()
     script.keys.ser.transport = transport
 
     logs: list[str] = []
+    direct: list[str] = []
     script.print2 = logs.append  # type: ignore[method-assign]
     script.finish = lambda: None  # type: ignore[method-assign]
     script.wait = lambda _sec: None  # type: ignore[method-assign]
-
-    seen: dict[str, Any] = {"query": [], "direct": []}
-
-    def _fake_query(_transport: Any, row: str, *_a: Any, **_k: Any) -> list[str]:
-        seen["query"].append(row)
-        return []
-
-    def _fake_direct(rows: list[str], waits: list[float]) -> None:
-        _ = waits
-        seen["direct"].extend(rows)
-
-    # WakeLink の query は bcon の口では呼ばないはず（呼ばれたら赤）。
-    monkeypatch.setattr(mod, "query", _fake_query)
-    script.direct_serial = _fake_direct  # type: ignore[method-assign]
-    return script, logs, seen
+    script.direct_serial = lambda rows, _waits: direct.extend(rows)  # type: ignore[method-assign]
+    return script, logs, direct
 
 
 def test_bcon_path_sends_color_set_once() -> None:
-    """bcon の口では 12B を send_config(0x32) で1発だけ送る（いまは赤）。"""
-    import pytest as _pt
+    """bcon の口では 12B を send_config(0x32) で1発だけ送る。"""
+    transport = _FakeBconTransport()
+    script, logs, direct = _make_script(transport)
+    choice = "公式 ネオン (青/赤)"
+    script.dialogue6widget = lambda *a, **k: [choice, False]  # type: ignore[method-assign]
 
-    _mp = _pt.MonkeyPatch()
-    try:
-        transport = _FakeBconTransport()
-        script, logs, seen = _make_script(transport, _mp)
-        # 1 回目の対話だけ使う（確かめなし・プリセット直送）。
-        choice = "公式 ネオン (青/赤)"
-        script.dialogue6widget = lambda *a, **k: [choice, False]  # type: ignore[method-assign]
+    base = PRESET[choice]
+    slots = [parse_color_hex(c) for c in base]
+    assert all(s is not None for s in slots)
+    expected = build_color_payload(slots)
+    assert len(expected) == 12
 
-        # Given: プリセット4色（統一の読みで 12B になるはず）。
-        base = PRESET[choice]
-        slots = [parse_color_hex(c) for c in base]
-        assert all(s is not None for s in slots)
-        expected = build_color_payload(slots)
-        assert len(expected) == 12
+    script.do()
 
-        # When: 色変えをその場で走らせる。
-        script.do()
+    assert transport.send_config_calls == [(0x32, expected)]
+    assert direct == []
+    assert transport.request_status_calls >= 1
+    want = describe_bcon_errcode(0x12)
+    assert "CONFIG拒否" in want
+    assert any(want in line for line in logs)
 
-        # Then: send_config(0x32, 12B) を1発だけ。O 行系は一切使わない。
-        assert transport.send_config_calls == [(0x32, expected)]
-        assert seen["query"] == []
-        assert seen["direct"] == []
-        assert all(not row.startswith("O ") for row in seen["query"])
-        assert all(not row.startswith("O ") for row in seen["direct"])
-        # 直後の STATUS を読み、errcode=0x12 を日本語で解く。
-        assert transport.request_status_calls >= 1
-        want = describe_bcon_errcode(0x12)
-        assert "CONFIG拒否" in want
-        assert any(want in line for line in logs)
-    finally:
-        _mp.undo()
+
+def test_non_bcon_transport_refuses_without_sending() -> None:
+    """非 bcon では旧 O 行や direct_serial へ流さず案内して終える。"""
+    from fakes import FakeTransport
+
+    transport = FakeTransport()
+    transport.open(0, "COM3", 9600)
+    script, logs, direct = _make_script(transport)
+    choice = "公式 ネオン (青/赤)"
+    script.dialogue6widget = lambda *a, **k: [choice, False]  # type: ignore[method-assign]
+
+    script.do()
+
+    assert transport.rows == []
+    assert direct == []
+    assert any("BCON" in line for line in logs)
 
 
 @pytest.mark.parametrize(

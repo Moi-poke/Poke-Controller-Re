@@ -18,7 +18,6 @@ from pokecon.domain.transport import (
     SEND_ROW_BYTES as SEND_ROW_BYTES,
     VALID_CAPABILITIES as VALID_CAPABILITIES,
     WRITE_TIMEOUT as WRITE_TIMEOUT,
-    PicoUartTransport as PicoUartTransport,
     TextSerialTransport as TextSerialTransport,
     Transport as Transport,
     create_transport as create_transport,
@@ -29,3 +28,6 @@ from pokecon.domain.transport import (
     resolve_transport_name as resolve_transport_name,
     unregister_transport as unregister_transport,
 )
+
+# api_version=1 外部プラグイン互換のための非推奨エイリアス。
+PicoUartTransport = TextSerialTransport

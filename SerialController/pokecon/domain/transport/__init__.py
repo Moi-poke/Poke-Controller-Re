@@ -52,6 +52,5 @@ from pokecon.domain.transport.text_serial import (
     SEND_INTERVAL_MARGIN as SEND_INTERVAL_MARGIN,
     SEND_ROW_BYTES as SEND_ROW_BYTES,
     WRITE_TIMEOUT as WRITE_TIMEOUT,
-    PicoUartTransport as PicoUartTransport,
     TextSerialTransport as TextSerialTransport,
 )

@@ -71,12 +71,12 @@ def test_format_run_start_contains_identity() -> None:
     text = format_run_start(
         cmd_name="高速日時変更 Pico用",
         profile="pico",
-        transport="pico_uart",
+        transport="switch-bcon",
         dwell_ms=16,
         repeat_ms=24,
     )
     assert "高速日時変更 Pico用" in text
-    assert "pico_uart" in text
+    assert "switch-bcon" in text
     assert "dwell=16ms" in text
     assert "repeat=24ms" in text
 
@@ -85,7 +85,7 @@ def test_format_run_start_contains_version_when_given() -> None:
     text = format_run_start(
         cmd_name="X",
         profile="pico",
-        transport="pico_uart",
+        transport="switch-bcon",
         dwell_ms=16,
         repeat_ms=24,
         version="022b33b",

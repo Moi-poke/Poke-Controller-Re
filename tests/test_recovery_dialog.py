@@ -14,8 +14,8 @@ import tkinter.ttk as ttk
 from pathlib import Path
 
 import pytest
-from Commands.CommandDialog import _copy_to_clipboard, build_recovery_panel
 from pokecon.domain.recovery import RecoveryAdvice, TemplateImageError
+from pokecon.ui.command_dialog import _copy_to_clipboard, build_recovery_panel
 
 
 def _advice(path: str) -> RecoveryAdvice:

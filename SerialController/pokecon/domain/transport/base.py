@@ -140,16 +140,15 @@ class Transport(abc.ABC):
         """聞き手を外す。既定は何もしない（繋がっていないため）。"""
 
     def get_raw_serial(self) -> Any:
-        """応答つき通信（WakeLink）が使う生のシリアル。無ければ None。
+        """応答つき通信が使う生のシリアル。無ければ None。
 
-        非シリアル方式（HID/BLE/TCP 等）は None を返す。その場合
-        WakeLink は例外なく False/None を返し、Sender の Q/R 確認は
-        従来経路へフォールバックする。直に .ser を触らずこちらを使う。
+        非シリアル方式（HID/BLE/TCP 等）やバイナリ専用方式は None を返す。
+        直に .ser を触らずこちらを使う。
         """
         return getattr(self, "ser", None)
 
     def acquire_write_lock(self) -> Any:
-        """書き出しの錠。WakeLink が1行単位の噛み合い用に使う。
+        """書き出しの錠。1行単位の噛み合い用に使う。
 
         無ければ何もしない文脈管理を返す。直に ._lock を触らずこちらを使う。
         """
@@ -169,8 +168,7 @@ class Transport(abc.ABC):
     def subscribe_rx(self, func: Callable[[str], None]) -> Callable[[], None]:
         """受信1行ごとの購読。戻り値は解除用の呼び出し。
 
-        既定は何も届かない購読。ser を持たない方式はこのまま
-        (モニタへは何も出ず、WakeLink は従来の直接読みへ回る)。
+        既定は何も届かない購読。ser を持たない方式はこのまま。
         """
 
         def _unsub() -> None:

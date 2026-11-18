@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""CommandDialog.py - 入力ダイアログ（DialogMixin / PokeConDialogue）.
+"""command_dialog.py - 入力ダイアログ（DialogMixin / PokeConDialogue）.
 
-PythonCommandBase.py から対話部を切り出したもの。
+PythonCommandBase から対話部を切り出した UI モジュール。
 
 なぜ分けるか:
   ダイアログは tkinter に強く依存する一方、コマンドの実行制御・操作・
@@ -19,9 +19,9 @@ PythonCommandBase.py から対話部を切り出したもの。
   Mixin なので、重ねる側がこれらを持っていることが前提になる。
 
 互換:
-  PythonCommandBase.py が PokeConDialogue を re-import するので、
+  Commands/PythonCommandBase.py が PokeConDialogue を再公開するため、
       from Commands.PythonCommandBase import PokeConDialogue
-  と書いている既存のコードはそのまま動く。
+  と書いている既存の利用者スクリプトはそのまま動く。
 """
 
 from __future__ import annotations
@@ -43,7 +43,7 @@ from pokecon.domain import dialog_gallery
 from pokecon.domain.recovery import RecoveryAdvice
 
 # 作業側→GUI側の委譲待ち行列。作業スレッドはTkを触らず積むだけにし、
-# GUI側がafterで取り出して走らせる（LogPane/WakeSetup式）。root.afterを
+# GUI側がafterで取り出して走らせる（LogPane式）。root.afterを
 # 作業側から呼ぶのは公式に非対応で、終了時に壊れる。
 #: 待ち行列の上限。主循環が死ぬと取り出しが止まり溜まる一方になるため、
 #: 有界にして溢れた分は古い方から捨てる（書き手のワーカーを待たせない）。
@@ -210,7 +210,7 @@ class DialogMixin:
         tkinter はスレッドセーフではなく、GUI スレッド以外から widget を
         生成するとフリーズやクラッシュの原因になる。コマンドはワーカー
         スレッドで動くので、生成そのものを行列へ積みGUI側のafter輪で
-        取り出して作る（LogPane/WakeSetup式）。作業側はTkを触らず積む
+        取り出して作る（LogPane式）。作業側はTkを触らず積む
         だけにし、こちらは Event で結果を待つ。root.afterを作業側から
         呼ぶのは公式に非対応で、終了時に壊れる。
 

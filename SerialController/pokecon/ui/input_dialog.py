@@ -16,9 +16,9 @@ from dataclasses import dataclass
 from tkinter import messagebox
 from typing import Any
 
-from Commands.CommandDialog import PokeConDialogue
 from loguru import logger
 from pokecon.domain import inputs, option_sets
+from pokecon.ui.command_dialog import PokeConDialogue
 
 
 @dataclass(frozen=True)

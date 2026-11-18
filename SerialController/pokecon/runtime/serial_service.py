@@ -28,7 +28,11 @@ from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, replace
 from datetime import datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from pokecon.runtime.Gamepad import SwitchGamepadController
+    from pokecon.runtime.Keyboard import SwitchKeyboardController
 
 from loguru import logger
 from pokecon.domain import transport
@@ -49,9 +53,8 @@ from pokecon.domain.transport.bcon_protocol import (
 )
 from pokecon.plugins import transports as transport_plugins
 from pokecon.runtime import run_journal
-from pokecon.runtime.Gamepad import SwitchGamepadController
-from pokecon.runtime.Keyboard import SwitchKeyboardController
 from pokecon.runtime.bcon_connect import connect_bcon
+from pokecon.runtime.manual_input_service import ManualInputMixin
 from pokecon.runtime.run_journal import read_m_counts
 
 # 開閉判定の使い回し猶予(秒)。GuiAssets.SER_OPENED_TTL_S と同じ値に揃える。
@@ -82,7 +85,7 @@ class SenderSpec:
     live_min_dwell_ms: int
 
 
-class SerialService:
+class SerialService(ManualInputMixin):
     """送り先（Sender）とその周辺の所有者。"""
 
     def __init__(
@@ -214,7 +217,7 @@ class SerialService:
     def uses_bcon(name: str | None) -> bool:
         """その通信方式が bcon 系（能力 BCON_STATE）か。
 
-        名前の直書きではなく能力で見る。別プロセス版（switch-bcon-proc）や
+        名前の直書きではなく能力で見る。別プロセス版（switch-bcon）や
         利用者定義の bcon 互換も同じ口で拾える。
         """
         return transport.transport_capability(name) == transport.BCON_STATE
@@ -351,8 +354,8 @@ class SerialService:
         """
         if self.sender is None:
             return (False, False)
-        # 表示名と実体名は一致しない（BconTransport.name == "bcon" だが
-        # プリセット名は "switch-bcon"）。別名で押し直しただけで作り直すと
+        # プリセット名は "switch-bcon"、旧名 "bcon" / "switch-bcon-proc" も
+        # 同名に解決する）。別名で押し直しただけで作り直すと
         # 線を閉じて HELLO からやり直しになるため、正規化してから比べる。
         # 未登録名を既定へ落とす resolve_transport_name は使わない
         # （未知名どうしが legacy_text に潰れて別方式を取り違える）。
@@ -1137,169 +1140,6 @@ class SerialService:
                     )
 
         return self._bcon_request(label, operation)
-
-    # -- キーボード -------------------------------------------------------------
-
-    def set_keyboard_enabled(self, enabled: bool, setting_path: str) -> str | None:
-        """キーボード操作の有効・無効を切り替える。
-
-        成功したら None、失敗したら理由を返す（呼び出し側は画面の
-        チェックを戻す）。理由はここで利用者とファイルの両方へ出す。
-        """
-        if not enabled:
-            self.stop_keyboard()
-            return None
-        # keyPress が無いまま生成すると、キーを押した瞬間に
-        # AttributeError になる（Keyboard 側に None チェックはあるが、
-        # 生成自体は通ってしまうため先に断つ）。
-        if self.key_press is None:
-            message = "シリアル未接続のためキーボード操作を有効にできません"
-            self._notify(message)  # チェックが勝手に外れる理由を画面にも出す
-            logger.warning(message)
-            return message
-        if self.keyboard is None:
-            try:
-                self.keyboard = SwitchKeyboardController(
-                    self.key_press,
-                    setting_path=setting_path,
-                    is_active=self._keyboard_active,
-                )
-                self.keyboard.listen()
-            except Exception as e:
-                message = f"キーボード操作を開始できませんでした: {e}"
-                self._notify(message)
-                logger.warning(message)
-                self.keyboard = None
-                return message
-        return None
-
-    def stop_keyboard(self) -> None:
-        """キーボード操作を止める。止まっていれば何もしない。
-
-        停止処理は切断・再接続・終了の3か所から呼ばれる。同じ手順を
-        3回書くと、片方だけ直したときに挙動が食い違う。
-        """
-        if self.keyboard is not None:
-            try:
-                self.keyboard.stop()
-            except Exception as e:
-                logger.warning(f"キーボードの停止で例外: {e}")
-            self.keyboard = None
-
-    def reload_keyboard_map(self) -> None:
-        """生きている実体のキー割り当てを読み直す。
-
-        キーコンフィグ保存直後に呼ぶ。Listener は作り直さない。
-        実体が無ければ何もしない（次回の有効化で新割当を読む）。
-        """
-        if self.keyboard is None:
-            return
-        try:
-            self.keyboard.reload_key_map()
-        except Exception as e:
-            logger.warning(f"キー割り当ての再読込で例外: {e}")
-
-    # -- ゲームパッド -----------------------------------------------------------
-
-    def set_gamepad_enabled(
-        self, enabled: bool, pad_index: int = 0, deadzone: int = 1638
-    ) -> str | None:
-        """ゲームパッド操作の有効・無効を切り替える。
-
-        成功したら None、失敗したら理由を返す（呼び出し側は画面の
-        チェックを戻す）。理由はここで利用者とファイルの両方へ出す。
-        キーボード操作と同じ作法である。
-        """
-        if not enabled:
-            self.stop_gamepad()
-            return None
-        if self.sender is None:
-            message = "シリアル未接続のためゲームパッド操作を有効にできません"
-            self._notify(message)
-            logger.warning(message)
-            return message
-        if self.gamepad is None:
-            try:
-                from pokecon.domain.hidhide import hidhide_ready
-                from pokecon.domain.pad_source import PadSource, sdl_debug_enabled
-
-                self.gamepad = SwitchGamepadController(
-                    self.sender,
-                    pad_index=pad_index,
-                    is_active=self._gamepad_active,
-                    on_display=self._gamepad_display,
-                    deadzone=deadzone,
-                    reader=PadSource(
-                        allow_sdl=sdl_debug_enabled(), allow_hid=hidhide_ready
-                    ),
-                )
-                self.gamepad.listen()
-            except Exception as e:
-                message = f"ゲームパッド操作を開始できませんでした: {e}"
-                self._notify(message)
-                logger.warning(message)
-                self.gamepad = None
-                return message
-        return None
-
-    def stop_gamepad(self) -> None:
-        """ゲームパッド操作を止める。止まっていれば何もしない。
-
-        停止処理は切断・再接続・終了の3か所から呼ばれる。同じ手順を
-        3回書くと、片方だけ直したときに挙動が食い違う。
-        """
-        if self.gamepad is not None:
-            try:
-                self.gamepad.stop()
-            except Exception as e:
-                logger.warning(f"ゲームパッドの停止で例外: {e}")
-            self.gamepad = None
-
-    def invalidate_gamepad(self) -> bool:
-        """生きている読取器のキャッシュを捨てる（手動再接続用）。
-
-        止めも作り直しもしない。捨てた（実体があった）ら True。
-        実体が無いときは False を返し、呼び出し側が列挙用の
-        読み取り口だけを破棄できるようにする。
-        """
-        gamepad = self.gamepad
-        if gamepad is None:
-            return False
-        invalidate = getattr(gamepad, "invalidate_reader", None)
-        if not callable(invalidate):
-            return False
-        try:
-            invalidate()
-            return True
-        except Exception as e:
-            logger.warning(f"ゲームパッドの読み取り口を破棄できません: {e}")
-            return False
-
-    def set_gamepad_display(self, fn: Callable[[dict[str, Any]], None] | None) -> None:
-        """ゲームパッド入力の表示先を差し替える（仮想パッドの鏡用）。
-
-        生きている実体にもそのまま付ける。Tk スレッドへの受け渡しは
-        呼び出し側が行う（ここでは呼ばない。読取スレッドから来る）。
-        """
-        self._gamepad_display = fn
-        gamepad = self.gamepad
-        if gamepad is not None:
-            try:
-                gamepad.on_display = fn
-            except Exception:
-                pass
-
-    def list_gamepads(self) -> list[int]:
-        """繋がっているパッド番号の一覧。読めなければ空リスト。"""
-        try:
-            from pokecon.domain.hidhide import hidhide_ready
-            from pokecon.domain.pad_source import PadSource, sdl_debug_enabled
-
-            return PadSource(
-                allow_sdl=sdl_debug_enabled(), allow_hid=hidhide_ready
-            ).scan()
-        except Exception:
-            return []
 
     # -- 状態・終了 ---------------------------------------------------------------
 

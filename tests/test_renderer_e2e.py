@@ -189,6 +189,7 @@ PINNED_SOURCES: Final[tuple[str, ...]] = (
     "SerialController/pokecon/ui/GuiAssets.py",
     "SerialController/pokecon/ui/photo_surface.py",
     "SerialController/pokecon/ui/preview_clock.py",
+    "SerialController/pokecon/domain/preview/win32_clock.py",
     "SerialController/pokecon/domain/gdi_surface.py",
 )
 

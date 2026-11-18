@@ -497,10 +497,11 @@ class LauncherWindow(ttk.Frame):
     WIDTHS = {"profile": 170, "com": 140, "camera": 110, "fps": 60, "state": 110}
 
     def __init__(self, master: tk.Tk) -> None:
-        super().__init__(master, padding=10)
+        super().__init__(master, padding=12)
         self.master = master
         self.master.title("Poke-Controller Re: ランチャー")
         self.master.minsize(720, 340)
+        self.master.bind("<Escape>", lambda _event: self.master.destroy())
         self.grid(sticky=tk.NSEW)
         self.master.columnconfigure(0, weight=1)
         self.master.rowconfigure(0, weight=1)
@@ -523,27 +524,28 @@ class LauncherWindow(ttk.Frame):
             self.tree.column(key, width=self.WIDTHS[key], anchor=anchor)
         self.tree.grid(row=0, column=0, sticky=tk.NSEW)
         self.tree.bind("<Double-1>", self.on_start)
+        self.tree.bind("<Return>", self.on_start)
 
         bar = ttk.Scrollbar(self, orient="vertical", command=self.tree.yview)
         self.tree.configure(yscrollcommand=bar.set)
         bar.grid(row=0, column=1, sticky=tk.NS)
 
         buttons = ttk.Frame(self)
-        buttons.grid(row=1, column=0, columnspan=2, sticky=tk.EW, pady=(10, 0))
+        buttons.grid(row=1, column=0, columnspan=2, sticky=tk.EW, pady=(8, 0))
 
         self.start_button = ttk.Button(buttons, text="起動", command=self.on_start)
         self.start_button.pack(side=tk.LEFT)
         ttk.Button(buttons, text="新規作成", command=self.on_create).pack(
-            side=tk.LEFT, padx=(6, 0)
+            side=tk.LEFT, padx=(8, 0)
         )
         ttk.Button(buttons, text="複製", command=self.on_duplicate).pack(
-            side=tk.LEFT, padx=(6, 0)
+            side=tk.LEFT, padx=(8, 0)
         )
         ttk.Button(buttons, text="削除", command=self.on_delete).pack(
-            side=tk.LEFT, padx=(6, 0)
+            side=tk.LEFT, padx=(8, 0)
         )
         ttk.Button(buttons, text="再読込", command=self.refresh).pack(
-            side=tk.LEFT, padx=(6, 0)
+            side=tk.LEFT, padx=(8, 0)
         )
         ttk.Button(buttons, text="閉じる", command=self.master.destroy).pack(
             side=tk.RIGHT
@@ -617,20 +619,25 @@ class LauncherWindow(ttk.Frame):
             if not tkmsg.askokcancel("既に起動しています", message):
                 return
 
+        label = profile or "既定"
+        self.start_button.configure(state="disabled")
+        self.status.config(text=f"{label} を起動しています...")
+        self.master.update_idletasks()
         try:
             new_pid = launch(profile)
         except LaunchError as error:
+            self.start_button.configure(state="normal")
+            self.status.config(text=f"{label} の起動に失敗しました。")
             # 子は標準出力の行き先が無いので、拾った内容をここで見せる。
             # トレースは長くなりがちなので末尾の要点だけに絞る。
             detail = str(error).strip().split("\n")
             tail = "\n".join(detail[-6:])
             tkmsg.showerror(
                 "起動できませんでした",
-                f"{profile or '既定'} を起動できませんでした。\n\n{tail}",
+                f"{label} を起動できませんでした。\n\n{tail}",
             )
             return
 
-        label = profile or "既定"
         self.status.config(text=f"{label} を起動しました (PID {new_pid})")
         # 起動したらランチャーは役目を終える
         self.master.after(400, self.master.destroy)

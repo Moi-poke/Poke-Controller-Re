@@ -18,9 +18,9 @@ from collections.abc import Callable, Iterator
 from typing import Any
 
 import pytest
-from Commands import CommandDialog as D
-from Commands.CommandDialog import PokeConDialogue
 from pokecon.domain.recovery import RecoveryAdvice
+from pokecon.ui import command_dialog as D
+from pokecon.ui.command_dialog import PokeConDialogue
 
 
 class _Cmd(D.DialogMixin):

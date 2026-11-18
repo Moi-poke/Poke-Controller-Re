@@ -102,6 +102,75 @@ class _FakeSettings:
         self.saved += 1
 
 
+class _FakeMouseCapture:
+    """Raw Inputの代わりに、開始/解除の往復だけを記録する。"""
+
+    instances: list[_FakeMouseCapture] = []
+
+    def __init__(
+        self,
+        *,
+        on_motion: Any,
+        on_state: Any,
+        on_log: Any = None,
+        hotkey: str = "",
+        reset_hotkey: str = "",
+        on_reset: Any = None,
+        roll_modifier: str = "none",
+    ) -> None:
+        self.on_motion = on_motion
+        self.on_state = on_state
+        self.on_log = on_log
+        self.hotkey = hotkey
+        self.reset_hotkey = reset_hotkey
+        self.on_reset = on_reset
+        self.roll_modifier = roll_modifier
+        self.started = False
+        self.stopped = False
+        self.owner_hwnd = 0
+        self.clip_rect: tuple[int, int, int, int] | None = None
+        self._enabled = False
+        _FakeMouseCapture.instances.append(self)
+
+    def start(
+        self,
+        *,
+        owner_hwnd: int = 0,
+        clip_rect: tuple[int, int, int, int] | None = None,
+    ) -> bool:
+        self.started = True
+        self.owner_hwnd = int(owner_hwnd)
+        self.clip_rect = clip_rect
+        return True
+
+    def enabled(self) -> bool:
+        return self._enabled
+
+    def set_enabled(self, enabled: bool, reason: str = "") -> None:
+        enabled = bool(enabled)
+        if enabled == self._enabled:
+            return
+        self._enabled = enabled
+        self.on_state(enabled, reason or ("start" if enabled else "stop"))
+
+    def set_roll_modifier(self, value: str) -> None:
+        self.roll_modifier = str(value)
+
+    def stop(self) -> None:
+        self.set_enabled(False, "stop")
+        self.stopped = True
+
+
+class _FakePad:
+    """仮想パッドのマウス掴み解放だけを記録する。"""
+
+    def __init__(self) -> None:
+        self.released = 0
+
+    def releaseAllHeld(self) -> None:
+        self.released += 1
+
+
 def _wait_until(pred: Any, root: Any = None, timeout: float = 3.0) -> bool:
     deadline = time.time() + timeout
     while time.time() < deadline:
@@ -120,6 +189,7 @@ def _make_panel(
     tk_root: tk.Tk,
     settings_data: dict[str, str] | None = None,
     transport: Any = None,
+    **panel_options: Any,
 ) -> tuple[Any, Any, Any, _FakeSettings, tk.Toplevel]:
     from pokecon.ui.ImuPanel import ImuPanel
 
@@ -137,6 +207,7 @@ def _make_panel(
         settings.read,
         settings.write,
         logged.append,
+        **panel_options,
     )
     panel.pack()
     root.update()
@@ -196,27 +267,6 @@ def test_imu_panel_closed_serial_logs_and_stays_stopped(tk_root: tk.Tk) -> None:
         assert "開いていません" in panel._logged[0]
         assert transport.running is False
         assert panel._streaming is False
-    finally:
-        panel.close()
-        root.destroy()
-
-
-def test_imu_panel_detail_expands_and_collapses(tk_root: tk.Tk) -> None:
-    panel, root, _transport, _settings, _root = _make_panel(tk_root)
-    try:
-        assert getattr(panel, "_gyro_view", None) is None
-        panel._detail_var.set(True)
-        panel._on_detail_toggled()
-        root.update()
-        view = getattr(panel, "_gyro_view", None)
-        assert view is not None
-        view.push_raw(0, 0, 4096, 100, 0, 0)
-        root.update()
-        panel._detail_var.set(False)
-        panel._on_detail_toggled()
-        root.update()
-        assert getattr(panel, "_gyro_view", None) is None
-        assert view._stop is True
     finally:
         panel.close()
         root.destroy()
@@ -324,10 +374,10 @@ def test_imu_panel_manual_out_of_range_is_normalized_on_start(
         root.destroy()
 
 
-def test_imu_panel_manual_and_detail_rows_stay_below_controls(
+def test_imu_panel_manual_row_stays_below_controls(
     tk_root: tk.Tk,
 ) -> None:
-    """手動入力と詳細表示が反転・感度の行へ重ならない。"""
+    """手動入力が反転・感度の行へ重ならない。"""
     panel, root, _transport, _settings, _root = _make_panel(
         tk_root, {"source": "manual"}
     )
@@ -337,42 +387,8 @@ def test_imu_panel_manual_and_detail_rows_stay_below_controls(
         root.update()
         scale = panel._scale_cb
         manual = panel._manual_frame
-        detail = panel._detail_cb
         assert manual.winfo_rooty() >= scale.winfo_rooty() + scale.winfo_height()
-
-        panel._detail_var.set(True)
-        panel._on_detail_toggled()
-        root.update()
-        view = panel._gyro_view
-        assert view is not None
         assert panel._invert_cb.winfo_ismapped()
-        assert view.winfo_rooty() >= manual.winfo_rooty() + manual.winfo_height()
-        assert view.winfo_rooty() >= detail.winfo_rooty() + detail.winfo_height()
-    finally:
-        panel.close()
-        root.destroy()
-
-
-def test_imu_panel_debug_off_collapses_detail(tk_root: tk.Tk) -> None:
-    """デバッグOFFで詳細チェックだけでなく波形も畳む。"""
-    panel, root, _transport, _settings, _root = _make_panel(tk_root)
-    try:
-        panel._debug_var.set(True)
-        panel._on_debug_toggled()
-        panel._detail_var.set(True)
-        panel._on_detail_toggled()
-        root.update()
-        view = panel._gyro_view
-        assert view is not None
-
-        panel._debug_var.set(False)
-        panel._on_debug_toggled()
-        root.update()
-
-        assert panel._detail_var.get() is False
-        assert panel._gyro_view is None
-        assert panel._detail_cb.winfo_manager() == ""
-        assert view._stop is True
     finally:
         panel.close()
         root.destroy()
@@ -910,6 +926,369 @@ def test_imu_panel_keeps_playback_file_when_record_path_matches(
         player = MotionPlayer(path)
         assert player.load() is True
         assert list(player) == samples
+    finally:
+        panel.close()
+        root.destroy()
+
+
+def test_imu_panel_mouse_source_wires_capture_and_settings(
+    tk_root: tk.Tk, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """マウス源は設定を保存し、キャプチャの移動を送出源へ渡す。"""
+    _FakeMouseCapture.instances.clear()
+    monkeypatch.setattr(
+        "pokecon.domain.mouse_capture.mouse_capture_available", lambda: True
+    )
+    monkeypatch.setattr(
+        "pokecon.domain.mouse_capture.RawMouseCapture", _FakeMouseCapture
+    )
+    data = {
+        "source": "mouse",
+        "mouse_sensitivity": "0.02",
+        "mouse_ratio_y": "1.5",
+        "mouse_smoothing": "0.8",
+        "mouse_invert_x": "1",
+        "mouse_invert_y": "0",
+        "mouse_roll_modifier": "right",
+        "mouse_hotkey": "ctrl+alt+n",
+    }
+    panel, root, transport, settings, _root = _make_panel(tk_root, data)
+    try:
+        assert panel._source_var.get() == "マウス"
+        panel._settings.set_open(True)
+        root.update()
+        assert panel._mouse_frame.winfo_manager() == "grid"
+        assert panel._manual_frame.winfo_manager() == ""
+        assert panel._pad_frame.winfo_manager() == ""
+        assert panel._mouse_sens_var.get() == "0.02"
+        assert panel._mouse_ratio_var.get() == "1.5"
+        assert panel._mouse_smooth_var.get() == "0.8"
+        assert panel._mouse_invert_x_var.get() is True
+        assert panel._mouse_invert_y_var.get() is False
+        assert panel._mouse_gravity_var.get() is True
+        assert panel._mouse_roll_var.get() == "右ボタン"
+        assert panel._mouse_hotkey_var.get() == "ctrl+alt+n"
+
+        panel._mouse_sens_var.set("0.03")
+        panel._mouse_ratio_var.set("2.0")
+        panel._mouse_invert_x_var.set(False)
+        panel._mouse_invert_y_var.set(True)
+        panel._mouse_hotkey_var.set("ctrl+alt+q")
+        panel._on_toggle()
+        assert _wait_until(lambda: transport.running, root), "start not called"
+        assert _wait_until(lambda: panel._streaming, root)
+
+        assert settings.data["source"] == "mouse"
+        assert settings.data["mouse_sensitivity"] == "0.03"
+        assert settings.data["mouse_ratio_y"] == "2"
+        assert settings.data["mouse_invert_x"] == "0"
+        assert settings.data["mouse_invert_y"] == "1"
+        assert settings.data["mouse_hotkey"] == "ctrl+alt+q"
+        assert transport.interval_s == pytest.approx(0.005)
+
+        assert len(_FakeMouseCapture.instances) == 1
+        capture = _FakeMouseCapture.instances[0]
+        assert capture.started is True
+        assert capture.stopped is False
+        assert capture.enabled() is True
+        assert capture.owner_hwnd > 0
+
+        # 送出中の変更は保存され、次のサンプルから効く。
+        panel._mouse_sens_var.set("0.04")
+        panel._mouse_smooth_var.set("0.5")
+        panel._mouse_gravity_var.set(False)
+        panel._on_mouse_setting_changed()
+        assert settings.data["mouse_sensitivity"] == "0.04"
+        assert settings.data["mouse_smoothing"] == "0.5"
+        assert settings.data["mouse_gravity_follow"] == "0"
+        assert panel._mouse_source.config.sensitivity == pytest.approx(0.04)
+        assert panel._mouse_source.config.smoothing == pytest.approx(0.5)
+        assert panel._mouse_source.config.gravity_follow is False
+
+        # キャプチャの移動が送出ループのサンプルへ届く。
+        capture.on_motion(1000, 0)
+        samples = [transport.source() for _ in range(8)]
+        assert any(sample[5] != 0 for sample in samples)
+
+        # 統計行に実効入力レートが出る。
+        assert _wait_until(lambda: panel._mouse_capture_on, root)
+        panel._refresh_stats()
+        time.sleep(0.02)
+        capture.on_motion(1, 0)
+        panel._refresh_stats()
+        assert "入力=" in panel._stats_var.get()
+        assert "Esc停止" in panel._stats_var.get()
+
+        # ロール修飾は実行中のキャプチャにも反映する。
+        panel._mouse_roll_var.set("Shift")
+        panel._on_mouse_roll_changed()
+        assert settings.data["mouse_roll_modifier"] == "shift"
+        assert capture.roll_modifier == "shift"
+        assert panel._mouse_source.config.roll_modifier == "shift"
+
+        # 姿勢リセット（ボタン/ホットキーと同じ入口）。
+        panel._on_mouse_reset()
+        assert any("リセット" in line for line in panel._logged)
+
+        panel._on_toggle()
+        assert _wait_until(lambda: not panel._streaming, root)
+        assert _wait_until(lambda: capture.stopped, root)
+        assert panel._mouse_capture is None
+        assert panel._saved_cursors == []
+    finally:
+        panel.close()
+        root.destroy()
+
+
+def test_imu_panel_mouse_preserves_total_angle(
+    tk_root: tk.Tk, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """90°/sを4秒ぶん送ると、送出したrawの積分が360°になる。"""
+    _FakeMouseCapture.instances.clear()
+    monkeypatch.setattr(
+        "pokecon.domain.mouse_capture.mouse_capture_available", lambda: True
+    )
+    monkeypatch.setattr(
+        "pokecon.domain.mouse_capture.RawMouseCapture", _FakeMouseCapture
+    )
+    data = {
+        "source": "mouse",
+        "mouse_sensitivity": "0.05",
+        "mouse_yaw_sign": "1",
+        "mouse_backlog_deg": "30.0",
+        "mouse_smoothing": "1.0",
+    }
+    panel, root, transport, _settings, _root = _make_panel(tk_root, data)
+    try:
+        panel._on_toggle()
+        assert _wait_until(lambda: panel._streaming, root)
+        capture = _FakeMouseCapture.instances[0]
+        source = transport.source
+        assert source is not None
+        step = 0.06103 * 0.005
+        total = 0.0
+        for _ in range(800):
+            capture.on_motion(9, 0)  # 0.45°/tick = 90°/s
+            sample = source()
+            total += sample[5] * step
+        assert total == pytest.approx(360.0, abs=0.5)
+    finally:
+        panel.close()
+        root.destroy()
+
+
+def test_imu_panel_mouse_calibration_sets_sensitivity(
+    tk_root: tk.Tk, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """DPIと360°距離から感度を逆算し、画面と設定へ反映する。"""
+    _FakeMouseCapture.instances.clear()
+    monkeypatch.setattr(
+        "pokecon.domain.mouse_capture.mouse_capture_available", lambda: True
+    )
+    monkeypatch.setattr(
+        "pokecon.domain.mouse_capture.RawMouseCapture", _FakeMouseCapture
+    )
+    data = {
+        "source": "mouse",
+        "mouse_sensitivity": "0.05",
+        "mouse_dpi": "1600",
+        "mouse_cm_per_360": "20",
+    }
+    panel, root, _transport, settings, _root = _make_panel(tk_root, data)
+    try:
+        panel._settings.set_open(True)
+        root.update()
+        assert panel._mouse_dpi_var.get() == "1600"
+        assert panel._mouse_target_var.get() == "20"
+        assert "11.4cm/360" in panel._mouse_cal_label_var.get()
+
+        panel._on_mouse_calculate()
+        sensitivity = float(panel._mouse_sens_var.get())
+        assert sensitivity == pytest.approx(0.028575, rel=1e-3)
+        assert float(settings.data["mouse_sensitivity"]) == pytest.approx(
+            sensitivity, rel=1e-6
+        )
+        assert settings.data["mouse_dpi"] == "1600"
+        assert float(settings.data["mouse_cm_per_360"]) == pytest.approx(20.0)
+        assert "20.0cm/360" in panel._mouse_cal_label_var.get()
+    finally:
+        panel.close()
+        root.destroy()
+
+
+def test_imu_panel_capture_blocks_gui_mouse(tk_root: tk.Tk) -> None:
+    """キャプチャ中はTkのマウスイベントがウィジェットへ届かない。"""
+    panel, root, _transport, _settings, _root = _make_panel(tk_root)
+    try:
+        root.deiconify()
+        probe = tk.Frame(root)
+        probe.pack()
+        hits: list[str] = []
+        probe.bind("<ButtonPress-1>", lambda _e: hits.append("down"))
+        probe.bind("<ButtonRelease-1>", lambda _e: hits.append("up"))
+        root.update()
+
+        panel._set_mouse_cursor_hidden(True)
+        probe.event_generate("<ButtonPress-1>", x=1, y=1)
+        probe.event_generate("<ButtonRelease-1>", x=1, y=1)
+        assert hits == []
+        assert probe.bindtags()[0] == "PokeConMouseCaptureBlock"
+
+        panel._set_mouse_cursor_hidden(False)
+        probe.event_generate("<ButtonPress-1>", x=1, y=1)
+        probe.event_generate("<ButtonRelease-1>", x=1, y=1)
+        assert hits == ["down", "up"]
+    finally:
+        panel.close()
+        root.destroy()
+
+
+def test_imu_panel_capture_releases_pad_and_escape_stops(
+    tk_root: tk.Tk, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """開始/停止でパッドの掴みを離し、Escで停止ボタンと同じ停止をする。"""
+    _FakeMouseCapture.instances.clear()
+    monkeypatch.setattr(
+        "pokecon.domain.mouse_capture.mouse_capture_available", lambda: True
+    )
+    monkeypatch.setattr(
+        "pokecon.domain.mouse_capture.RawMouseCapture", _FakeMouseCapture
+    )
+    pad = _FakePad()
+    panel, root, transport, _settings, _root = _make_panel(
+        tk_root,
+        {"source": "mouse"},
+        pad_provider=lambda: pad,
+    )
+    try:
+        panel._on_toggle()
+        assert _wait_until(lambda: panel._streaming, root)
+        assert pad.released >= 1
+        assert _FakeMouseCapture.instances[0].enabled() is True
+
+        root.deiconify()
+        root.focus_force()
+        root.update()
+        root.event_generate("<Escape>")
+        assert _wait_until(lambda: not panel._streaming, root)
+        assert transport.stop_owner == "panel"
+        assert pad.released >= 2
+    finally:
+        panel.close()
+        root.destroy()
+
+
+def test_escape_stops_even_when_widget_consumes_it(
+    tk_root: tk.Tk, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """キャプチャ中は入力欄のEscより先に、ジャイロ停止を優先する。"""
+    _FakeMouseCapture.instances.clear()
+    monkeypatch.setattr(
+        "pokecon.domain.mouse_capture.mouse_capture_available", lambda: True
+    )
+    monkeypatch.setattr(
+        "pokecon.domain.mouse_capture.RawMouseCapture", _FakeMouseCapture
+    )
+    panel, root, transport, _settings, _root = _make_panel(tk_root, {"source": "mouse"})
+    try:
+        consumed: list[str] = []
+        entry = tk.Entry(root)
+        entry.pack()
+
+        def consume_escape(_event: Any) -> str:
+            consumed.append("entry")
+            return "break"
+
+        entry.bind("<Escape>", consume_escape)
+        root.deiconify()
+        root.update()
+
+        panel._on_toggle()
+        assert _wait_until(lambda: panel._streaming, root)
+        assert _wait_until(lambda: panel._mouse_capture_on, root)
+        entry.focus_set()
+        root.update()
+        entry.event_generate("<Escape>")
+        assert _wait_until(lambda: not panel._streaming, root)
+        assert transport.running is False
+        assert consumed == []
+    finally:
+        panel.close()
+        root.destroy()
+
+
+def test_mouse_settings_fit_narrow_window_and_record_path_follows_checkbox(
+    tk_root: tk.Tk, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """狭い別窓でも感度の計算結果が切れず、記録先は選んだときだけ見える。"""
+    monkeypatch.setattr(
+        "pokecon.domain.mouse_capture.mouse_capture_available", lambda: True
+    )
+    panel, root, _transport, _settings, _root = _make_panel(
+        tk_root, {"source": "mouse", "mouse_sensitivity": "0.028575"}
+    )
+    try:
+        root.geometry("360x650")
+        root.deiconify()
+        panel._settings.set_open(True)
+        panel._mouse_cal_section.set_open(True)
+        panel._mouse_advanced.set_open(True)
+        root.update()
+        assert panel._mouse_frame.winfo_ismapped()
+        assert panel._record_path_frame.winfo_manager() == ""
+        right_edge = root.winfo_rootx() + root.winfo_width()
+        for widget in (
+            panel._mouse_sens_spin,
+            panel._mouse_ratio_spin,
+            panel._mouse_dpi_spin,
+            panel._mouse_target_spin,
+            panel._mouse_calc_button,
+            panel._mouse_smooth_spin,
+            panel._mouse_gravity_cb,
+        ):
+            assert widget.winfo_ismapped()
+            assert widget.winfo_rootx() + widget.winfo_width() <= right_edge
+
+        panel._record_cb.invoke()
+        root.update()
+        assert panel._record_path_frame.winfo_ismapped()
+        assert (
+            panel._record_browse.winfo_rootx() + panel._record_browse.winfo_width()
+            <= right_edge
+        )
+        panel._record_cb.invoke()
+        root.update()
+        assert not panel._record_path_frame.winfo_ismapped()
+    finally:
+        panel.close()
+        root.destroy()
+
+
+def test_manual_settings_fit_narrow_window(tk_root: tk.Tk) -> None:
+    """狭い別窓や右列タブ（360px幅）でも手動入力の6軸すべての入力欄が見切れず収まること。"""
+    panel, root, _transport, _settings, _root = _make_panel(
+        tk_root, {"source": "manual"}
+    )
+    try:
+        root.geometry("360x650")
+        root.deiconify()
+        panel._settings.set_open(True)
+        if not panel._debug_var.get():
+            panel._debug_cb.invoke()
+        panel._source_var.set("手動入力")
+        panel._source_cb.event_generate("<<ComboboxSelected>>")
+        root.update()
+        assert panel._manual_frame.winfo_ismapped()
+        right_edge = root.winfo_rootx() + root.winfo_width()
+        spins = [
+            child
+            for child in panel._manual_frame.body.winfo_children()
+            if child.winfo_class() == "TSpinbox"
+        ]
+        assert len(spins) == 6
+        for spin in spins:
+            assert spin.winfo_ismapped()
+            assert spin.winfo_rootx() + spin.winfo_width() <= right_edge
     finally:
         panel.close()
         root.destroy()

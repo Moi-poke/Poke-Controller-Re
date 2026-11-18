@@ -10,6 +10,7 @@ import math
 import threading
 import time
 
+from fakes import FakeLiveTransport
 from pokecon.domain import InputLog as InputLog, transport as Transport
 from pokecon.domain.serial import sender as Sender
 
@@ -294,7 +295,7 @@ def test_set_transport_double_switch_no_leak() -> None:
     # 本数で数える。名前の集合だと先行テストの漏れを1本と数えてしまい、
     # 実行順によって誤検知する（2本生存時に before={name} で len=1）。
     before = sum(1 for th in threading.enumerate() if th.name == "PicoLiveWorker")
-    pico = Transport.PicoUartTransport()
+    pico = FakeLiveTransport()
     sender = Sender.Sender(is_show_serial=False, transport=pico)
     fake = _FastSer()
     pico.ser = fake  # type: ignore[assignment]
@@ -350,7 +351,7 @@ def test_start_rx_pump_concurrent_single_thread() -> None:
 
 def test_start_live_worker_concurrent_single_thread() -> None:
     """課題3: live worker の二重起動は1本だけ残る。"""
-    pico = Transport.PicoUartTransport()
+    pico = FakeLiveTransport()
     sender = Sender.Sender(is_show_serial=False, transport=pico)
     sender.transport.ser = _FastSer()  # type: ignore[attr-defined]
     assert sender.stopLiveWorker(1.0)
@@ -522,7 +523,7 @@ def test_wait_rx_nan_returns_immediately() -> None:
 
 def test_live_stats_guarded_by_lock() -> None:
     """課題8: live 統計の更新は _live_lock の内側で行う。"""
-    pico = Transport.PicoUartTransport()
+    pico = FakeLiveTransport()
     sender = Sender.Sender(is_show_serial=False, transport=pico)
     sender.transport.ser = _FastSer()  # type: ignore[attr-defined]
     try:

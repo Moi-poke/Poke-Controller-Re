@@ -42,10 +42,10 @@ def _make_scripted_ser(feed_delay: float = 0.001):
 
 
 def test_rumble_frame_updates_last_rumble_via_parser() -> None:
-    from pokecon.domain.transport import create_transport
+    from pokecon.domain.transport import BconTransport
     from pokecon.domain.transport.bcon_protocol import T_RUMBLE, BconParser, frame_build
 
-    made = create_transport("bcon")
+    made = BconTransport()
     assert made.last_rumble() == b""
     raw = frame_build(T_RUMBLE, bytes([0x0A, 0x05]), 0x31)
     frames = BconParser().feed(raw)
@@ -55,10 +55,10 @@ def test_rumble_frame_updates_last_rumble_via_parser() -> None:
 
 
 def test_rumble_copy_does_not_alias_and_malformed_never_raises() -> None:
-    from pokecon.domain.transport import create_transport
+    from pokecon.domain.transport import BconTransport
     from pokecon.domain.transport.bcon_protocol import T_RUMBLE, BconParser, frame_build
 
-    made = create_transport("bcon")
+    made = BconTransport()
     raw = frame_build(T_RUMBLE, bytes([0x01, 0x02]), 0x32)
     made._dispatch_rx(BconParser().feed(raw)[0])
     got = made.last_rumble()
@@ -82,7 +82,7 @@ def test_rumble_decode_helper_returns_int_pair() -> None:
 
 
 def test_rumble_keeps_player_info_and_status_intact() -> None:
-    from pokecon.domain.transport import create_transport
+    from pokecon.domain.transport.bcon import BconTransport
     from pokecon.domain.transport.bcon_protocol import (
         T_PLAYER_INFO,
         T_RUMBLE,
@@ -91,7 +91,7 @@ def test_rumble_keeps_player_info_and_status_intact() -> None:
         frame_build,
     )
 
-    made = create_transport("bcon")
+    made = BconTransport()
     parser = BconParser()
     made._dispatch_rx(
         parser.feed(frame_build(T_PLAYER_INFO, bytes([0x07, 0x08]), 0x40))[0]

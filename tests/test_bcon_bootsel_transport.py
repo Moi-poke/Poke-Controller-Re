@@ -44,7 +44,7 @@ def _make_scripted_ser(feed_delay: float = 0.001):
 
 
 def test_bootsel_ack_returns_true():
-    from pokecon.domain.transport import create_transport
+    from pokecon.domain.transport import BconTransport
     from pokecon.domain.transport.bcon_protocol import (
         BOOTSEL_MAGIC,
         T_BOOTSEL,
@@ -52,7 +52,7 @@ def test_bootsel_ack_returns_true():
         frame_build,
     )
 
-    made = create_transport("bcon")
+    made = BconTransport()
     ser = _make_scripted_ser()
     made.ser = ser
     made.start_rx_pump()
@@ -87,9 +87,9 @@ def test_bootsel_ack_returns_true():
 
 
 def test_bootsel_no_ack_returns_false_without_raise():
-    from pokecon.domain.transport import create_transport
+    from pokecon.domain.transport import BconTransport
 
-    made = create_transport("bcon")
+    made = BconTransport()
     ser = _make_scripted_ser()
     made.ser = ser
     made.start_rx_pump()

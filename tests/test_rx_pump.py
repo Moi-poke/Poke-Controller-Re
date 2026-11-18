@@ -110,42 +110,22 @@ def test_base_transport_has_no_rx() -> None:
     unsub()
 
 
-def test_drain_keeps_pump_buffer() -> None:
-    """ポンプ稼働中の drain は受信バッファを捨てない。
-
-    ポンプが読む前の行まで捨てると、応答待ちとモニタの両方から消える。
-    """
-    from pokecon.domain import WakeLink
-
+def test_wait_rx_receives_reply_alongside_subscriber() -> None:
+    """送信後の応答はポンプ経由で wait_rx と購読者の双方へ届く。"""
     t, ser = _pump_transport()
     try:
-        WakeLink.drain(t)
-        assert ser.resets == 0
-    finally:
-        t.stop_rx_pump()
-
-
-def test_expect_resolves_via_pump() -> None:
-    """送信への応答はポンプ経由で expect に届く (購読者も同時に受け取る)。"""
-    from pokecon.domain import WakeLink
-
-    t, ser = _pump_transport()
-    try:
-        ser.reply_on_write.append(b"color 313131 0f0f0f 0ab9e6 ff3c28\r\n")
         got: list[str] = []
+        out: dict[str, str | None] = {}
         unsub = t.subscribe_rx(got.append)
         try:
-            assert (
-                WakeLink.expect(
-                    t,
-                    "O 313131 0f0f0f 0ab9e6 ff3c28",
-                    ("color ",),
-                    timeout=2.0,
-                )
-                == "color 313131 0f0f0f 0ab9e6 ff3c28"
-            )
+            waiter = _wait_in_thread(t, out)
+            time.sleep(0.05)
+            ser.feed(b"PONG\r\n")
+            waiter.join(4.0)
+            assert out.get("line") == "PONG"
         finally:
             unsub()
-        assert "color 313131 0f0f0f 0ab9e6 ff3c28" in got
+        assert "PONG" in got
+        assert ser.resets == 0
     finally:
         t.stop_rx_pump()

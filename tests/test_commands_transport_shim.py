@@ -13,3 +13,4 @@ def test_live_worker_capabilities_reexported() -> None:
 
     assert hasattr(cmd_t, "LIVE_WORKER_CAPABILITIES")
     assert cmd_t.LIVE_WORKER_CAPABILITIES is core_t.LIVE_WORKER_CAPABILITIES
+    assert cmd_t.PicoUartTransport is core_t.TextSerialTransport

@@ -931,6 +931,7 @@ def test_measurement_overshoot_limit_uses_two_periods_or_fifty_ms(
 def test_source_pins_include_production_and_evidence_files() -> None:
     assert support.SOURCE_PIN_PATHS == (
         "SerialController/pokecon/ui/preview_clock.py",
+        "SerialController/pokecon/domain/preview/win32_clock.py",
         "SerialController/pokecon/ui/GuiAssets.py",
         "SerialController/pokecon/app/Window.py",
         "SerialController/pokecon/domain/Camera.py",

@@ -8,7 +8,7 @@ legacy の同期送信は test_transport.py で見る。ここでは worker が
 import threading
 import time
 
-from pokecon.domain import transport as Transport
+from fakes import FakeLiveTransport
 from pokecon.domain.Keys import Button
 from pokecon.domain.serial import sender as Sender
 
@@ -29,7 +29,7 @@ class FakeSerial:
 
 
 def make_live_sender() -> tuple[Sender.Sender, FakeSerial]:
-    transport = Transport.PicoUartTransport()
+    transport = FakeLiveTransport()
     sender = Sender.Sender(is_show_serial=False, transport=transport)
     fake = FakeSerial()
     transport.ser = fake  # type: ignore[assignment]

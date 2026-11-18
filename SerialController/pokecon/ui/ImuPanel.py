@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """ImuPanel.py - ジャイロ送出の操作面（BconSetupへ組み込む部品）。
 
-BconSetupのcol_infoへLabelFrameとして組み込む。入力源の選択・波形の
+BconSetupのcol_infoへ部品として組み込む。入力源の選択・波形の
 設定・送出の開始/停止・統計の表示を担う。線の操作は作業スレッドで行い、
 画面の更新だけafter()で戻す（BconSetupと同一規律）。
 
@@ -14,6 +14,7 @@ BconSetupのcol_infoへLabelFrameとして組み込む。入力源の選択・�
 
 from __future__ import annotations
 
+import math
 import os
 import queue
 import threading
@@ -24,66 +25,25 @@ from tkinter import font as tkfont, ttk
 from typing import Any
 
 from pokecon.domain.controller_preview import PreviewControls, controls_from_pad
-from pokecon.ui.collapsible import CollapsibleSection
+from pokecon.runtime import imu_service
+from pokecon.runtime.imu_service import (
+    CURRENT_INVERT_LABEL as CURRENT_INVERT_LABEL,
+    DEBUG_SOURCES as DEBUG_SOURCES,
+    INVERT_LABELS as INVERT_LABELS,
+    INVERT_SIGNS as INVERT_SIGNS,
+    ROLL_LABELS as ROLL_LABELS,
+    SCALE_PRESETS as SCALE_PRESETS,
+    SOURCE_LABELS as SOURCE_LABELS,
+    LiveTrim as _LiveTrim,
+)
+from pokecon.ui.collapsible import CollapsibleSection, SectionFrame
 from pokecon.ui.imu_preview import MotionPreview
+from pokecon.ui.spacing import GAP_GROUP, GAP_ITEM, px
 
-# 通常運用では使わない入力源。デバッグ時だけ選べる。
-DEBUG_SOURCES = frozenset({"sine", "step", "rest", "manual"})
-
-SOURCE_LABELS = (
-    ("sensor", "パッドAPI"),
-    ("hid", "HID直結"),
-    ("file", "記録の再生"),
-    ("sine", "SINE波形"),
-    ("step", "STEP波形"),
-    ("rest", "静止値"),
-    ("manual", "手動入力"),
-)
-
-# PC側で重ねる反転の組み合わせ（FW側の変換を打ち消す実測用）。
-# 値は (accel_signs, gyro_signs)。符号は1か-1のみ。
-INVERT_LABELS = (
-    ("none", "なし"),
-    ("accel", "加速度"),
-    ("gyro", "ジャイロ"),
-    ("both", "両方"),
-)
-INVERT_SIGNS: dict[str, tuple[tuple[int, int, int], tuple[int, int, int]]] = {
-    "none": ((1, 1, 1), (1, 1, 1)),
-    "accel": ((1, -1, -1), (1, 1, 1)),
-    "gyro": ((1, 1, 1), (1, -1, -1)),
-    "both": ((1, -1, -1), (1, -1, -1)),
-}
-# 設定ファイルの符号がプリセットのどれとも一致しないときの表示。
-# この表示のまま送出を開始しても、符号を書き換えない。
-CURRENT_INVERT_LABEL = "設定値のまま"
-
-# ジャイロ出力倍率のプリセット（実機比較用）。
-SCALE_PRESETS = ("1.0", "0.5", "0.25", "0.125", "0.0625")
-
-# rad/s → Switchジャイロraw。1rad/s = 57.2958dps / 0.06103dps/LSB。
-_GYRO_RAD_TO_RAW = 57.29577951308232 / 0.06103
-
-# 送出中に毎サンプル読む加工値。
-# (倍率, 不感帯raw, 加速度符号, ジャイロ符号, HIDバイアスraw, HID軸別倍率)
-# HIDバイアス・倍率はHID直結のときだけ入り、SDL路ではNone（二重適用防止）。
-_LiveTrim = tuple[
-    float,
-    float,
-    tuple[int, int, int],
-    tuple[int, int, int],
-    tuple[int, int, int] | None,
-    tuple[float, float, float] | None,
-]
-
-
-def _gyro_bias_to_raw(bias: tuple[float, float, float]) -> tuple[int, int, int]:
-    """rad/s のバイアスをSwitchジャイロrawへ換算する。"""
-    return (
-        int(round(float(bias[0]) * _GYRO_RAD_TO_RAW)),
-        int(round(float(bias[1]) * _GYRO_RAD_TO_RAW)),
-        int(round(float(bias[2]) * _GYRO_RAD_TO_RAW)),
-    )
+# マウスキャプチャ中だけ各ウィジェットの bindtags 先頭へ差し込むタグ。
+# ウィジェット自身のマウス処理（仮想パッドのスティック掴み等）より先に
+# 走らせ、キャプチャ中のクリックをTkへ届かせない。
+_CAPTURE_BLOCK_TAG = "PokeConMouseCaptureBlock"
 
 
 class ImuPanel:
@@ -96,12 +56,21 @@ class ImuPanel:
         settings_provider: Callable[[], dict[str, str]],
         settings_writer: Callable[[dict[str, str]], None],
         log: Callable[[str], None],
+        *,
+        pad_provider: Callable[[], Any] | None = None,
+        preview_provider: Callable[[], Any] | None = None,
     ) -> None:
-        """transport_providerは送り先、settingsはIMU節の読み書き、logは行出し。"""
+        """transport_providerは送り先、settingsはIMU節の読み書き、logは行出し。
+
+        pad_providerは仮想パッド、preview_providerはカメラ面のCaptureArea。
+        どちらもキャプチャ開始/停止時にマウス掴みを解放するために引く。
+        """
         self._transport_provider = transport_provider
         self._settings_provider = settings_provider
         self._settings_writer = settings_writer
         self._log = log
+        self._pad_provider = pad_provider
+        self._preview_provider = preview_provider
         self._queue: queue.Queue = queue.Queue()
         self._stop = False
         self._streaming = False
@@ -109,6 +78,8 @@ class ImuPanel:
         # _do_start と _do_stop が並走しないようにする。
         self._starting = False
         self._stopping = False
+        # 開始中にEscが押されたら、開始完了直後に止める。
+        self._stop_after_start = False
         # 送出中に毎サンプル読む加工値（倍率, 不感帯raw, 加速度符号,
         # ジャイロ符号, HIDバイアスraw, HID軸別倍率）。断面を不変タプルで
         # 持つので、GUIスレッドからの差し替えは次のサンプルから効く。
@@ -125,6 +96,21 @@ class ImuPanel:
         self._preview_control_reader: Any = None
         self._playing = False
         self._source_error = ""
+        # マウス入力（Raw Input）。キャプチャは送出中だけ動かす。
+        self._stream_source = ""
+        self._mouse_source: Any = None
+        self._mouse_capture: Any = None
+        self._mouse_interval_s = 0.0
+        self._mouse_capture_on = False
+        # 入力イベントレート表示用（前回の累計と時刻）。
+        self._mouse_last_events: float | None = None
+        self._mouse_last_events_t: float | None = None
+        # 開始時にGUIスレッドで読む。非表示窓の窓関数からTkを触らない。
+        self._owner_hwnd = 0
+        self._clip_rect: tuple[int, int, int, int] | None = None
+        self._saved_cursors: list[tuple[Any, str]] = []
+        self._saved_bindtags: list[tuple[Any, tuple[str, ...]]] = []
+        self._esc_bindings: list[tuple[Any, str]] = []
         # 開始時にGUIスレッドで読み取った値。作業スレッドからTk変数を
         # 読むと「main thread is not in main loop」で落ちる。
         self._start_play_path = ""
@@ -143,6 +129,40 @@ class ImuPanel:
         frame = ttk.Frame(master)
         frame.columnconfigure(1, weight=1)
         self.frame = frame
+        # キャプチャ中は全ウィジェットの先頭でマウスイベントを止める。
+        # Escはメイン窓と（別窓表示中の）この窓の両方で受ける。ゲームへ
+        # 出さないため、グローバルホットキーにはしない。
+        try:
+            toplevel = frame.winfo_toplevel()
+            for sequence in (
+                "<ButtonPress>",
+                "<ButtonRelease>",
+                "<MouseWheel>",
+                "<B1-Motion>",
+                "<B3-Motion>",
+                # パッドの _hover が cursor を fleur/hand2 へ変えて
+                # 非表示カーソルが復活するのを防ぐ。
+                "<Motion>",
+                "<Enter>",
+                "<Leave>",
+            ):
+                toplevel.bind_class(
+                    _CAPTURE_BLOCK_TAG, sequence, self._block_mouse_event
+                )
+            # キャプチャ中は入力欄などがEscを消費しても、必ず停止を優先する。
+            # このタグはキャプチャ中だけ bindtags の先頭に入る。
+            toplevel.bind_class(_CAPTURE_BLOCK_TAG, "<Escape>", self._on_escape)
+            targets = [toplevel]
+            root_getter = getattr(frame, "_root", None)
+            root = root_getter() if callable(root_getter) else None
+            if root is not None and str(root) != str(toplevel):
+                targets.append(root)
+            for target in targets:
+                funcid = target.bind("<Escape>", self._on_escape, add="+")
+                if funcid:
+                    self._esc_bindings.append((target, funcid))
+        except Exception:
+            self._esc_bindings = []
 
         # 見出しと状態と開始/停止を 1 行にまとめる。枠線は使わない。
         heading = ttk.Label(frame, text="ジャイロ")
@@ -152,38 +172,40 @@ class ImuPanel:
             heading.configure(font=bold)
         except Exception:
             pass
-        heading.grid(row=0, column=0, sticky=tk.W, padx=(0, 6))
+        heading.grid(row=0, column=0, sticky=tk.W, padx=(0, px(frame, GAP_GROUP)))
         self._stats_var = tk.StringVar(value="停止中")
         self._stats_label = ttk.Label(
             frame, textvariable=self._stats_var, wraplength=180, justify=tk.LEFT
         )
-        self._stats_label.grid(row=0, column=1, sticky=tk.W, padx=2)
+        self._stats_label.grid(row=0, column=1, sticky=tk.W, padx=4)
         controls = ttk.Frame(frame)
         controls.grid(row=0, column=2, sticky=tk.E)
         ttk.Button(controls, text="3Dプレビュー", command=self._on_motion_preview).pack(
-            side=tk.LEFT, padx=(0, 4)
+            side=tk.LEFT, padx=(0, px(frame, GAP_ITEM))
         )
         self._btn_toggle = ttk.Button(controls, text="開始", command=self._on_toggle)
         self._btn_toggle.pack(side=tk.LEFT)
 
         self._settings = CollapsibleSection(frame, "ジャイロ設定")
-        self._settings.grid(row=1, column=0, columnspan=3, sticky=tk.EW, pady=(4, 0))
+        self._settings.grid(
+            row=1, column=0, columnspan=3, sticky=tk.EW, pady=(px(frame, GAP_ITEM), 0)
+        )
         body = self._settings.body
         self._body = body
         body.columnconfigure(1, weight=1)
 
         ttk.Label(body, text="入力源").grid(
-            row=0, column=0, sticky=tk.W, padx=2, pady=2
+            row=0, column=0, sticky=tk.W, padx=4, pady=4
         )
         self._source_var = tk.StringVar(value="HID直結")
         self._source_cb = ttk.Combobox(
             body,
-            width=10,
+            width=14,
             state="readonly",
             textvariable=self._source_var,
             values=[label for _, label in SOURCE_LABELS],
         )
-        self._source_cb.grid(row=0, column=1, sticky=tk.EW, padx=2, pady=2)
+        self._source_cb.grid(row=0, column=1, sticky=tk.W, padx=4, pady=4)
 
         # パッド番号は SDL センサー入力のときだけ意味がある。行ごと
         # 出し分け、ラベルで説明しない（レイアウトで示す）。
@@ -234,7 +256,7 @@ class ImuPanel:
         )
         self._invert_cb.grid(row=3, column=1, sticky=tk.EW, padx=2, pady=2)
         self._invert_cb.bind("<<ComboboxSelected>>", self._on_invert_changed, add="+")
-        self._scale_label = ttk.Label(body, text="感度")
+        self._scale_label = ttk.Label(body, text="送出倍率")
         self._scale_label.grid(row=4, column=0, sticky=tk.W, padx=2, pady=2)
         self._scale_var = tk.StringVar(value="1.0")
         self._scale_cb = ttk.Combobox(
@@ -253,31 +275,11 @@ class ImuPanel:
             variable=self._debug_var,
             command=self._on_debug_toggled,
         )
-        self._debug_cb.grid(row=2, column=2, sticky=tk.EW, padx=2, pady=2)
-        self._detail_var = tk.BooleanVar(value=False)
-        self._detail_cb = ttk.Checkbutton(
-            body,
-            text="詳細表示",
-            variable=self._detail_var,
-            command=self._on_detail_toggled,
-        )
-        self._detail_cb.grid(row=7, column=0, sticky=tk.W, padx=2, pady=2)
-        # 記録: 送出する値をそのまま .pgyro へ保存する。記録の有無は開始時に
-        # 読み、送出中の切替は次回の開始から効く（途中で開閉しない）。
-        self._record_frame = ttk.LabelFrame(body, text="記録（.pgyro）", padding=4)
-        self._record_frame.columnconfigure(1, weight=1)
-        ttk.Label(self._record_frame, text="ファイル").grid(
-            row=0, column=0, sticky=tk.W, padx=2, pady=2
-        )
-        self._record_path_var = tk.StringVar(value="records/motion.pgyro")
-        self._record_entry = ttk.Entry(
-            self._record_frame, width=18, textvariable=self._record_path_var
-        )
-        self._record_entry.grid(row=0, column=1, sticky=tk.EW, padx=2, pady=2)
-        self._record_browse = ttk.Button(
-            self._record_frame, text="参照…", command=self._on_pick_record
-        )
-        self._record_browse.grid(row=0, column=2, sticky=tk.E, padx=2, pady=2)
+        self._debug_cb.grid(row=0, column=2, sticky=tk.E, padx=2, pady=2)
+        # 記録は任意。チェックするまで保存先を畳み、入力源の設定を先に見せる。
+        # 記録の有無は開始時に読む（送出中の切替は次回の開始から効く）。
+        self._record_frame = ttk.Frame(body)
+        self._record_frame.columnconfigure(0, weight=1)
         self._record_var = tk.BooleanVar(value=False)
         self._record_cb = ttk.Checkbutton(
             self._record_frame,
@@ -285,48 +287,230 @@ class ImuPanel:
             variable=self._record_var,
             command=self._on_record_toggled,
         )
-        self._record_cb.grid(row=1, column=0, columnspan=3, sticky=tk.W, padx=2)
-        # 反転・感度の行（4）と重ねない。手動入力（6）・詳細（7）の手前へ置く。
+        self._record_cb.grid(row=0, column=0, sticky=tk.W, padx=2)
+        self._record_path_frame = ttk.Frame(self._record_frame)
+        self._record_path_frame.columnconfigure(1, weight=1)
+        ttk.Label(self._record_path_frame, text="ファイル").grid(
+            row=0, column=0, sticky=tk.W, padx=2, pady=2
+        )
+        self._record_path_var = tk.StringVar(value="records/motion.pgyro")
+        self._record_entry = ttk.Entry(
+            self._record_path_frame, width=18, textvariable=self._record_path_var
+        )
+        self._record_entry.grid(row=0, column=1, sticky=tk.EW, padx=2, pady=2)
+        self._record_browse = ttk.Button(
+            self._record_path_frame, text="参照…", command=self._on_pick_record
+        )
+        self._record_browse.grid(row=0, column=2, sticky=tk.E, padx=2, pady=2)
+        self._record_path_frame.grid(row=1, column=0, sticky=tk.EW, pady=(2, 0))
+        self._record_path_frame.grid_remove()
         self._record_frame.grid(
-            row=5, column=0, columnspan=3, sticky=tk.EW, pady=(4, 0)
+            row=5, column=0, columnspan=3, sticky=tk.EW, pady=(8, 0)
         )
         # 手動入力: 6軸の生値を直接指定して送る。入力源が「手動入力」の
         # ときだけ表示する。値はtraceでメインスレッドから取り込み、
         # 送出スレッドはスナップショット(int6)だけを読む。
         self._manual_values = [0, 0, 4096, 0, 0, 0]
         self._manual_vars: list[tk.StringVar] = []
-        self._manual_frame = ttk.LabelFrame(
-            body, text="手動入力（生値 LSB）", padding=4
-        )
+        # 入れ子 LabelFrame を廃し、枠線なしの SectionFrame で見出しと余白だけでまとめる。
+        self._manual_frame = SectionFrame(body, "手動入力（生値 LSB）")
+        manual_body = self._manual_frame.body
         for i, (name, dflt) in enumerate(
             zip(("AX", "AY", "AZ", "GX", "GY", "GZ"), self._manual_values)
         ):
-            ttk.Label(self._manual_frame, text=name).grid(
-                row=0, column=i * 2, sticky=tk.W, padx=(4 if i else 2, 0)
+            r, c = divmod(i, 3)
+            ttk.Label(manual_body, text=name).grid(
+                row=r, column=c * 2, sticky=tk.W, padx=(8 if c else 0, 4), pady=4
             )
             var = tk.StringVar(value=str(dflt))
             spin = ttk.Spinbox(
-                self._manual_frame,
+                manual_body,
                 from_=-32768,
                 to=32767,
-                width=7,
+                width=6,
                 textvariable=var,
             )
-            spin.grid(row=0, column=i * 2 + 1, sticky=tk.W, padx=(0, 2))
+            spin.grid(row=r, column=c * 2 + 1, sticky=tk.W, padx=(0, 4), pady=4)
             normalize = self._make_manual_normalizer(i, var)
             spin.bind("<FocusOut>", normalize, add="+")
             spin.bind("<Return>", normalize, add="+")
             var.trace_add("write", self._make_manual_trace(i, var))
             self._manual_vars.append(var)
-        # 反転・感度の行（4）と重ねない。詳細表示（7）の手前へ置く。
+        # 反転・感度の行（4）と重ねない。
         self._manual_frame.grid(
-            row=6, column=0, columnspan=3, sticky=tk.EW, pady=(4, 0)
+            row=6,
+            column=0,
+            columnspan=3,
+            sticky=tk.EW,
+            pady=(px(frame, GAP_GROUP), 0),
         )
         self._manual_frame.grid_remove()
+        # マウス入力: 日常使う操作を先に、感度計算と詳細調整は必要時だけ開く。
+        # ホットキーはキャプチャ解除用（修飾キー必須）。
+        self._mouse_frame = ttk.Frame(body)
+        self._mouse_frame.columnconfigure(0, weight=1)
+        top_row = ttk.Frame(self._mouse_frame)
+        top_row.grid(row=0, column=0, sticky=tk.EW)
+        ttk.Label(top_row, text="感度").pack(side=tk.LEFT, padx=2, pady=2)
+        self._mouse_sens_var = tk.StringVar(value="0.05")
+        self._mouse_sens_spin = ttk.Spinbox(
+            top_row,
+            from_=0.0001,
+            to=10.0,
+            increment=0.005,
+            width=9,
+            format="%.4f",
+            textvariable=self._mouse_sens_var,
+        )
+        self._mouse_sens_spin.pack(side=tk.LEFT, padx=(0, 2), pady=2)
+        ttk.Label(top_row, text="上下比").pack(side=tk.LEFT, padx=(12, 2), pady=2)
+        self._mouse_ratio_var = tk.StringVar(value="1.0")
+        self._mouse_ratio_spin = ttk.Spinbox(
+            top_row,
+            from_=0.05,
+            to=10.0,
+            increment=0.05,
+            width=6,
+            format="%.2f",
+            textvariable=self._mouse_ratio_var,
+        )
+        self._mouse_ratio_spin.pack(side=tk.LEFT, padx=(0, 2), pady=2)
+        invert_row = ttk.Frame(self._mouse_frame)
+        invert_row.grid(row=1, column=0, sticky=tk.W, pady=2)
+        self._mouse_invert_x_var = tk.BooleanVar(value=False)
+        self._mouse_invert_x_cb = ttk.Checkbutton(
+            invert_row,
+            text="左右反転",
+            variable=self._mouse_invert_x_var,
+            command=self._on_mouse_setting_changed,
+        )
+        self._mouse_invert_x_cb.pack(side=tk.LEFT, padx=2)
+        self._mouse_invert_y_var = tk.BooleanVar(value=False)
+        self._mouse_invert_y_cb = ttk.Checkbutton(
+            invert_row,
+            text="上下反転",
+            variable=self._mouse_invert_y_var,
+            command=self._on_mouse_setting_changed,
+        )
+        self._mouse_invert_y_cb.pack(side=tk.LEFT, padx=2)
+        hotkey_row = ttk.Frame(self._mouse_frame)
+        hotkey_row.grid(row=3, column=0, sticky=tk.EW)
+        hotkey_row.columnconfigure(1, weight=1)
+        ttk.Label(hotkey_row, text="解除キー").grid(
+            row=0, column=0, sticky=tk.W, padx=2, pady=2
+        )
+        self._mouse_hotkey_var = tk.StringVar(value="ctrl+alt+m")
+        self._mouse_hotkey_entry = ttk.Entry(
+            hotkey_row, width=16, textvariable=self._mouse_hotkey_var
+        )
+        self._mouse_hotkey_entry.grid(row=0, column=1, sticky=tk.EW, padx=2, pady=2)
+        # 送出中でも感度・上下比・反転は次のサンプルから効かせる。
+        # 打鍵ごとではなく、確定（FocusOut/Return）で読み取る。
+        for spin in (self._mouse_sens_spin, self._mouse_ratio_spin):
+            spin.bind("<FocusOut>", self._on_mouse_setting_changed, add="+")
+            spin.bind("<Return>", self._on_mouse_setting_changed, add="+")
+        self._mouse_hotkey_entry.bind(
+            "<FocusOut>", self._on_mouse_setting_changed, add="+"
+        )
+        self._mouse_hotkey_entry.bind(
+            "<Return>", self._on_mouse_setting_changed, add="+"
+        )
+        # DPIと360°距離は感度を決めるときだけ使う。結果は計算欄の中で
+        # 改行して示し、狭い別窓でも右端が切れないようにする。
+        self._mouse_cal_section = CollapsibleSection(
+            self._mouse_frame, "感度を距離から計算"
+        )
+        self._mouse_cal_section.grid(
+            row=4, column=0, sticky=tk.EW, pady=(px(frame, GAP_GROUP), 0)
+        )
+        cal_row = ttk.Frame(self._mouse_cal_section.body)
+        cal_row.pack(fill=tk.X)
+        ttk.Label(cal_row, text="DPI").pack(side=tk.LEFT, padx=2)
+        self._mouse_dpi_var = tk.StringVar(value="800")
+        self._mouse_dpi_spin = ttk.Spinbox(
+            cal_row,
+            from_=100,
+            to=32000,
+            increment=100,
+            width=7,
+            textvariable=self._mouse_dpi_var,
+        )
+        self._mouse_dpi_spin.pack(side=tk.LEFT, padx=(0, 2))
+        ttk.Label(cal_row, text="360°距離").pack(side=tk.LEFT, padx=(10, 2))
+        self._mouse_target_var = tk.StringVar(value="20")
+        self._mouse_target_spin = ttk.Spinbox(
+            cal_row,
+            from_=1,
+            to=100,
+            increment=1,
+            width=5,
+            format="%.0f",
+            textvariable=self._mouse_target_var,
+        )
+        self._mouse_target_spin.pack(side=tk.LEFT, padx=(0, 2))
+        self._mouse_calc_button = ttk.Button(
+            self._mouse_cal_section.body, text="計算", command=self._on_mouse_calculate
+        )
+        self._mouse_calc_button.pack(side=tk.LEFT, padx=2, pady=2)
+        self._mouse_cal_label_var = tk.StringVar(value="")
+        ttk.Label(
+            self._mouse_cal_section.body, textvariable=self._mouse_cal_label_var
+        ).pack(side=tk.LEFT, padx=(8, 0))
+        for spin in (self._mouse_dpi_spin, self._mouse_target_spin):
+            spin.bind("<FocusOut>", self._on_mouse_setting_changed, add="+")
+            spin.bind("<Return>", self._on_mouse_setting_changed, add="+")
+        roll_row = ttk.Frame(self._mouse_frame)
+        roll_row.grid(row=2, column=0, sticky=tk.EW, pady=(2, 0))
+        ttk.Label(roll_row, text="ロール").pack(side=tk.LEFT, padx=2)
+        self._mouse_roll_var = tk.StringVar(value="なし")
+        self._mouse_roll_combo = ttk.Combobox(
+            roll_row,
+            width=9,
+            state="readonly",
+            textvariable=self._mouse_roll_var,
+            values=[label for _name, label in ROLL_LABELS],
+        )
+        self._mouse_roll_combo.pack(side=tk.LEFT, padx=(0, 2))
+        self._mouse_roll_combo.bind(
+            "<<ComboboxSelected>>", self._on_mouse_roll_changed, add=""
+        )
+        self._mouse_reset_button = ttk.Button(
+            roll_row, text="姿勢リセット", command=self._on_mouse_reset
+        )
+        self._mouse_reset_button.pack(side=tk.LEFT, padx=(12, 2))
+        self._mouse_advanced = CollapsibleSection(self._mouse_frame, "詳細調整")
+        self._mouse_advanced.grid(row=5, column=0, sticky=tk.EW)
+        advanced = self._mouse_advanced.body
+        ttk.Label(advanced, text="平滑化").pack(side=tk.LEFT, padx=2, pady=2)
+        self._mouse_smooth_var = tk.StringVar(value="1.0")
+        self._mouse_smooth_spin = ttk.Spinbox(
+            advanced,
+            from_=0.05,
+            to=1.0,
+            increment=0.05,
+            width=6,
+            format="%.2f",
+            textvariable=self._mouse_smooth_var,
+        )
+        self._mouse_smooth_spin.pack(side=tk.LEFT, padx=(0, 12), pady=2)
+        self._mouse_smooth_spin.bind(
+            "<FocusOut>", self._on_mouse_setting_changed, add="+"
+        )
+        self._mouse_smooth_spin.bind(
+            "<Return>", self._on_mouse_setting_changed, add="+"
+        )
+        self._mouse_gravity_var = tk.BooleanVar(value=True)
+        self._mouse_gravity_cb = ttk.Checkbutton(
+            advanced,
+            text="重力追従",
+            variable=self._mouse_gravity_var,
+            command=self._on_mouse_setting_changed,
+        )
+        self._mouse_gravity_cb.pack(side=tk.LEFT, padx=2, pady=2)
+        # 入力源の直下に表示し、共通の記録欄より先に操作できるようにする。
+        self._mouse_frame.grid(row=2, column=0, columnspan=3, sticky=tk.EW, pady=(4, 0))
+        self._mouse_frame.grid_remove()
         self._source_cb.bind("<<ComboboxSelected>>", self._on_source_changed, add="")
-        # 詳細の可視化パネル。チェックONのときだけ同frame内に展開する。
-        # _apply_visibility() がデバッグOFFで畳むため、先に用意する。
-        self._gyro_view: Any = None
         self._apply_visibility()
         self._load_settings_into_vars()
         # この部品は Window.loadSettings() より先に作られる。設定がまだ
@@ -360,6 +544,15 @@ class ImuPanel:
                         source = "sensor"
                 except Exception:
                     source = "sensor"
+            if source == "mouse":
+                try:
+                    from pokecon.domain.mouse_capture import mouse_capture_available
+
+                    if not mouse_capture_available():
+                        # Windows以外ではマウス入力を出さない（静かに失敗）。
+                        source = "sensor"
+                except Exception:
+                    source = "sensor"
             for name, label in SOURCE_LABELS:
                 if name == source:
                     self._source_var.set(label)
@@ -372,6 +565,30 @@ class ImuPanel:
                 self._record_path_var.set(record_path)
             self._play_path_var.set(str(settings.get("play_path", "") or ""))
             self._load_invert_from_settings(settings)
+            try:
+                from pokecon.domain.mouse_gyro import (
+                    calibration_from_settings,
+                    config_from_settings,
+                )
+
+                mouse = config_from_settings(settings)
+                self._mouse_sens_var.set(f"{mouse.sensitivity:g}")
+                self._mouse_ratio_var.set(f"{mouse.ratio_y:g}")
+                self._mouse_smooth_var.set(f"{mouse.smoothing:g}")
+                self._mouse_invert_x_var.set(mouse.invert_x)
+                self._mouse_invert_y_var.set(mouse.invert_y)
+                self._mouse_gravity_var.set(mouse.gravity_follow)
+                self._mouse_hotkey_var.set(mouse.hotkey)
+                dpi, target_cm = calibration_from_settings(settings)
+                self._mouse_dpi_var.set(str(dpi))
+                self._mouse_target_var.set(f"{target_cm:g}")
+                for name, label in ROLL_LABELS:
+                    if name == mouse.roll_modifier:
+                        self._mouse_roll_var.set(label)
+                        break
+                self._update_mouse_calibration_label()
+            except Exception:
+                pass
             scale = float(settings.get("gyro_scale", "1.0") or 1.0)
             self._scale_var.set(f"{scale:g}")
             for i, key in enumerate(
@@ -440,58 +657,14 @@ class ImuPanel:
     def _signs_from_settings(
         self, settings: dict[str, str], source: str
     ) -> tuple[tuple[int, int, int], tuple[int, int, int]]:
-        """その入力源が使う符号を設定から読む。読めなければ源の既定へ倒す。
-
-        HID直結は生値がSwitchフレームなので恒等、SDL路は軸写像の
-        逆変換（-1,-1,1）が前提。watched() が毎サンプル適用する。
-        """
-        default = (1, 1, 1) if source == "hid" else (-1, -1, 1)
-        try:
-            from pokecon.domain.config import parse_imu_axis_map
-        except Exception:
-            return default, default
-        prefix = "hid_" if source == "hid" else ""
-        acc = parse_imu_axis_map(str(settings.get(prefix + "accel_signs", "")), (-1, 1))
-        gyr = parse_imu_axis_map(str(settings.get(prefix + "gyro_signs", "")), (-1, 1))
-        if acc is None:
-            acc = default
-        if gyr is None:
-            gyr = default
-        return acc, gyr
+        """その入力源が使う符号を設定から読む。読めなければ源の既定へ倒す。"""
+        return imu_service.signs_from_settings(settings, source)
 
     def _live_trim_from_settings(
         self, settings: dict[str, str], source: str
     ) -> _LiveTrim:
         """送出中に毎サンプル読む加工値を設定から組み立てる。"""
-        try:
-            gyro_scale = float(settings.get("gyro_scale", "1.0") or 1.0)
-        except (TypeError, ValueError):
-            gyro_scale = 1.0
-        if not 0.01 <= gyro_scale <= 4.0:
-            gyro_scale = 1.0
-        try:
-            dead_dps = float(settings.get("gyro_dead_dps", "0.0") or 0.0)
-        except (TypeError, ValueError):
-            dead_dps = 0.0
-        dead_raw = max(0.0, dead_dps) / 0.06103
-        acc_signs, gyr_signs = self._signs_from_settings(settings, source)
-        # HID直結だけ、rad/s のバイアスと軸別倍率をrawへ換算して持つ。
-        # SDL路は SdlSensorReader がバイアスを持っているため、ここで
-        # 入れると二重に引く。
-        hid_bias: tuple[int, int, int] | None = None
-        hid_scale: tuple[float, float, float] | None = None
-        if source == "hid":
-            try:
-                from pokecon.domain.config import parse_imu_bias, parse_imu_scale
-
-                bias = parse_imu_bias(str(settings.get("gyro_bias", "")))
-                if bias is not None:
-                    hid_bias = _gyro_bias_to_raw(bias)
-                hid_scale = parse_imu_scale(str(settings.get("hid_gyro_scale", "")))
-            except Exception:
-                hid_bias = None
-                hid_scale = None
-        return (gyro_scale, dead_raw, acc_signs, gyr_signs, hid_bias, hid_scale)
+        return imu_service.live_trim_from_settings(settings, source)
 
     def _load_invert_from_settings(
         self, settings: dict[str, str] | None = None
@@ -542,8 +715,14 @@ class ImuPanel:
             self._manual_frame.grid()
         else:
             self._manual_frame.grid_remove()
+        if source == "mouse":
+            self._mouse_frame.grid()
+        else:
+            self._mouse_frame.grid_remove()
+        # マウスの符号はマウス欄の反転で決める。デバッグの反転プリセットを
+        # 重ねると二重に掛かるため、マウス入力時は出さない。
         for widget in (self._invert_label, self._invert_cb):
-            if debug:
+            if debug and source != "mouse":
                 widget.grid()
             else:
                 widget.grid_remove()
@@ -552,17 +731,6 @@ class ImuPanel:
                 widget.grid()
             else:
                 widget.grid_remove()
-        if debug:
-            self._detail_cb.grid()
-        else:
-            self._detail_cb.grid_remove()
-            # デバッグOFFで詳細チェックだけ消すと波形が残る。チェックも
-            # 畳み、入力源を通常へ戻した後も見えない状態に揃える。
-            try:
-                self._detail_var.set(False)
-            except Exception:
-                pass
-            self._collapse_detail()
         if not debug and source in DEBUG_SOURCES:
             # デバッグ源を選んだまま通常へ戻したら実機源へ寄せる。
             for name, label in SOURCE_LABELS:
@@ -583,10 +751,19 @@ class ImuPanel:
             hid_ok = bool(hidhide_ready(force=True))
         except Exception:
             hid_ok = False
+        mouse_ok = True
+        try:
+            from pokecon.domain.mouse_capture import mouse_capture_available
+
+            mouse_ok = bool(mouse_capture_available())
+        except Exception:
+            mouse_ok = False
         values = [
             label
             for name, label in SOURCE_LABELS
-            if (debug or name not in DEBUG_SOURCES) and (name != "hid" or hid_ok)
+            if (debug or name not in DEBUG_SOURCES)
+            and (name != "hid" or hid_ok)
+            and (name != "mouse" or mouse_ok)
         ]
         try:
             self._source_cb.config(values=values)
@@ -686,6 +863,323 @@ class ImuPanel:
         except Exception:
             pass
 
+    def _float_var_text(
+        self, var: tk.StringVar, default: float, low: float, high: float
+    ) -> str:
+        """画面の実数を範囲内の文字列へ直し、表示も揃える。"""
+        try:
+            value = float(str(var.get()).strip())
+        except (TypeError, ValueError):
+            value = default
+        if not math.isfinite(value):
+            value = default
+        value = max(low, min(high, value))
+        text = f"{value:g}"
+        try:
+            if str(var.get()) != text:
+                var.set(text)
+        except Exception:
+            pass
+        return text
+
+    def _int_var_text(
+        self, var: tk.StringVar, default: int, low: int, high: int
+    ) -> str:
+        """画面の整数を範囲内の文字列へ直し、表示も揃える。"""
+        try:
+            value = int(float(str(var.get()).strip()))
+        except (TypeError, ValueError):
+            value = default
+        value = max(low, min(high, value))
+        text = str(value)
+        try:
+            if str(var.get()) != text:
+                var.set(text)
+        except Exception:
+            pass
+        return text
+
+    def _update_mouse_calibration_label(self) -> None:
+        """現在の感度・DPIで何cmが360°かを表示する。"""
+        try:
+            sensitivity = float(
+                self._float_var_text(self._mouse_sens_var, 0.05, 0.0001, 10.0)
+            )
+            dpi = int(self._int_var_text(self._mouse_dpi_var, 800, 100, 32000))
+        except Exception:
+            try:
+                self._mouse_cal_label_var.set("")
+            except Exception:
+                pass
+            return
+        try:
+            from pokecon.domain.mouse_gyro import cm_per_360_for
+
+            cm = cm_per_360_for(sensitivity, dpi)
+        except Exception:
+            cm = None
+        try:
+            self._mouse_cal_label_var.set(
+                "—" if cm is None else f"現在 {cm:.1f}cm/360°"
+            )
+        except Exception:
+            pass
+
+    def _on_mouse_calculate(self) -> None:
+        """DPIと目標距離から感度を逆算して適用する。"""
+        dpi = int(self._int_var_text(self._mouse_dpi_var, 800, 100, 32000))
+        target_cm = float(
+            self._float_var_text(self._mouse_target_var, 20.0, 1.0, 100.0)
+        )
+        try:
+            from pokecon.domain.mouse_gyro import sensitivity_for_dpi
+
+            sensitivity = sensitivity_for_dpi(dpi, target_cm)
+        except Exception:
+            return
+        self._mouse_sens_var.set(f"{sensitivity:g}")
+        self._on_mouse_setting_changed()
+        self._queue.put(
+            (
+                "log",
+                f"感度: {sensitivity:g} deg/count（{dpi}DPI・{target_cm:g}cm/360°）",
+            )
+        )
+
+    def _mouse_roll_value(self) -> str:
+        """画面のロール選択→設定名。読めなければnone。"""
+        label = self._mouse_roll_var.get()
+        for name, text in ROLL_LABELS:
+            if text == label:
+                return name
+        return "none"
+
+    def _on_mouse_roll_changed(self, _event: Any = None) -> None:
+        """ロール修飾を保存し、実行中のキャプチャへも反映する。"""
+        value = self._mouse_roll_value()
+        try:
+            self._settings_writer({"mouse_roll_modifier": value})
+        except Exception:
+            pass
+        capture = self._mouse_capture
+        if capture is not None:
+            setter = getattr(capture, "set_roll_modifier", None)
+            if callable(setter):
+                try:
+                    setter(value)
+                except Exception:
+                    pass
+        source = self._mouse_source
+        if source is not None:
+            try:
+                settings = dict(self._settings_provider())
+                settings["mouse_roll_modifier"] = value
+                from pokecon.domain.mouse_gyro import config_from_settings
+
+                source.update_config(config_from_settings(settings))
+            except Exception:
+                pass
+
+    def _on_mouse_reset(self) -> None:
+        """仮想姿勢を水平・正面へ戻す（ボタン用。ホットキーも同じ）。"""
+        source = self._mouse_source
+        if source is None:
+            self._queue.put(("log", "マウス送出中ではありません。"))
+            return
+        try:
+            source.reset_orientation()
+        except Exception:
+            pass
+        self._queue.put(("log", "姿勢を水平・正面にリセットしました。"))
+
+    def _mouse_settings_payload(self) -> dict[str, str]:
+        """マウス欄の値を設定へ書く形にする。軸・符号はini側で保持する。"""
+        hotkey = str(self._mouse_hotkey_var.get() or "").strip() or "ctrl+alt+m"
+        return {
+            "mouse_sensitivity": self._float_var_text(
+                self._mouse_sens_var, 0.05, 0.0001, 10.0
+            ),
+            "mouse_ratio_y": self._float_var_text(
+                self._mouse_ratio_var, 1.0, 0.05, 10.0
+            ),
+            "mouse_smoothing": self._float_var_text(
+                self._mouse_smooth_var, 1.0, 0.05, 1.0
+            ),
+            "mouse_invert_x": "1" if bool(self._mouse_invert_x_var.get()) else "0",
+            "mouse_invert_y": "1" if bool(self._mouse_invert_y_var.get()) else "0",
+            "mouse_gravity_follow": "1" if bool(self._mouse_gravity_var.get()) else "0",
+            "mouse_dpi": self._int_var_text(self._mouse_dpi_var, 800, 100, 32000),
+            "mouse_cm_per_360": self._float_var_text(
+                self._mouse_target_var, 20.0, 1.0, 100.0
+            ),
+            "mouse_roll_modifier": self._mouse_roll_value(),
+            "mouse_hotkey": hotkey,
+        }
+
+    def _on_mouse_setting_changed(self, _event: Any = None) -> None:
+        """マウス欄の確定値を保存し、送出中なら次のサンプルから反映する。"""
+        payload = self._mouse_settings_payload()
+        try:
+            self._settings_writer(payload)
+        except Exception:
+            pass
+        self._update_mouse_calibration_label()
+        if self._stream_source != "mouse":
+            return
+        source = self._mouse_source
+        if source is None:
+            return
+        try:
+            settings = dict(self._settings_provider())
+            settings.update(payload)
+            from pokecon.domain.mouse_gyro import config_from_settings
+
+            source.update_config(config_from_settings(settings))
+        except Exception:
+            pass
+
+    def _on_mouse_capture_state(self, enabled: bool, reason: str) -> None:
+        """キャプチャの開始/解除を送出源と画面へ伝える（入力スレッドから）。"""
+        source = self._mouse_source
+        if source is not None:
+            try:
+                source.set_enabled(bool(enabled))
+            except Exception:
+                pass
+        # 古いキャプチャの解除が、次の開始後に届いても無視できるよう
+        # どのインスタンスの通知かを一緒に渡す。
+        self._queue.put(
+            ("mouse_capture", (self._mouse_capture, bool(enabled), str(reason)))
+        )
+
+    def _close_mouse_capture(self) -> None:
+        """Raw Inputを止め、カーソルの閉じ込めを解除する。例外は投げない。"""
+        capture, self._mouse_capture = self._mouse_capture, None
+        if capture is not None:
+            try:
+                capture.stop()
+            except Exception:
+                pass
+        source, self._mouse_source = self._mouse_source, None
+        if source is not None:
+            try:
+                source.set_enabled(False)
+            except Exception:
+                pass
+        self._mouse_interval_s = 0.0
+        self._mouse_capture_on = False
+        self._mouse_last_events = None
+        self._mouse_last_events_t = None
+
+    @staticmethod
+    def _block_mouse_event(_event: Any) -> str:
+        """キャプチャ中にTkのマウス処理へ渡さない。"""
+        return "break"
+
+    def _on_escape(self, _event: Any = None) -> str | None:
+        """Escでジャイロ送出を停止する（停止ボタンと同じ）。"""
+        if self._stop:
+            return None
+        if self._starting:
+            self._stop_after_start = True
+            self._queue.put(("log", "開始完了後に停止します。"))
+            return "break"
+        if self._stopping:
+            return "break"
+        if not self._streaming:
+            return None
+        self._on_toggle()
+        return "break"
+
+    def _release_pad_pointer_state(self) -> None:
+        """キャプチャ切替時に、マウスで掴んだスティック/ボタンを解放する。
+
+        キャプチャ中にクリックが通ると、仮想パッドのスティック掴みが
+        残ってゲームパッド入力を上書きし続ける。開始・停止のどちらでも
+        明示的に離す。カメラ面（旧CaptureArea）のマウススティックも対象。
+        """
+        try:
+            pad = self._pad_provider() if self._pad_provider is not None else None
+        except Exception:
+            pad = None
+        if pad is not None:
+            release = getattr(pad, "releaseAllHeld", None)
+            if callable(release):
+                try:
+                    release()
+                except Exception:
+                    pass
+        try:
+            preview = (
+                self._preview_provider() if self._preview_provider is not None else None
+            )
+        except Exception:
+            preview = None
+        if preview is None:
+            return
+        for attr, method_name in (
+            ("_stick_left", "mouseLeftRelease"),
+            ("_stick_right", "mouseRightRelease"),
+        ):
+            state = getattr(preview, attr, None)
+            if not bool(getattr(state, "active", False)):
+                continue
+            release = getattr(preview, method_name, None)
+            if callable(release):
+                try:
+                    release()
+                except Exception:
+                    pass
+
+    def _set_mouse_cursor_hidden(self, hidden: bool) -> None:
+        """キャプチャ中だけカーソルを隠し、GUIクリックを止める。"""
+        if hidden:
+            if self._saved_cursors or self._saved_bindtags:
+                return
+            widgets: list[Any] = []
+            try:
+                widgets.append(self.frame.winfo_toplevel())
+            except Exception:
+                return
+            index = 0
+            while index < len(widgets):
+                widget = widgets[index]
+                index += 1
+                try:
+                    previous = str(widget.cget("cursor"))
+                except Exception:
+                    previous = ""
+                try:
+                    widget.configure(cursor="none")
+                except Exception:
+                    pass
+                else:
+                    self._saved_cursors.append((widget, previous))
+                try:
+                    original = widget.bindtags()
+                    widget.bindtags((_CAPTURE_BLOCK_TAG, *original))
+                except Exception:
+                    pass
+                else:
+                    self._saved_bindtags.append((widget, original))
+                try:
+                    widgets.extend(widget.winfo_children())
+                except Exception:
+                    pass
+            return
+        saved_tags, self._saved_bindtags = self._saved_bindtags, []
+        for widget, tags in saved_tags:
+            try:
+                widget.bindtags(tags)
+            except Exception:
+                pass
+        saved, self._saved_cursors = self._saved_cursors, []
+        for widget, cursor in saved:
+            try:
+                widget.configure(cursor=cursor)
+            except Exception:
+                pass
+
     def _on_toggle(self) -> None:
         """送出の開始/停止。線操作は作業スレッドで行う。"""
         if self._starting or self._stopping:
@@ -699,6 +1193,9 @@ class ImuPanel:
                 self._btn_toggle.configure(text="停止中…")
             except Exception:
                 pass
+            # 停止ワーカーがクリップを外すまで待たず、カーソルを先に戻す。
+            self._release_pad_pointer_state()
+            self._set_mouse_cursor_hidden(False)
             thread = threading.Thread(target=self._stop_worker, daemon=True)
             thread.start()
             return
@@ -706,6 +1203,20 @@ class ImuPanel:
         if source == "manual":
             self._normalize_manual_values()
             self._save_manual_values()
+        if source == "mouse":
+            # Tkの窓ハンドルはGUIスレッドでだけ読む。クライアント領域の
+            # 画面座標はRaw Input側がWin32で取る（DPIのずれを避ける）。
+            try:
+                top = self.frame.winfo_toplevel()
+                self._owner_hwnd = int(top.winfo_id())
+            except Exception:
+                self._owner_hwnd = 0
+            self._clip_rect = None
+            # 掴んだままのスティック/ボタンを離してからロックする
+            # （開始前に押していたクリックが残らないように）。
+            self._release_pad_pointer_state()
+            # 開始が失敗したら _poll の "stopped" で戻す。
+            self._set_mouse_cursor_hidden(True)
         try:
             pad = int(self._pad_var.get())
         except (TypeError, ValueError):
@@ -721,6 +1232,8 @@ class ImuPanel:
             "record_path": self._record_path_var.get().strip(),
             "play_path": self._play_path_var.get().strip(),
         }
+        if source == "mouse":
+            values.update(self._mouse_settings_payload())
         # 作業スレッドはTk変数を読めない。ここで文字列へ写しておく。
         self._start_play_path = values["play_path"]
         self._start_record_path = values["record_path"]
@@ -729,7 +1242,7 @@ class ImuPanel:
         except Exception:
             self._start_record_on = False
         mode = self._invert_mode()
-        if mode is not None:
+        if mode is not None and source != "mouse":
             # プリセットを明示的に選んだときだけ書く。未変更のまま開始して
             # 設定ファイルの既定符号（SDLの逆写像など）を壊さない。
             acc, gyr = INVERT_SIGNS[mode]
@@ -741,6 +1254,7 @@ class ImuPanel:
         except Exception:
             pass
         self._starting = True
+        self._stop_after_start = False
         try:
             self._btn_toggle.configure(text="開始中…")
         except Exception:
@@ -756,8 +1270,17 @@ class ImuPanel:
             self._do_start(source, pad)
         finally:
             self._starting = False
+            stop_now = self._stop_after_start
+            self._stop_after_start = False
             if not self._streaming:
                 self._queue.put(("state", "stopped"))
+            elif stop_now and not self._stopping:
+                self._stopping = True
+                try:
+                    self._btn_toggle.configure(text="停止中…")
+                except Exception:
+                    pass
+                threading.Thread(target=self._stop_worker, daemon=True).start()
 
     def _stop_worker(self) -> None:
         """停止ワーカー。終了時は必ずフラグを戻す。"""
@@ -774,6 +1297,10 @@ class ImuPanel:
             except Exception:
                 pass
             self._queue.put(("log", "記録の有無は次回の送出開始から効きます。"))
+        if self._record_var.get():
+            self._record_path_frame.grid()
+        else:
+            self._record_path_frame.grid_remove()
 
     def _ask_file(self, save: bool) -> str:
         """記録ファイルの選択。取り消し・失敗は空文字。"""
@@ -840,248 +1367,59 @@ class ImuPanel:
             return
         self._motion_preview = preview
 
-    def _on_detail_toggled(self) -> None:
-        """詳細表示の切替。ONでジャイロ設定の中へ展開、OFFで畳む。送出は続ける。"""
-        try:
-            show = bool(self._detail_var.get())
-        except Exception:
-            show = False
-        if show:
-            if getattr(self, "_gyro_view", None) is not None:
-                return
-            try:
-                from pokecon.ui.GyroView import GyroView
-
-                view = GyroView(getattr(self, "_body", self.frame), rate_range=500)
-                # 反転（3）・感度（4）・記録（5）・手動入力（6）・詳細
-                # チェック（7）と重ねない。それらの下へ置く。
-                view.grid(row=8, column=0, columnspan=3, sticky=tk.EW)
-                reset = ttk.Button(view, text="ヨーリセット", command=view.reset_yaw)
-                reset.pack(pady=(0, 4))
-                self._gyro_view = view
-            except Exception as e:
-                self._queue.put(("log", f"詳細表示を作れません: {e!r}"))
-                try:
-                    self._detail_var.set(False)
-                except Exception:
-                    pass
-        else:
-            self._collapse_detail()
-
-    def _collapse_detail(self) -> None:
-        """詳細表示を畳む。送出は続ける。"""
-        view, self._gyro_view = getattr(self, "_gyro_view", None), None
-        if view is not None:
-            try:
-                view.close()
-            except Exception:
-                pass
-            try:
-                view.destroy()
-            except Exception:
-                pass
-
     def _build_source(self, source: str, pad: int) -> Any:
-        """入力源の生成器を作る。失敗はNone。"""
-        if source == "file":
-            return self._open_playback()
-        if source == "manual":
-            return self._manual_reader()
+        """入力源の生成器を作る。失敗は None。"""
+        self._source_error = ""
         try:
             settings = self._settings_provider()
         except Exception:
             settings = {}
-        try:
-            acc_z = int(settings.get("acc_z", "4096"))
-        except (TypeError, ValueError):
-            acc_z = 4096
-        try:
-            acc_x = int(settings.get("acc_x", "0"))
-        except (TypeError, ValueError):
-            acc_x = 0
-        try:
-            acc_y = int(settings.get("acc_y", "0"))
-        except (TypeError, ValueError):
-            acc_y = 0
-        if source == "sensor":
-            try:
-                from pokecon.domain.sdl_sensor import SdlSensorReader
 
-                # 符号は watched() が毎サンプル適用する（二重適用防止）。
-                # 軸設定が欠けた場合でも reader 側の既定符号が残らないよう、
-                # 生成時点で恒等にしておく。
-                reader = SdlSensorReader(accel_signs=(1, 1, 1), gyro_signs=(1, 1, 1))
-                self._apply_axis_settings(reader, settings, apply_signs=False)
-                if not reader.open(pad):
-                    return None
-                self._sensor_reader = reader
-                return reader.read
-            except Exception:
-                return None
-        if source == "hid":
-            try:
-                from pokecon.domain.hidhide import hidhide_ready
+        def _on_mouse_created(src_obj: Any, capture: Any, interval_s: float) -> None:
+            self._mouse_source = src_obj
+            self._mouse_capture = capture
+            self._mouse_interval_s = interval_s
+            self._mouse_last_events = None
+            self._mouse_last_events_t = None
 
-                if not hidhide_ready(force=True):
-                    return None
-            except Exception:
-                return None
-            try:
-                from pokecon.domain.nintendo_hid import get_shared_reader
-
-                reader = get_shared_reader()
-                # 開始時は必ず 0x40 01 → 0x03 30 を送り直す。0x30が新鮮でも
-                # IMU未有効のハンドル（他プロセスが切り戻した等）を取り違え
-                # ない。応答が取れない個体は0x30の実値で判定する（arm_imu内）。
-                arm_imu = getattr(reader, "arm_imu", None)
-                if callable(arm_imu):
-                    if not arm_imu():
-                        return None
-                else:
-                    ensure_live = getattr(reader, "ensure_live", None)
-                    if callable(ensure_live):
-                        if not ensure_live():
-                            return None
-                    elif not reader.is_open() and not reader.open():
-                        return None
-                self._sensor_reader = reader
-                # 符号は watched() が毎サンプル適用する（二重適用防止）。
-                transform = self._sample_transform(
-                    settings, hid=True, apply_signs=False
-                )
-                # パッドAPIと同じ最新値方式。0x30の3スロットを古い順に
-                # 消費せず、常に最新スロットだけを返す（時間の巻き戻し防止）。
-                inner_read = reader.read_next
-                last_try = {"t": 0.0}
-
-                def read_with_reopen() -> Any:
-                    # USB再列挙（UF2書き込み等）でハンドルが死んだ場合や、
-                    # 開いたまま0x30が途絶えた場合に、IMU側から再武装する。
-                    sample = inner_read()
-                    if sample is not None:
-                        return sample
-                    now = time.monotonic()
-                    if now - last_try["t"] >= 1.0:
-                        last_try["t"] = now
-                        try:
-                            if callable(ensure_live):
-                                ensure_live()
-                            elif not reader.is_open():
-                                reader.open(retries=1)
-                        except Exception:
-                            return None
-                    return None
-
-                if transform is None:
-                    return read_with_reopen
-
-                def mapped() -> Any:
-                    sample = read_with_reopen()
-                    if sample is None:
-                        return None
-                    try:
-                        return transform(sample)
-                    except Exception:
-                        return None
-
-                return mapped
-            except Exception:
-                return None
-        if source == "sine":
-            try:
-                from pokecon.domain.imu_wave import SineWave
-
-                axis = int(settings.get("sine_axis", "2"))
-                amp = int(settings.get("sine_amp", "4096"))
-                period = float(settings.get("sine_period_s", "2.0"))
-                return SineWave(axis=axis, amp=amp, period_s=period, acc_z=acc_z)
-            except (TypeError, ValueError):
-                return None
-        if source == "step":
-            try:
-                from pokecon.domain.imu_wave import StepWave
-
-                axis = int(settings.get("step_axis", "2"))
-                raw = int(settings.get("step_raw", "5899"))
-                duration = float(settings.get("step_duration_s", "4.0"))
-                gen = StepWave(axis=axis, raw=raw, duration_s=duration, acc_z=acc_z)
-                gen.trigger()
-                self._step_gen = gen
-                return gen
-            except (TypeError, ValueError):
-                return None
-        try:
-            from pokecon.domain.imu_wave import StaticRest
-
-            return StaticRest(acc_z=acc_z, acc_x=acc_x, acc_y=acc_y)
-        except Exception:
-            return None
-
-    def _open_playback(self) -> Any:
-        """記録ファイルを読む生成器を作る。失敗はNone＋理由を_source_errorへ。"""
-        self._source_error = ""
-        path = self._start_play_path
-        if not path:
-            self._source_error = "再生ファイルを選んでください。"
-            return None
-        try:
-            from pokecon.domain.motion_track import MotionPlayer
-
-            player = MotionPlayer(path)
-            if not player.load():
-                self._source_error = f"記録を読めません: {path}（{player.error}）"
-                return None
-            if len(player) == 0:
-                self._source_error = f"記録が空です: {path}"
-                return None
-        except Exception as e:
-            self._source_error = f"記録を読めません: {e!r}"
-            return None
-        self._player = player
-        self._playing = True
-        inner = player.as_source()
-        panel = self
-        done = {"end": False}
-        total = len(player)
-
-        def played() -> Any:
-            # 終端は1回だけ届け、送出ループを止める（最後の値を送り続けない）。
-            sample = inner()
-            if sample is None and not done["end"]:
-                done["end"] = True
-                panel._queue.put(("playback_end", total))
-            return sample
-
-        return played
+        res = imu_service.build_imu_source(
+            source,
+            pad,
+            settings,
+            play_path=self._start_play_path,
+            owner_hwnd=self._owner_hwnd,
+            clip_rect=self._clip_rect,
+            manual_reader=self._manual_reader,
+            on_playback_end=lambda total: self._queue.put(("playback_end", total)),
+            on_mouse_state=self._on_mouse_capture_state,
+            on_log=lambda text: self._queue.put(("log", text)),
+            on_mouse_created=_on_mouse_created,
+        )
+        if res.error:
+            self._source_error = res.error
+        if res.sensor_reader is not None:
+            self._sensor_reader = res.sensor_reader
+        if res.step_gen is not None:
+            self._step_gen = res.step_gen
+        if res.player is not None:
+            self._player = res.player
+            self._playing = res.playing
+        if res.gen is None and source == "mouse" and res.mouse_capture is not None:
+            self._close_mouse_capture()
+        return res.gen
 
     def _open_recorder(self, source: str) -> bool:
-        """記録先を開く。記録しない設定なら何もせずTrue。"""
-        if not self._start_record_on:
-            return True
-        path = self._start_record_path
-        if not path:
-            self._queue.put(("log", "記録先が未設定です。参照…で選んでください。"))
-            return False
-        # 再生元と同じファイルを開くと、書き込み（上書き）で元の記録が消える。
-        if source == "file":
-            play = self._start_play_path
-            if os.path.normcase(os.path.abspath(path)) == os.path.normcase(
-                os.path.abspath(play)
-            ):
-                self._queue.put(
-                    ("log", "記録先が再生ファイルと同じため、記録せず再生します。")
-                )
-                return True
-        try:
-            from pokecon.domain.motion_track import MotionRecorder
-
-            recorder = MotionRecorder(path)
-            recorder.open()
-        except Exception as e:
-            self._queue.put(("log", f"記録を開始できません: {e!r}"))
-            return False
-        self._recorder = recorder
-        return True
+        """記録先を開く。記録しない設定なら何もせず True。"""
+        ok, recorder = imu_service.open_recorder_sink(
+            source,
+            self._start_record_on,
+            self._start_record_path,
+            self._start_play_path,
+            lambda text: self._queue.put(("log", text)),
+        )
+        if recorder is not None:
+            self._recorder = recorder
+        return ok
 
     def _record_sample(self, sample: tuple[int, int, int, int, int, int]) -> None:
         """送出する1件を記録する。記録中でなければ何もしない。"""
@@ -1127,12 +1465,6 @@ class ImuPanel:
             except Exception as exc:
                 self._motion_preview = None
                 self._queue.put(("preview_error", (preview, exc)))
-        view = getattr(self, "_gyro_view", None)
-        if view is not None:
-            try:
-                view.push_raw(*sample)
-            except Exception:
-                pass
 
     @staticmethod
     def _sample_transform(
@@ -1140,45 +1472,8 @@ class ImuPanel:
         hid: bool = False,
         apply_signs: bool = True,
     ) -> Any | None:
-        """IMU軸・符号の変換関数を作る。恒等ならNone。
-
-        HID直結は生値がSwitchフレームのため `hid_*` キー（既定は恒等）を使う。
-        接頭辞なしのキーはSDLセンサー用（Switch→SDL変換の逆写像）であり、
-        コンソール側の反転解釈を打ち消す実測（例: 符号=1,-1,-1）にも使う。
-        `apply_signs=False` は軸だけを返し、符号は呼び出し側（watched）が
-        毎サンプル適用する（二重適用防止）。
-        読めないキーはNone（＝無変換）に倒す。
-        """
-        try:
-            from pokecon.domain.config import parse_imu_axis_map
-        except Exception:
-            return None
-        pre = "hid_" if hid else ""
-        aa = parse_imu_axis_map(str(settings.get(pre + "accel_axes", "")), (0, 1, 2))
-        as_ = parse_imu_axis_map(str(settings.get(pre + "accel_signs", "")), (-1, 1))
-        ga = parse_imu_axis_map(str(settings.get(pre + "gyro_axes", "")), (0, 1, 2))
-        gs = parse_imu_axis_map(str(settings.get(pre + "gyro_signs", "")), (-1, 1))
-        if aa is None or as_ is None or ga is None or gs is None:
-            return None
-        acc_signs = as_ if apply_signs else (1, 1, 1)
-        gyr_signs = gs if apply_signs else (1, 1, 1)
-        if (
-            aa == (0, 1, 2)
-            and ga == (0, 1, 2)
-            and acc_signs == (1, 1, 1)
-            and gyr_signs == (1, 1, 1)
-        ):
-            return None
-
-        def apply(sample: Any) -> tuple[int, int, int, int, int, int]:
-            ax, ay, az, gx, gy, gz = (int(v) for v in sample)
-            acc = (ax, ay, az)
-            gyr = (gx, gy, gz)
-            ca = tuple(acc[aa[i]] * acc_signs[i] for i in range(3))
-            cg = tuple(gyr[ga[i]] * gyr_signs[i] for i in range(3))
-            return (ca[0], ca[1], ca[2], cg[0], cg[1], cg[2])
-
-        return apply
+        """IMU 軸・符号の変換関数を作る。恒等なら None。"""
+        return imu_service.sample_transform(settings, hid=hid, apply_signs=apply_signs)
 
     @staticmethod
     def _apply_axis_settings(
@@ -1186,56 +1481,13 @@ class ImuPanel:
         settings: dict[str, str],
         apply_signs: bool = True,
     ) -> None:
-        """軸変換・バイアス設定をreaderへ適用する。読めない項目は飛ばす。
-
-        `apply_signs=False` は軸とバイアスだけを渡し、符号は呼び出し側
-        （watched）が毎サンプル適用する（二重適用防止）。
-        """
-        try:
-            from pokecon.domain.config import parse_imu_axis_map, parse_imu_bias
-        except Exception:
-            return
-        try:
-            aa = parse_imu_axis_map(str(settings.get("accel_axes", "")), (0, 1, 2))
-            as_ = parse_imu_axis_map(str(settings.get("accel_signs", "")), (-1, 1))
-            ga = parse_imu_axis_map(str(settings.get("gyro_axes", "")), (0, 1, 2))
-            gs = parse_imu_axis_map(str(settings.get("gyro_signs", "")), (-1, 1))
-            if aa is not None and as_ is not None and ga is not None and gs is not None:
-                if apply_signs:
-                    reader.set_axis_map(aa, as_, ga, gs)
-                else:
-                    reader.set_axis_map(aa, (1, 1, 1), ga, (1, 1, 1))
-            bias = parse_imu_bias(str(settings.get("gyro_bias", "")))
-            if bias is not None:
-                reader.set_gyro_bias(bias)
-        except Exception:
-            pass
+        """軸変換・バイアス設定を reader へ適用する。読めない項目は飛ばす。"""
+        imu_service.apply_axis_settings(reader, settings, apply_signs=apply_signs)
 
     @staticmethod
     def _hid_failure_message() -> str:
-        """HID直結を開始できなかった理由。IMU未有効と未接続を区別する。"""
-        try:
-            from pokecon.domain.nintendo_hid import get_shared_reader
-
-            reader = get_shared_reader()
-            is_open = getattr(reader, "is_open", None)
-            is_armed = getattr(reader, "is_armed", None)
-            from pokecon.domain.hidhide import hidhide_ready
-
-            if not hidhide_ready(force=True):
-                return (
-                    "HidHideが未導入・未設定のためHID直結を使えません。"
-                    "READMEのHidHide手順を確認してください。"
-                )
-            if callable(is_open) and callable(is_armed) and is_open():
-                if not is_armed():
-                    return (
-                        "ProConのIMUを有効化できませんでした"
-                        "（0x40/0x03の応答なし）。USBを挿し直してください。"
-                    )
-        except Exception:
-            pass
-        return "ProConが開けません。USB接続を確認してください。"
+        """HID 直結を開始できなかった理由。IMU 未有効と未接続を区別する。"""
+        return imu_service.hid_failure_message()
 
     def _do_start(self, source: str, pad: int) -> None:
         """送出開始の実体（作業スレッド）。"""
@@ -1267,6 +1519,10 @@ class ImuPanel:
             elif source == "file":
                 self._queue.put(
                     ("log", self._source_error or "記録を再生できませんでした。")
+                )
+            elif source == "mouse":
+                self._queue.put(
+                    ("log", self._source_error or "マウス入力を開始できませんでした。")
                 )
             else:
                 self._queue.put(
@@ -1309,55 +1565,9 @@ class ImuPanel:
                 panel._record_sample(out)
                 panel._push_view(out)
                 return out
-            trim = panel._live_trim
-            hid_bias_raw: tuple[int, int, int] | None = None
-            hid_scale: tuple[float, float, float] | None = None
-            if trim is None:
-                gyro_scale, dead_raw = 1.0, 0.0
-                acc_signs = (1, 1, 1)
-                gyr_signs = (1, 1, 1)
-            else:
-                (
-                    gyro_scale,
-                    dead_raw,
-                    acc_signs,
-                    gyr_signs,
-                    hid_bias_raw,
-                    hid_scale,
-                ) = trim
-            # HID直結のバイアスは、軸変換後（source側で適用済み）・符号
-            # 適用前の生値から引く。SDL路は reader 側が引いているため
-            # hid_bias_raw は None（二重適用しない）。
-            if hid_bias_raw is not None:
-                gx = max(-32768, min(32767, gx - hid_bias_raw[0]))
-                gy = max(-32768, min(32767, gy - hid_bias_raw[1]))
-                gz = max(-32768, min(32767, gz - hid_bias_raw[2]))
-            if hid_scale is not None and hid_scale != (1.0, 1.0, 1.0):
-                gx = max(-32768, min(32767, int(round(gx * hid_scale[0]))))
-                gy = max(-32768, min(32767, int(round(gy * hid_scale[1]))))
-                gz = max(-32768, min(32767, int(round(gz * hid_scale[2]))))
-            # 符号は入力源ではなくここで一度だけ掛ける（二重適用防止）。
-            ax = max(-32768, min(32767, ax * acc_signs[0]))
-            ay = max(-32768, min(32767, ay * acc_signs[1]))
-            az = max(-32768, min(32767, az * acc_signs[2]))
-            gx = max(-32768, min(32767, gx * gyr_signs[0]))
-            gy = max(-32768, min(32767, gy * gyr_signs[1]))
-            gz = max(-32768, min(32767, gz * gyr_signs[2]))
-            if gyro_scale != 1.0:
-                # コンソール側のスケール解釈が想定と違う場合の実測トリム。
-                gx = max(-32768, min(32767, int(round(gx * gyro_scale))))
-                gy = max(-32768, min(32767, int(round(gy * gyro_scale))))
-                gz = max(-32768, min(32767, int(round(gz * gyro_scale))))
-            if dead_raw > 0.0:
-                # 不感帯。各軸独立に潰す。
-                try:
-                    from pokecon.domain.imu_wave import apply_gyro_deadband
-
-                    ax, ay, az, gx, gy, gz = apply_gyro_deadband(
-                        (ax, ay, az, gx, gy, gz), dead_raw
-                    )
-                except Exception:
-                    pass
+            ax, ay, az, gx, gy, gz = imu_service.trim_and_scale_sample(
+                (ax, ay, az, gx, gy, gz), panel._live_trim
+            )
 
             peak_g = max(abs(gx), abs(gy), abs(gz)) * 0.06103
             peak_a = max(abs(ax), abs(ay), abs(az)) * 0.000244
@@ -1391,6 +1601,9 @@ class ImuPanel:
                 interval_s = float(self._player.period_us) / 1_000_000.0
             except Exception:
                 interval_s = None
+        elif source == "mouse" and self._mouse_interval_s > 0:
+            # FWの0x30と同じ5ms。角度の積分はこの周期で行う。
+            interval_s = self._mouse_interval_s
         # 手動の開始は、マクロのジャイロ再生より利用者の意思を優先する。
         # replace=True で引き継ぎ、停止は owner="panel" のときだけ行う
         # （マクロの後始末がパネルの送出を巻き込まない）。
@@ -1418,6 +1631,43 @@ class ImuPanel:
             self._close_source()
             return
         self._streaming = True
+        self._stream_source = source
+        if source == "mouse" and self._mouse_capture is not None:
+            capture = self._mouse_capture
+            try:
+                capture.set_enabled(True, "start")
+            except Exception:
+                pass
+            source_obj = self._mouse_source
+            hotkey = "ctrl+alt+m"
+            if source_obj is not None:
+                try:
+                    hotkey = source_obj.config.hotkey
+                except Exception:
+                    pass
+            if capture.enabled():
+                self._queue.put(
+                    (
+                        "log",
+                        f"マウス入力を開始しました（{hotkey} で解除 / Escで停止）。",
+                    )
+                )
+                reset_hotkey = ""
+                if source_obj is not None:
+                    try:
+                        reset_hotkey = source_obj.config.reset_hotkey
+                    except Exception:
+                        reset_hotkey = ""
+                if reset_hotkey:
+                    self._queue.put(("log", f"姿勢リセット: {reset_hotkey}"))
+            else:
+                self._queue.put(
+                    (
+                        "log",
+                        "マウス入力は待機中です。PokeConを前面にして"
+                        f"{hotkey} を押すと再開します。",
+                    )
+                )
         self._queue.put(("state", "streaming"))
         self._queue.put(("log", "ジャイロ送信を開始しました。"))
 
@@ -1444,6 +1694,7 @@ class ImuPanel:
                 pass
         self._close_source()
         self._streaming = False
+        self._stream_source = ""
         self._queue.put(("state", "stopped"))
         self._queue.put(("log", "ジャイロ送信を停止しました。"))
 
@@ -1453,6 +1704,7 @@ class ImuPanel:
         HID直結はパッド読みと共有しているため、ここでは閉じない
         （閉じるとボタン入力が止まる）。プロセス終了時に任せる。
         """
+        self._close_mouse_capture()
         self._close_recorder()
         self._playing = False
         self._player = None
@@ -1461,19 +1713,7 @@ class ImuPanel:
         self._preview_controls = PreviewControls()
         self._preview_controls_at = 0.0
         self._step_gen = None
-        if reader is None:
-            return
-        try:
-            from pokecon.domain.nintendo_hid import is_shared_reader
-
-            if is_shared_reader(reader):
-                return
-        except Exception:
-            pass
-        try:
-            reader.close()
-        except Exception:
-            pass
+        imu_service.close_sensor_reader(reader)
 
     def _close_recorder(self) -> None:
         """記録を閉じ、件数を1行出す。例外は投げない。"""
@@ -1517,12 +1757,35 @@ class ImuPanel:
                     preview, exc = payload
                     preview.close()
                     self._log(f"3Dプレビューを停止しました: {exc!r}")
+                elif kind == "mouse_capture":
+                    capture, enabled, reason = payload
+                    if capture is not self._mouse_capture:
+                        # 停止済み・作り直し前のインスタンスの通知。
+                        continue
+                    was_on = self._mouse_capture_on
+                    self._mouse_capture_on = bool(enabled)
+                    self._release_pad_pointer_state()
+                    self._set_mouse_cursor_hidden(bool(enabled))
+                    if not enabled and was_on and reason == "focus":
+                        self._log(
+                            "マウス入力を解除しました（PokeConが前面にありません）。"
+                        )
+                    elif reason == "hotkey":
+                        if enabled:
+                            self._log("マウス入力を再開しました。")
+                        else:
+                            self._log("マウス入力を解除しました（ホットキー）。")
                 elif kind == "state":
                     try:
                         if payload == "streaming":
                             self._btn_toggle.configure(text="停止")
                         else:
                             self._btn_toggle.configure(text="開始")
+                            # 開始失敗でカーソルを隠したままにしない。
+                            # 古い停止通知が新しい開始後に届いても、
+                            # 送出中なら触らない。
+                            if not self._streaming and not self._starting:
+                                self._set_mouse_cursor_hidden(False)
                     except Exception:
                         pass
                 elif kind == "playback_end":
@@ -1546,7 +1809,9 @@ class ImuPanel:
         except Exception:
             pass
         try:
-            self.frame.after(500, self._poll)
+            # マウスキャプチャ中は解除の反映を待たせない。通常は500ms。
+            delay = 100 if self._stream_source == "mouse" or self._starting else 500
+            self.frame.after(delay, self._poll)
         except Exception:
             pass
 
@@ -1596,6 +1861,34 @@ class ImuPanel:
                     owner_note = f"（{owner} が送出中）"
         except Exception:
             info = None
+        mouse_txt = ""
+        if self._stream_source == "mouse":
+            mouse_txt = f" マウス={'ON' if self._mouse_capture_on else 'OFF'}"
+            if self._mouse_capture_on:
+                mouse_txt += "(Esc停止)"
+            source_obj = self._mouse_source
+            if source_obj is not None:
+                try:
+                    mouse_stats = source_obj.stats()
+                    dropped = float(mouse_stats.get("dropped_deg", 0.0))
+                    if dropped >= 0.05:
+                        mouse_txt += f" 捨て={dropped:.1f}°"
+                    events = float(mouse_stats.get("events", 0.0))
+                    now = time.monotonic()
+                    if (
+                        self._mouse_last_events is not None
+                        and self._mouse_last_events_t is not None
+                    ):
+                        span = now - self._mouse_last_events_t
+                        if span > 0:
+                            mouse_txt += (
+                                f" 入力="
+                                f"{(events - self._mouse_last_events) / span:.0f}/s"
+                            )
+                    self._mouse_last_events = events
+                    self._mouse_last_events_t = now
+                except Exception:
+                    pass
         try:
             if isinstance(info, dict):
                 sent_now = int(info.get("sent", 0))
@@ -1611,12 +1904,12 @@ class ImuPanel:
                     f"送出中 sent={info.get('sent', 0)}"
                     f" dropped={info.get('dropped', 0)}{rate_txt}"
                     f" peak|g|={peak_g:.1f}dps peak|a|={peak_a:.2f}G {span_txt}"
-                    f"{rec_txt}{owner_note}"
+                    f"{mouse_txt}{rec_txt}{owner_note}"
                 )
             else:
                 self._stats_var.set(
                     f"送出中 peak|g|={peak_g:.1f}dps peak|a|={peak_a:.2f}G "
-                    f"{span_txt}{rec_txt}{owner_note}"
+                    f"{span_txt}{mouse_txt}{rec_txt}{owner_note}"
                 )
         except Exception:
             pass
@@ -1627,10 +1920,6 @@ class ImuPanel:
         preview, self._motion_preview = self._motion_preview, None
         if preview is not None:
             preview.close()
-        try:
-            self._collapse_detail()
-        except Exception:
-            pass
         # 開始/停止ワーカーが走っている間に別の停止を重ねない。
         deadline = time.monotonic() + 1.0
         while (self._starting or self._stopping) and time.monotonic() < deadline:
@@ -1645,3 +1934,16 @@ class ImuPanel:
                 pass
         elif not self._streaming:
             self._close_source()
+        # キャプチャが残っていても、ここで必ず止めてカーソルを戻す。
+        try:
+            self._close_mouse_capture()
+        except Exception:
+            pass
+        self._release_pad_pointer_state()
+        self._set_mouse_cursor_hidden(False)
+        for target, funcid in self._esc_bindings:
+            try:
+                target.unbind("<Escape>", funcid)
+            except Exception:
+                pass
+        self._esc_bindings = []

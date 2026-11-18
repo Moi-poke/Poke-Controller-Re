@@ -73,7 +73,7 @@ def test_start_clears_state_when_the_thread_cannot_be_created(
     def boom(*_args: Any, **_kwargs: Any) -> Any:
         raise RuntimeError("no thread")
 
-    monkeypatch.setattr("Commands.PythonCommandBase.threading.Thread", boom)
+    monkeypatch.setattr("pokecon.app.python_command_base.threading.Thread", boom)
 
     assert cmd.start(None) is False
     # 失敗したまま _running を残すと、以後このコマンドは二度と起動できない
@@ -83,11 +83,11 @@ def test_start_clears_state_when_the_thread_cannot_be_created(
 
 
 def test_start_hands_the_gui_poll_a_root(monkeypatch: pytest.MonkeyPatch) -> None:
-    from Commands import CommandDialog
+    from pokecon.ui import command_dialog
 
     scheduled: list[Any] = []
     monkeypatch.setattr(
-        CommandDialog, "_ensure_gui_poll", lambda root: scheduled.append(root)
+        command_dialog, "_ensure_gui_poll", lambda root: scheduled.append(root)
     )
 
     class _Root:

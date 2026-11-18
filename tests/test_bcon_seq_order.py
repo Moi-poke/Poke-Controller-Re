@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import threading
 
-from pokecon.domain.transport import create_transport
+from pokecon.domain.transport import BconTransport
 from pokecon.domain.transport.bcon_protocol import T_PING
 
 
@@ -42,7 +42,7 @@ def test_wire順序は採番順と一致する():
     When: 別スレッドがもう1発の会話フレームを送る。
     Then: 線上のSEQ順は採番順[10, 11]のまま（逆転[11, 10]は欠番扱いでFWが0x03）。
     """
-    made = create_transport("bcon")
+    made = BconTransport()
     ser = _BlockingFirstSer()
     made.ser = ser
     with made._lock:

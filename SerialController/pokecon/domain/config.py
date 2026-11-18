@@ -112,8 +112,8 @@ def default_sections() -> dict[str, dict[str, Any]]:
             # プロファイルごとの色（#RRGGBB）。空文字なら色を出さない。
             # 候補は core.display_mode.PROFILE_COLORS が正。
             "profile_color": "",
-            # 欄の並べ方。log_right（ログを右）/ log_bottom（ログを下）/
-            # side（右にタブとログ）/ stack（縦一列）。
+            # 欄の並べ方。tabs_right（タブを右・全高）/ log_right（ログを右）/
+            # log_bottom（ログを下）。旧値 side / stack は読込時に自動移行する。
             # 候補は core.pane_arrangement.ARRANGEMENTS が正。
             "arrangement": DEFAULT_ARRANGEMENT,
             # 設定タブとログ欄の表示（False で折りたたむ）。
@@ -310,6 +310,45 @@ def default_sections() -> dict[str, dict[str, Any]]:
             # 相対パスも可（起動時に os.chdir(BASE_DIR) される）。
             "record_path": "records/motion.pgyro",
             "play_path": "",
+            # マウスでジャイロを操作する入力源。移動量 [count] を角度へ
+            # 直し、未送出分を次のサンプルへ繰り越す。
+            # sensitivity は deg/count（800DPIで約23cm/360°が0.05）。
+            "mouse_sensitivity": 0.05,
+            "mouse_ratio_y": 1.0,
+            "mouse_invert_x": False,
+            "mouse_invert_y": False,
+            # ヨー/ピッチを載せるジャイロ軸（0..2）と符号（+1/-1）。
+            # 既定は機体座標の Z=ヨー・Y=ピッチ、右移動で右向き。
+            "mouse_yaw_axis": 2,
+            "mouse_yaw_sign": -1,
+            "mouse_pitch_axis": 1,
+            "mouse_pitch_sign": 1,
+            # 未送出角度の上限 [度]。速いフリックの遅れを抑える。
+            "mouse_backlog_deg": 30.0,
+            # 1サンプルに出す割合（0.05..1.0）。1.0で全量。
+            "mouse_smoothing": 1.0,
+            # 送出台の姿勢に合わせて加速度（重力）を回す。ゲームが
+            # 重力でピッチを水平へ戻すのを防ぐ。0で固定重力。
+            "mouse_gravity_follow": True,
+            # 感度補助。DPIと「マウス何cmで360°」から感度を逆算する。
+            "mouse_dpi": 800,
+            "mouse_cm_per_360": 20.0,
+            # ジャイロ係数 [dps/LSB]。実機のSPI較正で確定させるまでの
+            # 上書き口（既定は0x30の公称値）。
+            "mouse_deg_per_lsb": 0.06103,
+            # PC→Picoのサンプル周期 [ms]。0x30の5ms×3に合わせる。
+            "mouse_interval_ms": 5,
+            # ピッチの上限 [度]。真上・真下でヨー軸が定まらないのを避ける。
+            "mouse_pitch_limit_deg": 89.0,
+            # ロール操作の修飾。none / right（右ボタン中） / shift。
+            # ロール軸は機体X（前後）が既定。
+            "mouse_roll_modifier": "none",
+            "mouse_roll_axis": 0,
+            "mouse_roll_sign": 1,
+            # 姿勢を水平・正面へ戻すホットキー。
+            "mouse_reset_hotkey": "ctrl+alt+r",
+            # キャプチャ解除のグローバルホットキー（修飾キー必須）。
+            "mouse_hotkey": "ctrl+alt+m",
         },
     }
 
@@ -524,8 +563,8 @@ def complete_missing(
             if arrangement != "log_right":
                 window["arrangement"] = "log_right"
                 changed.append("Window.arrangement")
-        elif normalize_arrangement(arrangement) != arrangement:
-            window["arrangement"] = DEFAULT_ARRANGEMENT
+        elif (normalized_arr := normalize_arrangement(arrangement)) != arrangement:
+            window["arrangement"] = normalized_arr
             changed.append("Window.arrangement")
         sashes = window.get("pane_sashes", "")
         if sashes and format_sash_ratios(parse_sash_ratios(sashes)) != sashes:
@@ -581,6 +620,7 @@ def complete_missing(
         if imu.get("source", "").strip() not in (
             "sensor",
             "hid",
+            "mouse",
             "file",
             "sine",
             "step",
@@ -601,6 +641,14 @@ def complete_missing(
             "manual_gy": ("0", lambda value: -32768 <= value <= 32767),
             "manual_gz": ("0", lambda value: -32768 <= value <= 32767),
             "acc_y": ("0", lambda value: -32768 <= value <= 32767),
+            "mouse_yaw_axis": ("2", lambda value: 0 <= value <= 2),
+            "mouse_pitch_axis": ("1", lambda value: 0 <= value <= 2),
+            "mouse_yaw_sign": ("-1", lambda value: value in (-1, 1)),
+            "mouse_pitch_sign": ("1", lambda value: value in (-1, 1)),
+            "mouse_interval_ms": ("5", lambda value: 1 <= value <= 20),
+            "mouse_dpi": ("800", lambda value: 100 <= value <= 32000),
+            "mouse_roll_axis": ("0", lambda value: 0 <= value <= 2),
+            "mouse_roll_sign": ("1", lambda value: value in (-1, 1)),
         }
         for key, (dflt, ok) in int_rules.items():
             try:
@@ -615,6 +663,13 @@ def complete_missing(
             "step_duration_s": ("4.0", lambda value: value > 0),
             "gyro_dead_dps": ("0.0", lambda value: 0 <= value <= 100),
             "gyro_scale": ("1.0", lambda value: 0.01 <= value <= 4.0),
+            "mouse_sensitivity": ("0.05", lambda value: 0.0001 <= value <= 10.0),
+            "mouse_ratio_y": ("1.0", lambda value: 0.05 <= value <= 10.0),
+            "mouse_backlog_deg": ("30.0", lambda value: 0.0 <= value <= 360.0),
+            "mouse_smoothing": ("1.0", lambda value: 0.05 <= value <= 1.0),
+            "mouse_deg_per_lsb": ("0.06103", lambda value: 0.01 <= value <= 0.2),
+            "mouse_cm_per_360": ("20.0", lambda value: 1.0 <= value <= 100.0),
+            "mouse_pitch_limit_deg": ("89.0", lambda value: 1.0 <= value <= 89.0),
         }
         for key, (dflt, ok) in float_rules.items():
             try:
@@ -648,6 +703,27 @@ def complete_missing(
         if parse_imu_scale(imu.get("hid_gyro_scale", "")) is None:
             imu["hid_gyro_scale"] = "1.0,1.0,1.0"
             changed.append("IMU.hid_gyro_scale")
+        for key in (
+            "mouse_invert_x",
+            "mouse_invert_y",
+            "mouse_gravity_follow",
+        ):
+            if _parse_bool(imu.get(key, "")) is None:
+                imu[key] = "0" if key != "mouse_gravity_follow" else "1"
+                changed.append(f"IMU.{key}")
+        if not str(imu.get("mouse_hotkey", "") or "").strip():
+            imu["mouse_hotkey"] = "ctrl+alt+m"
+            changed.append("IMU.mouse_hotkey")
+        if str(imu.get("mouse_roll_modifier", "")).strip().lower() not in (
+            "none",
+            "right",
+            "shift",
+        ):
+            imu["mouse_roll_modifier"] = "none"
+            changed.append("IMU.mouse_roll_modifier")
+        if not str(imu.get("mouse_reset_hotkey", "") or "").strip():
+            imu["mouse_reset_hotkey"] = "ctrl+alt+r"
+            changed.append("IMU.mouse_reset_hotkey")
     return changed
 
 

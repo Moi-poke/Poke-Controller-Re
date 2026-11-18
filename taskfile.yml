@@ -96,7 +96,7 @@ tasks:
   clean:
     desc: 生成物（__pycache__ / .mypy_cache / 起動ログ残骸）の掃除（OS共通）
     cmds:
-      - uv run --frozen python -c "import pathlib,shutil,tempfile; [shutil.rmtree(p,ignore_errors=True) for p in pathlib.Path('.').rglob('__pycache__')]; shutil.rmtree('.mypy_cache',ignore_errors=True); [p.unlink(missing_ok=True) for p in pathlib.Path(tempfile.gettempdir()).glob('pokecon_boot_*.log')]"
+      - uv run --frozen python -c "import pathlib,shutil,tempfile; [shutil.rmtree(p,ignore_errors=True) for p in pathlib.Path('.').rglob('__pycache__')]; shutil.rmtree('.mypy_cache',ignore_errors=True); [p.unlink(missing_ok=True) for d in (pathlib.Path('.'), pathlib.Path(tempfile.gettempdir())) for p in d.glob('pokecon_boot_*.log')]"
 
   setup_dev:
     desc: 開発環境の準備（pre-commitフックの有効化）

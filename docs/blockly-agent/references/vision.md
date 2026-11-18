@@ -1,38 +1,31 @@
 # 画像認識の作り方
 
-対象を「見た目」で判別するマクロを、実画像から組み立てる手順。
-生成・検査・保存、ローカル画像の切出し・照合、試行 preview は実機なしで動く。
-`frame` と `trial --allow-input` は、その clone の本体と対象プロファイルの Blockly エディタが必要。
-preview も `--server` と `--max-seconds` を引数に取るが、接続も入力もしない。
+対象を「見た目」で判別するマクロを、実画像から組み立てる手順である。生成・検査・保存、ローカル画像の切出し・照合、試行 preview は実機なしで動作する。`frame` と `trial --allow-input` を使うには、その clone の本体と対象プロファイルの Blockly エディタが必要である。なお、preview も `--server` と `--max-seconds` を引数に取るが、接続も入力も行わない。
+
 共通の前提・権限は [手順](../README.md)、全オプションと版の区別は [CLI 契約](cli.md) を参照する。
 
 ## 1. 画像を用意する
 
-次のどちらか。保存画像だけに限定しない。
+保存済み画像を使うかエディタの現在画面を取得する（保存画像だけに限定しない）。
 
 ```sh
 # ユーザーが開いているエディタの現在画面（生フレーム）を保存する
 uv run --frozen python tools/blockly_agent.py frame --server "<origin>" --output probe/live.png --json
 ```
 
-- 本体のエディタ起動ダイアログで「URLをコピー」し、`/editor.html` 等のパスを除いた origin を `<origin>` に入れる。`--server` はユーザーが開いたエディタの origin（`http://127.0.0.1:<port>` / `http://localhost:<port>`）だけ。固定ポートや他プロファイルを探さず、LAN へ公開しない。
-- カメラを直接開き直さない。取得できなければ理由が返るので、保存済みスクショの経路へ切り替える。
-- 出力先の親は作られるが、既存ファイルは上書きしない（消さずに別名へ）。
+- **origin の指定**: 本体のエディタ起動ダイアログで「URLをコピー」し、`/editor.html` 等のパスを除いた origin を `<origin>` に入れる。`--server` にはユーザーが開いたエディタの origin（`http://127.0.0.1:<port>` / `http://localhost:<port>`）だけを指定し、固定ポートや他プロファイルを探さず、LAN へ公開しない。
+- **カメラと代替経路**: カメラを直接開き直さない。取得できなければ理由が返るので、保存済みスクショの経路へ切り替える。
+- **上書きの防止**: 出力先の親フォルダは作成されるが、既存ファイルは上書きしない（消さずに別名で保存する）。
 
-画像は必ず自分で開いて意味を読む。CLI が返す `width`/`height` が原画像の画素寸法。縮小表示の座標をそのまま使わない。
+画像は必ず自分で開いて意味を読み取る。CLI が返す `width` / `height` が原画像の画素寸法であり、縮小表示の座標をそのまま使わない。
 
 ### 操作しないと検証用の画像を得られない場合
 
-操作前の画面を保存し、対象の有無を確認して正例・負例のどちらに使えるかを判断する。
-不足する画像を採取するための短い Blockly を作り、送る入力・対象 URL・上限秒数を示して許可を得てから、`trial --allow-input` で採取する。
-採取版と、採取後に作る合否判定版はコードが異なるため、許可と `codeSha256` を別々に扱う。
+操作前の画面を保存し、対象の有無を確認して正例・負例のどちらに使えるかを判断する。不足する画像を採取するための短い Blockly を作り、送る入力・対象 URL・上限秒数を示して許可を得てから、`trial --allow-input` で採取する。採取版と、採取後に作る合否判定版はコードが異なるため、許可と `codeSha256` を別々に扱う。
 
-現行のスクリーンショットブロックは、保存名を秒単位の日時で作る。
-同じ秒に複数回実行すると同名画像を上書きするため、呼出し回数を保存枚数とみなさない。
-採取後にファイル数・時刻・画像内容を確認し、操作段階と観測結果を対応付ける。
-入力を伴わない `frame` で採取できる場合は、`step-01-before.png` / `step-01-after.png` など別々の `--output` を指定する。
-スクリーンショットブロックで全画像を残す必要がある場合は、操作を終えて安全に待機できる状態で、保存を 1 秒超ずつ離す。
-撮影間隔を空けるために、操作自体の継続時間を延ばさない。
+現行のスクリーンショットブロックは保存名を秒単位の日時で作るため、同じ秒に複数回実行すると同名画像を上書きする。呼出し回数を保存枚数とみなさず、採取後にファイル数・時刻・画像内容を確認し、操作段階と観測結果を対応付ける。
+
+入力を伴わない `frame` で採取できる場合は、`step-01-before.png` / `step-01-after.png` など別々の `--output` を指定する。スクリーンショットブロックで全画像を残す必要がある場合は、操作を終えて安全に待機できる状態で、保存を 1 秒超ずつ離す。撮影間隔を空けるために、操作自体の継続時間を延ばさない。
 
 ## 2. 対象を切り出す
 
@@ -40,10 +33,10 @@ uv run --frozen python tools/blockly_agent.py frame --server "<origin>" --output
 uv run --frozen python tools/blockly_agent.py template --image probe/live.png --name ready --rect x1 y1 x2 y2 --app-dir "<app>" --json
 ```
 
-- `--rect` は原画像の整数画素 `x1 y1 x2 y2`（`x2>x1`, `y2>y1`, 画像内）。
-- 保存先は固定で `Template/blockly/<name>.png`。8px 未満の辺は拒否。同名は `_2` などの連番になる。
-- 成功 JSON の `template`（例 `blockly/ready.png`）を、以後の `TEMPLATE` と `match --template` にそのまま使う。返された実名を使い、自分で決め直さない。
-- 切出し矩形（`--rect`）と、実行時の検索範囲（`CROP`）は別物。混同しない。
+- **`--rect` の指定**: 原画像の整数画素 `x1 y1 x2 y2`（`x2>x1`, `y2>y1`, 画像内）を指定する。
+- **保存先と命名**: 保存先は `Template/blockly/<name>.png` で固定である。8px 未満の辺は拒否され、同名のファイルが存在する場合は `_2` などの連番になる。
+- **返された実名の使用**: 成功 JSON の `template`（例: `blockly/ready.png`）を、以後の `TEMPLATE` と `match --template` にそのまま使う。返された実名を使い、自分で決め直さない。
+- **切出し矩形と検索範囲の区別**: 切出し矩形（`--rect`）と実行時の検索範囲（`CROP`）は別物であるため、混同しない。
 
 ## 3. 正例・負例で照合する
 
@@ -56,15 +49,15 @@ uv run --frozen python tools/blockly_agent.py match --image probe/negative.png -
 
 読む項目:
 
-- `score`（一致度 0〜1）と `matched`（`score >= threshold`）。低い `score` の `rect` を「検出位置」と呼ばない。`matched` と併読する。
-- `rect` は原画像座標。`--crop` を付けた場合はその ROI 内の一致位置を原画像座標へ戻したもの。
-- `count` は最大20件までの試し打ち。20件超の厳密な個数確認には使わない（必要なら実行時の `countTemplate(..., max_count=必要数)` を別途確認する）。
-- `--preview` は原画像に検索 ROI と最大一致箇所を描く。緑＝ヒット、赤系＝ミス。画像を開いて、枠が対象の上にあるかを目で確かめる。
+- **`score` と `matched`**: `score`（一致度 0〜1）と `matched`（`score >= threshold`）を確認する。低い `score` の `rect` を「検出位置」と呼ばず、`matched` とあわせて読む。
+- **`rect`**: 原画像座標である。`--crop` を付けた場合は、その ROI 内の一致位置を原画像座標へ戻した値が返る。
+- **`count`**: 最大 20 件までの試し打ち用である。20 件超の厳密な個数確認には使わない（必要なら実行時の `countTemplate(..., max_count=必要数)` を別途確認する）。
+- **`--preview`**: 原画像に検索 ROI と最大一致箇所を描画する（緑＝ヒット、赤系＝ミス）。画像を開いて、枠が対象の上にあるかを目で確かめる。
 
 判定の目安:
 
-- 正例 `matched:true`、負例 `matched:false` になるまで、切出し領域・`--crop`・`--gray/--no-gray`・`--threshold` を見直す。
-- 正例と負例の `score` が近い／両方ヒットする／両方ミスするなら、その切り出しでは判別できない。特徴のある別領域を選ぶ。
+- 正例で `matched:true`、負例で `matched:false` になるまで、切出し領域・`--crop`・`--gray/--no-gray`・`--threshold` を見直す。
+- 正例と負例の `score` が近い／両方ヒットする／両方ミスするなら、その切り出しでは判別できないため、特徴のある別領域を選ぶ。
 - 負例が手元に無い場合、生成・保存はできるが「認識を検証済み」とは報告しない。
 - 負例には、対象が何も表示されていない画面だけでなく、見た目の似た別の対象や、成功条件を満たしていない状態も含める。
 - 同じ対象でも表示位置による描画差が出るため、採取元とは別のフレームを使い、位置が変わる対象は別の位置でも照合する。しきい値は正例の最小値と負例の最大値を比較して決め、対象ごとの条件と実測値を残す。
@@ -77,10 +70,10 @@ uv run --frozen python tools/blockly_agent.py match --image probe/negative.png -
 uv run --frozen python tools/blockly_agent.py color --image probe/live.png --lower H S V --upper H S V --ratio 0.6 --crop x1 y1 x2 y2 --preview probe/mask.png --app-dir "<app>" --json
 ```
 
-- `ratio` は実測割合（0〜1）。`--ratio` は合格基準。**実測値と基準を混同しない。**
-- HSV の範囲は OpenCV の値（H は 0〜179）。赤のように色相が 0 を跨ぐ場合は、`lower` の H を大きく（例 170）、`upper` を小さく（例 10）して渡す。跨ぎは既存実装が扱う。
-- `--preview` はマスク画像。`--crop` を付けると ROI だけの画像になる（原画像全体ではない）。
-- 画像の端に接する ROI も指定できる。範囲は画像内。
+- **`ratio` と `--ratio`**: `ratio` は実測割合（0〜1）であり、`--ratio` は合格基準である。**実測値と基準を混同しない。**
+- **HSV の範囲指定**: HSV の範囲は OpenCV の値（H は 0〜179）を使う。赤のように色相が 0 を跨ぐ場合は、`lower` の H を大きく（例: 170）、`upper` を小さく（例: 10）して渡す（跨ぎは既存実装が扱う）。
+- **`--preview` の出力**: `--preview` ではマスク画像を出力する。`--crop` を付けると ROI だけの画像になる（原画像全体ではない）。
+- **画面端の ROI**: 画像の端に接する ROI も指定できるが、範囲は画像内に収める必要がある。
 
 ## 5. ブロックへ入れる
 
@@ -93,9 +86,9 @@ uv run --frozen python tools/blockly_agent.py color --image probe/live.png --low
  "do": [ ... ], "else": [ ... ]}
 ```
 
-色方式は `pokecon_vision_color_area` 系の `H1/S1/V1/H2/S2/V2/RATIO/CROP` に、上で決めた実測条件を入れる。`CROP` は空か `x1,y1,x2,y2`。
+色方式では、`pokecon_vision_color_area` 系の `H1/S1/V1/H2/S2/V2/RATIO/CROP` に、上で決めた実測条件を入れる。`CROP` には空または `x1,y1,x2,y2` を指定する。
 
-待ち・条件・試し打ちで同じ `TEMPLATE/THRESHOLD/CROP/USE_GRAY` を使う。片方だけ変えると、待ったのに条件で外れる（またはその逆）ことがある。
+待ち・条件・試し打ちでは同じ `TEMPLATE/THRESHOLD/CROP/USE_GRAY` を使う。片方だけ変えると、待ったのに条件で外れる（またはその逆）ことがある。
 
 ## 6. 操作と認識結果を組み合わせる
 
@@ -127,15 +120,13 @@ uv run --frozen python tools/blockly_agent.py color --image probe/live.png --low
 }
 ```
 
-- 待ちブロックは戻り値をコードで捨てるため、「待つ→A」だけにしない。待った後に `pokecon_vision_contains` で改めて判定し、成功側だけ入力する。
-- 失敗側は入力を送らず、表示して終了する。
-- `TIMEOUT` は待ちの上限。`trial` の `--max-seconds` はプロセス全体の上限で別物。両方を説明する。時間上限つきで試すときは `--max-seconds` を `TIMEOUT` より十分大きくする（または試行用に `TIMEOUT` を短くした版を別に作り、その版を許可する）。`--max-seconds` が `TIMEOUT` より短いと、待ちの途中で外側の上限に当たる。
+- **待ちブロック後の再判定**: 待ちブロックは戻り値をコードで捨てるため、「待つ→A」だけにしない。待った後に `pokecon_vision_contains` で改めて判定し、成功側だけ入力する。
+- **失敗側の扱い**: 失敗側は入力を送らず、表示して終了する。
+- **`TIMEOUT` と `--max-seconds` の違い**: `TIMEOUT` は待ちの上限であり、`trial` の `--max-seconds` はプロセス全体の上限で別物である。ユーザーには両方を説明する。時間上限つきで試すときは `--max-seconds` を `TIMEOUT` より十分大きくする（または試行用に `TIMEOUT` を短くした版を別に作り、その版を許可してもらう）。`--max-seconds` が `TIMEOUT` より短いと、待ちの途中で外側の上限に当たる。
 
 ### 操作前後の状態変化を検証する
 
-マクロを組む前に、操作できる画面・許可された操作・期待する結果・待ち時間の上限を決める。
-期待する表示が操作前から存在する場合や、過去の結果が残る場合は、操作後に同じ表示を検出するだけでは今回の操作が届いた証拠にならない。
-「すでに期待状態なら完了としてよい処理」と「今回の操作で状態が変わった証拠が必要な検証」を分けて設計する。
+マクロを組む前に、操作できる画面・許可された操作・期待する結果・待ち時間の上限を決める。期待する表示が操作前から存在する場合や、過去の結果が残る場合は、操作後に同じ表示を検出するだけでは今回の操作が届いた証拠にならない。「すでに期待状態なら完了としてよい処理」と「今回の操作で状態が変わった証拠が必要な検証」を分けて設計する。
 
 1. 画面を識別できる表示で前提条件を確認する。想定外の画面や操作禁止の状態なら、入力せず理由を記録して終了する。
 2. 操作前の状態を取得する。状態変化を検証する場合は、前後の違いを区別できなければ中断し、検証済みとしない。初期化や再操作が必要でも、許可されていない入力は送らない。
@@ -147,32 +138,30 @@ uv run --frozen python tools/blockly_agent.py color --image probe/live.png --low
 
 ## 7. 限定試行（実機入力を伴う）
 
-まず preview。入力は送られない。
+まず preview を実行する。この段階では入力は送られない。
 
 ```sh
 uv run --frozen python tools/blockly_agent.py check probe/ready-spec.json --app-dir "<app>" --json
 uv run --frozen python tools/blockly_agent.py trial probe/ready-spec.json --server "<origin>" --max-seconds 15 --app-dir "<app>" --json
 ```
 
-preview の JSON には `status:"preview"`, `codeSha256`, `code`, `workspace`, `server`, `maxSeconds` が入る。
-`codeSha256` は通常生成コードの LF 正規化 UTF-8 SHA256。
-preview の `code` には試行用の目印が入るため、自分で再ハッシュせず、返った `codeSha256` をそのまま使う。
+preview の JSON には `status:"preview"`, `codeSha256`, `code`, `workspace`, `server`, `maxSeconds` が入る。`codeSha256` は通常生成コードの LF 正規化 UTF-8 SHA256 である。preview の `code` には試行用の目印が入るため、自分で再ハッシュせず、返った `codeSha256` をそのまま使う。
 
 1. `code` を読み、実際に送る入力・上限・成功／失敗時の動作をユーザーへ示す。
-2. ユーザーがそのコード・URL・上限を許可したら、preview の `codeSha256` をそのまま渡す。
+2. ユーザーがそのコード・URL・上限を許可したら、preview の `codeSha256` をそのまま渡して実行する。
 
-```sh
-uv run --frozen python tools/blockly_agent.py trial probe/ready-spec.json --server "<origin>" --max-seconds 15 --app-dir "<app>" --allow-input --expected-sha256 "<codeSha256>" --json
-```
+   ```sh
+   uv run --frozen python tools/blockly_agent.py trial probe/ready-spec.json --server "<origin>" --max-seconds 15 --app-dir "<app>" --allow-input --expected-sha256 "<codeSha256>" --json
+   ```
 
-- `--allow-input` が無ければ、本体へ繋がず入力も送らない。
-- `--expected-sha256` が現在の生成コードと違えば、送信前に拒否される。preview の後にコードを変えたら、preview からやり直す。
-- サーバが `boundedTrial` と `runIdControl` を持たない（古い本体）、本体が別コマンド実行中、または試し実行中なら開始しない。
-- 結果 `status`: `completed`（終了0）/ `stopped` / `timed_out` / `failed` / `superseded`。`logs`・`blockId`・`error`・`errorBlock`・`timedOut` を確認する。
-- `completed` だけでは目的達成としない。失敗条件の分岐から `finish` で終了しても、試行自体は正常終了する。想定した各段階と最終条件への到達、失敗・中断ログの有無、前後画像を合わせて確認する。
-- 一時停止しても CLI は勝手に再開しない。時間上限は一時停止中も進む。
-- 通信が切れた・Ctrl+C・クライアント側の待ち上限超過では、自分の runId にだけ stop を1回送る。runId を受け取れていないときは、直近の試行を推測で止めない。
-- `--allow-input` は同意の記録でありサンドボックスではない。上限は GUI の見回りと協調停止による。OS／GUI が固まる場合のハードな期限保証はない。本体の Esc／停止ボタンも使える。
+- **`--allow-input` の有無**: `--allow-input` が無ければ、本体へ接続せず入力も送らない。
+- **`--expected-sha256` の照合**: `--expected-sha256` が現在の生成コードと違えば、送信前に拒否される。preview の後にコードを変えたら、preview からやり直す。
+- **開始されない条件**: サーバが `boundedTrial` と `runIdControl` を持たない（古い本体）、本体が別コマンド実行中、または試し実行中の場合は開始しない。
+- **結果の確認**: 結果の `status` は `completed`（終了コード 0）/ `stopped` / `timed_out` / `failed` / `superseded` となる。あわせて `logs`・`blockId`・`error`・`errorBlock`・`timedOut` を確認する。
+- **`completed` だけでは目的達成としない**: 失敗条件の分岐から `finish` で終了しても、試行自体は正常終了する。想定した各段階と最終条件への到達、失敗・中断ログの有無、前後画像を合わせて確認する。
+- **一時停止の扱い**: 一時停止しても CLI は勝手に再開しない。時間上限は一時停止中も進む。
+- **中断時の stop 送信**: 通信が切れた場合、Ctrl+C、およびクライアント側の待ち上限超過では、自分の runId にだけ stop を 1 回送る。runId を受け取れていないときは、直近の試行を推測で止めない。
+- **上限の性質と緊急停止**: `--allow-input` は同意の記録でありサンドボックスではない。上限は GUI の見回りと協調停止によるため、OS／GUI が固まる場合のハードな期限保証はない。本体の Esc／停止ボタンも使える。
 
 ## 8. 保存と再確認
 
@@ -180,11 +169,7 @@ uv run --frozen python tools/blockly_agent.py trial probe/ready-spec.json --serv
 uv run --frozen python tools/blockly_agent.py build probe/ready-spec.json --write --app-dir "<app>" --json
 ```
 
-保存済み作品の正本は `.blockly.json`、`.py` は派生物、コンパクト仕様は新規作成用入力。
-既存作品のしきい値・待ち時間だけを変えるなら、古い仕様から作り直さず `patch` を使う。
-`check --workspace --json` の `workspaceSha256` を控え、`--expect-current-sha256` と一緒に保存する。
-このガードはディスクの変更だけを検出し、ブラウザの未保存編集は検出しない。
-開いた画面との共同編集は `live` を使い、人が GUI で保存する。
+保存済み作品の正本は `.blockly.json`、`.py` は派生物であり、コンパクト仕様は新規作成用の入力である。既存作品のしきい値・待ち時間だけを変えるなら、古い仕様から作り直さず `patch` を使う。`check --workspace --json` で得た `workspaceSha256` を控え、`--expect-current-sha256` と一緒に指定して保存する。なお、このガードはディスクの変更だけを検出し、ブラウザの未保存編集は検出しない。開いた画面と共同編集する場合は `live` を使い、人が GUI で保存する。
 
 ```sh
 uv run --frozen python tools/blockly_agent.py patch MyBlock.blockly.json --ops ops.json --write --stem MyBlock --expect-current-sha256 "<workspaceSha256>" --app-dir "<app>" --json
@@ -200,5 +185,4 @@ uv run --frozen python tools/blockly_agent.py patch MyBlock.blockly.json --ops o
 - 実機へ送った入力とその結果
 - 未実施の検証（実機・別解像度・負例なし など）
 
-欠損画像・接続失敗・画像閲覧不可は不足を報告し、未確認の範囲を明記する。
-条件削除やダミー画像で成功にしない。
+欠損画像・接続失敗・画像閲覧不可がある場合は不足を報告し、未確認の範囲を明記する。条件の削除やダミー画像で成功扱いにしない。
