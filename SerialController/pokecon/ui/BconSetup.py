@@ -102,9 +102,8 @@ STATUS_FLAG_NAMES = (
 )
 STATUS_FLAG_WIRED = 0x20
 
-# 色の読みと荷造り・errcode説明の実体は core/procon_color.py にある。
-# ここでは旧名のまま読めるよう再公開だけする（利用者台本は
-# Commands/CommandColor.py から読む）。
+# 色の読みと荷造り・errcode説明の実体は domain/procon_color.py にある
+# （利用者台本は Commands/PythonCommandBase.py から読む）。
 
 
 def parse_capture_seconds(raw: Any) -> int | None:

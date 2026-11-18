@@ -46,10 +46,13 @@ def _good_code(extra_import: str) -> str:
     )
 
 
-def test_command_audio_accepted_everywhere(tmp_path: Path) -> None:
-    assert "CommandAudio" in ALLOWED_COMMANDS_SUBS
+def test_audio_base_via_python_command_base_accepted_everywhere(
+    tmp_path: Path,
+) -> None:
+    assert "PythonCommandBase" in ALLOWED_COMMANDS_SUBS
+    assert "CommandAudio" not in ALLOWED_COMMANDS_SUBS
     # blockly_validate は異常なし（error扱いの表面）。
-    code = _good_code("from Commands.CommandAudio import AudioPythonCommand")
+    code = _good_code("from Commands.PythonCommandBase import AudioPythonCommand")
     assert blockly_validate.validate_generated_code(code) == []
     # pack_zip は異常・注意なし。
     entry = tmp_path / "audio.py"
@@ -59,7 +62,15 @@ def test_command_audio_accepted_everywhere(tmp_path: Path) -> None:
     assert warnings == []
     # check_user_api の集合にも含まれる。
     check = _load_check_user_api()
-    assert "CommandAudio" in set(check.ALLOWED_COMMANDS_SUBS)
+    assert "PythonCommandBase" in set(check.ALLOWED_COMMANDS_SUBS)
+    assert "CommandAudio" not in set(check.ALLOWED_COMMANDS_SUBS)
+    # 廃止された暫定シム経路は各所で拒否される。
+    old_code = _good_code("from Commands.CommandAudio import AudioPythonCommand")
+    assert blockly_validate.validate_generated_code(old_code) != []
+    old_entry = tmp_path / "old_audio.py"
+    old_entry.write_text(old_code, encoding="utf-8")
+    old_errors, _ = pack_zip.scan_entry_imports(old_entry)
+    assert old_errors != []
 
 
 def test_sounddevice_accepted_everywhere(tmp_path: Path) -> None:

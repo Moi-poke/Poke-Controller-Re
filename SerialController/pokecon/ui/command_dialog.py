@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""CommandDialog.py - 入力ダイアログ（DialogMixin / PokeConDialogue）.
+"""command_dialog.py - 入力ダイアログ（DialogMixin / PokeConDialogue）.
 
-PythonCommandBase.py から対話部を切り出したもの。
+PythonCommandBase から対話部を切り出した UI モジュール。
 
 なぜ分けるか:
   ダイアログは tkinter に強く依存する一方、コマンドの実行制御・操作・
@@ -19,9 +19,9 @@ PythonCommandBase.py から対話部を切り出したもの。
   Mixin なので、重ねる側がこれらを持っていることが前提になる。
 
 互換:
-  PythonCommandBase.py が PokeConDialogue を re-import するので、
+  Commands/PythonCommandBase.py が PokeConDialogue を再公開するため、
       from Commands.PythonCommandBase import PokeConDialogue
-  と書いている既存のコードはそのまま動く。
+  と書いている既存の利用者スクリプトはそのまま動く。
 """
 
 from __future__ import annotations

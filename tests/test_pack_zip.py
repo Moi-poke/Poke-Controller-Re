@@ -108,7 +108,7 @@ def test_scan_entry_imports(tmp_path: Path) -> None:
 def test_scan_allows_command_audio_and_sounddevice(tmp_path: Path) -> None:
     audio = tmp_path / "audio.py"
     audio.write_text(
-        "from Commands.CommandAudio import AudioPythonCommand\n",
+        "from Commands.PythonCommandBase import AudioPythonCommand\n",
         encoding="utf-8",
     )
     errors, warnings = pack_zip.scan_entry_imports(audio)

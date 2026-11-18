@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-from Commands.CommandAudio import band_power
-from Commands.PythonCommandBase import AudioPythonCommand
+from Commands.PythonCommandBase import AudioPythonCommand, band_power
 
 
 # 色違いの音を検出する（listen_shiny.py の後継）。

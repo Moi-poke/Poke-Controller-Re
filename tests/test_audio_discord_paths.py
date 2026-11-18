@@ -14,9 +14,9 @@ from typing import Any
 
 import numpy as np
 import pytest
-from Commands import PythonCommandBase as pb
 from Commands.PythonCommandBase import ImageProcPythonCommand, PythonCommand
 from loguru import logger
+from pokecon.app import python_command_base as pb
 from pokecon.domain.CommandAudio import AudioMixin
 
 RATE = 44100

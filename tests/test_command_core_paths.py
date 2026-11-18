@@ -16,8 +16,8 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-from Commands import PythonCommandBase
 from Commands.PythonCommandBase import PythonCommand, StopThread
+from pokecon.app import python_command_base as PythonCommandBase
 from pokecon.domain import CommandOperate
 from pokecon.ui import LogPane
 

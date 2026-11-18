@@ -184,7 +184,7 @@ def test_dialog_mainloop_dead_aborts_as_cancel() -> None:
     """主循環が死んだ置き去りは有界でCancel扱いにし掃除する。"""
     import time as _time
 
-    from Commands.CommandDialog import DialogMixin
+    from pokecon.ui.command_dialog import DialogMixin
 
     class StubRoot:
         def after(self, _ms: int, _fn: Any) -> Any:
@@ -231,7 +231,7 @@ def test_dialog_mainloop_dead_aborts_as_cancel() -> None:
 
 def test_dialog_mainloop_dead_aborts_as_cancel_dict_shape() -> None:
     """置き去り abort の Cancel 形状は need=dict なら {}。"""
-    from Commands.CommandDialog import DialogMixin
+    from pokecon.ui.command_dialog import DialogMixin
 
     class StubRoot:
         def after(self, _ms: int, _fn: Any) -> Any:
@@ -273,7 +273,7 @@ def test_dialog_mainloop_dead_aborts_as_cancel_dict_shape() -> None:
 
 def test_gui_tasks_bounded_drop_oldest() -> None:
     """対話委譲の待ち行列は有界にし、溢れた分は古い方から捨てて数える。"""
-    from Commands import CommandDialog as D
+    from pokecon.ui import command_dialog as D
 
     try:
         for _ in range(D._GUI_TASKS_MAX + 20):
@@ -286,7 +286,7 @@ def test_gui_tasks_bounded_drop_oldest() -> None:
 
 def test_purge_gui_tasks_by_root() -> None:
     """root 単位で溜まりを捨てられる（主循環死の後始末用）。"""
-    from Commands import CommandDialog as D
+    from pokecon.ui import command_dialog as D
 
     class Root:
         pass
@@ -306,9 +306,9 @@ def test_cui_dialog_polls_stop(monkeypatch: Any) -> None:
     import threading as _th
     import tkinter as tk
 
-    import Commands.CommandDialog as _dlg
-    from Commands.CommandDialog import DialogMixin
+    import pokecon.ui.command_dialog as _dlg
     from pokecon.domain.CommandOperate import StopThread
+    from pokecon.ui.command_dialog import DialogMixin
 
     class Cmd(DialogMixin):
         def __init__(self) -> None:
@@ -407,8 +407,8 @@ def test_stress_stop_during_dialog_many(monkeypatch: Any) -> None:
     """対話中の停止を繰り返しても置き去りにしない。"""
     import threading as _th
 
-    from Commands.CommandDialog import DialogMixin
     from pokecon.domain.CommandOperate import StopThread
+    from pokecon.ui.command_dialog import DialogMixin
 
     class Cmd(DialogMixin):
         def __init__(self) -> None:
@@ -426,7 +426,7 @@ def test_stress_stop_during_dialog_many(monkeypatch: Any) -> None:
 
     import tkinter as tk
 
-    import Commands.CommandDialog as _dlg
+    import pokecon.ui.command_dialog as _dlg
 
     class FakeTop:
         def __init__(self, *_a: Any, **_k: Any) -> None:

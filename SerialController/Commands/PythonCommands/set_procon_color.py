@@ -12,14 +12,14 @@ bcon の口で COLOR_SET（send_config 0x32・12B）を1発送り、
 from typing import Any
 
 # 色の読み・荷造り・errcode説明の実体は domain/procon_color.py に1つだけ置く。
-from Commands.CommandColor import (
+from Commands.PythonCommandBase import (
+    PythonCommand,
     build_color_payload,
     describe_bcon_errcode,
     is_bcon_transport,
     parse_color_hex,
     send_config_frame,
 )
-from Commands.PythonCommandBase import PythonCommand
 
 # 色の並び: 本体 / ボタン / 左グリップ / 右グリップ
 #   本体色とボタン色は switchbrew の公式配色をそのまま使う。

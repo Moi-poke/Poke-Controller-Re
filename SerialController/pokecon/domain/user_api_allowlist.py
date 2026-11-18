@@ -36,16 +36,8 @@ FROZEN_COMMANDS_SUBS = frozenset(
     }
 )
 
-# PROVISIONAL: v4 で増えた経路。v4.0 が公開されるまでは利用者が存在
-#   しないので、自由に統合・改名・削除してよい。公開した時点で FROZEN
-#   へ移す（移動の判断はこのファイル1か所で行う）。
-PROVISIONAL_COMMANDS_SUBS = frozenset(
-    {
-        "CommandVision",
-        "CommandAudio",
-        "CommandColor",
-    }
-)
+# PROVISIONAL: v4 で増えた一時経路（v4.0 の一本化で PythonCommandBase へ統合済み）。
+PROVISIONAL_COMMANDS_SUBS: frozenset[str] = frozenset()
 
 # 検査が実際に使う集合（両段の和）。blockly_validate / pack_zip は
 #   「保存・配布を通してよいか」を見るので、段の区別までは要らない。
