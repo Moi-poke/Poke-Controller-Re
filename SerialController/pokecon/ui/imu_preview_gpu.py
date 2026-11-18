@@ -1,7 +1,7 @@
 """IMU 3D プレビューの GPU レンダラー（moderngl / OpenGL 3.3 core）。
 
 ``imu_preview`` の子プロセスから、pygame が作った OpenGL コンテキスト上で
-``controller_mesh.build_model()`` の三角形を描く。pygame の窓・イベント・
+``pokecon.domain.imu.build_model()`` の三角形を描く。pygame の窓・イベント・
 フォント初期化は呼び出し側の責任で、このモジュールは GPU 資源だけを扱う。
 
 描画の流れ:

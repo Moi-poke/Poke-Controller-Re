@@ -4,11 +4,11 @@
 
 `bcon` は Pico 2 W 用のバイナリ通信方式である。テキスト行を送る従来方式と違い、姿勢を STATE バイナリに組んで送り、応答の STATUS / PONG / ACK を読み取る。Pico 側と版を合わせる必要があり、接続には `HELLO` による握手が必須である。既定 baud は 1Mbps であり、Pico 側は認証後に BCBR へ永続保存する。
 
-接続先の相手に応じて使い分ける。本家 Leonardo には `legacy_text`、`switch-bcon` ファームを載せた Pico 2 W には `switch-bcon` または `switch-bcon-proc` を使う。旧名 `bcon` も受け付ける。
+接続先の相手に応じて使い分ける。本家 Leonardo には `legacy_text`、`switch-bcon` ファームを載せた Pico 2 W には `switch-bcon` を使う（標準は別プロセス `BconProcTransport`。同一プロセス版の内部テスト／開発用途は `switch-bcon-inproc`）。旧名 `bcon`・`switch-bcon-proc` も互換別名として `switch-bcon` へ解決する。
 
 ## 接続方式の選択と接続
 
-通信方式は `register_transport` の登録簿で管理する。組み込みは `legacy_text`、`switch-bcon`、`switch-bcon-proc` の 3 件である。「シリアル」タブの「通信方式」には表示名（マイコン直結（USB シリアル）、Pico UART（旧方式）、Pico 中継（USB）、Pico 中継（別プロセス））が並び、表に無い方式は登録キーをそのまま出す（候補から落とさない）。内部キーは保存・比較に使い、方式の説明は「通信の詳細設定」を開くと読める。プラグインで登録した方式も候補に加わる。
+通信方式は `register_transport` の登録簿で管理する。組み込みプリセットは `legacy_text` と `switch-bcon` の 2 件であり、内部・互換用に `switch-bcon-inproc` と別名 `bcon` / `switch-bcon-proc` を持つ。「シリアル」タブの「通信方式」には表示名（マイコン直結（USB シリアル）、Pico 中継（USB）など）が並び、表に無い方式は登録キーをそのまま出す（候補から落とさない）。内部キーは保存・比較に使い、方式の説明は「通信の詳細設定」を開くと読める。プラグインで登録した方式も候補に加わる。
 
 ### 利用者が通信方式を足す（v4 の manifest 方式）
 
@@ -43,7 +43,7 @@ def register(register_transport):
 
 読み込まなかったときは、その理由（`manifest.toml` が無い・`api_version` が違う・`min_app_version` が新しい・import か `register` が失敗した）をログと画面に出す。1 本が壊れても他の方式は読み込む。`api_version` は `pokecon/plugins/transports.py` の `API_VERSION` が正本であり、破壊的変更のときだけ上げる。
 
-`switch-bcon-proc` は送出路の別プロセス版である。操作面は `switch-bcon` と同じで、120Hz 送出・受信・会話 op を子プロセスで回し、GUI の GIL・描画負荷から切り離すため、送出タイミングのばらつき（p99）が小さくなる。子プロセスが停止した呼び出しは安全既定値（`False` / `None`）を返し、開き直しで復帰する。
+`switch-bcon` の標準実装は別プロセス版（`BconProcTransport`）であり、120Hz 送出・受信・会話 op を子プロセスで回して GUI の GIL・描画負荷から切り離すことで、送出タイミングのばらつき（p99）を小さくする（旧名 `switch-bcon-proc` もこの別名として統一されている）。子プロセスが停止した呼び出しは安全既定値（`False` / `None`）を返し、開き直しで復帰する。同一プロセス版は `switch-bcon-inproc`（`BconTransport`）である。
 
 起動時の優先順位は `--transport` が最上位であり、次が設定ファイルの `[Transport] name` である。`--transport` を付けると、設定を書き換えずにその場限りで試せる。名前が空・未知のときは `legacy_text` に戻る。
 
@@ -109,7 +109,7 @@ CONFIG の結果は操作前後の STATUS を比較して判断する。`errcode
 送信失敗、タブの非表示、窓の閉鎖、接続世代の変更で送信を中止したときも解放を試みる。切断済みや入力抑止中には送れないため、再接続後にキーが残っていれば「キー解放」を押す。
 
 ログの文字数は通信への書き込みが成功した押下レポート数であり、Switch に入力された文字数ではない。
-`switch-bcon-proc` も子プロセスが送信処理を実行した結果を待つ。入力抑止や HELLO 未確認による子の拒否は成功に数えない。
+`switch-bcon`（`BconProcTransport`）でも子プロセスが送信処理を実行した結果を待つ。入力抑止や HELLO 未確認による子の拒否は成功に数えない。
 Pico の受信と USB 出力は、この結果だけでは確認できない。実機ではファームの `kbr` / `kbd` と Switch の入力結果を確認する。
 
 ### API とフレーム
@@ -132,7 +132,7 @@ Pico の受信と USB 出力は、この結果だけでは確認できない。�
 6. Pico のログ UART0 で `kbr`（受信）/ `kbd`（USB 送出）が増えることを確認する。
 7. 「キー解放」を押し、キーが残らないことを確認する。
 8. 連続した文字列を送信し、完了後に「キー解放」を押す。その後、Pico と Switch ドックを結ぶ USB を抜き差しする。Pico は mount 時に現在の状態を再送するため、再列挙後にキーが残らないことを確認する。押下中に突然 USB が外れる場合の復帰も別途確認する。
-9. 無線モードでは Switch に文字が入力されないことを確認する。有線へ戻し、通信方式を `switch-bcon-proc` に変更して再接続し、手順3～8を繰り返す。
+9. 無線モードでは Switch に文字が入力されないことを確認する。有線へ戻し、必要なら同一プロセス版 `switch-bcon-inproc` と標準 `switch-bcon`（別プロセス）を切り替えて再接続し、手順3～8を繰り返す。
 
 手順5の制御文字は、PokeCon のシリアル接続を切断してから、リポジトリのルートで次を実行する。`COM9` を実際のデータ COM に置き換える。別プロセス版では `BconProcTransport` に置き換える。終了後は PokeCon から再接続する。
 

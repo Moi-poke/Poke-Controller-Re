@@ -12,10 +12,12 @@ Poke-Controller Re: の構成メモである。詳細な開発手順は [`AGENTS
         │  press / hold / wait / isContainTemplate / waitTone / waitSound
         ▼
 pokecon/domain/  …… GUI 非依存の純粋ロジック（tkinter・アプリ層の import 禁止）
-        │  serial/: Sender 本体・Arbiter（入力調停）・encoding（行書式）
-        │  transport/: base（抽象）・text_serial・registry（名前から選択）
+        │  serial/: Sender 本体・live/posture・Arbiter（入力調停）・encoding（行書式）
+        │  transport/: base（抽象）・text_serial・registry（名前から選択）・bcon*
         │  Keys: Button/Direction/Hat/Stick（行組み立ては encoding へ一本化）
-        │  WakeLink: 応答つき通信（O行・設定確認用）
+        │  imu/: 3D コントローラ形状・SDF・可動グループ（numpy のみ）
+        │  preview/win32_clock.py: Win32 高精度プレビュー時計・ワーカランタイム
+        │  bcon_status.py / hidhide_policy.py: BCON 状態デコード / HidHide ポリシー判定
         │  Camera: 最新1枚だけを配る capture
         │  AudioCapture: 入力1本を所有し直近N秒を配る capture（音声版）
         │  audio_dsp / audio_latency: 検知・計測の純粋関数（FFT・相互相関・Tap時刻）
@@ -24,18 +26,15 @@ pokecon/domain/  …… GUI 非依存の純粋ロジック（tkinter・アプリ
 ファーム (Arduino Leonardo / Pico 2 W。Pico 2 WはSwitch-bconファーム、詳細は docs/BCON_TRANSPORT.md)
 ```
 
-本体は [`SerialController/pokecon/`](../SerialController/pokecon) パッケージであり、`app/`（組立・設定・入口）・`domain/`（tkinter 非依存）・`runtime/`（手順）・`ui/`（Tk 部品）・`plugins/`（transport の manifest 読み込み）に分かれる。`SerialController/` は実行時の根（ルート）であり、`settings*.ini`・`Template/`・`db/`・`Commands/` を配置する。エントリは [`pokecon/__main__.py`](../SerialController/pokecon/__main__.py)（`python -m pokecon`）、[`SerialController/__main__.py`](../SerialController/__main__.py)（`python -m SerialController`）、[`Window.py`](../SerialController/Window.py) 直起動（[`launcher.py`](../SerialController/launcher.py) が使う従来経路）の 3 口で、いずれも `pokecon.app.Window.main()` へ集まる。
+本体は [`SerialController/pokecon/`](../SerialController/pokecon) パッケージであり、`app/`（組立・設定・入口・`python_command_base.py`）・`domain/`（tkinter 非依存）・`runtime/`（手順）・`ui/`（Tk 部品）・`plugins/`（transport の manifest 読み込み）に分かれる。`SerialController/` は実行時の根（ルート）であり、`settings*.ini`・`Template/`・`db/`・`Commands/` を配置する。エントリは [`pokecon/__main__.py`](../SerialController/pokecon/__main__.py)（`python -m pokecon`）、[`SerialController/__main__.py`](../SerialController/__main__.py)（`python -m SerialController`）、[`Window.py`](../SerialController/Window.py) 直起動（[`launcher.py`](../SerialController/launcher.py) が使う従来経路）の 3 口で、いずれも `pokecon.app.Window.main()` へ集まる。
 
-利用者スクリプトの公開面と `settings*.ini` の書式は凍結されており、その基準は公開済みの Poke-Controller Modified（`Moi-poke/Poke-Controller-Modified` の `master`）にあったかどうかである。公開面の扱いは 2 段階に分かれる。
+利用者スクリプトの公開面と `settings*.ini` の書式は凍結されており、その基準は公開済みの Poke-Controller Modified（`Moi-poke/Poke-Controller-Modified` の `master`）にあったかどうかである。公開面のチェックは [`pokecon/domain/user_api_allowlist.py`](../SerialController/pokecon/domain/user_api_allowlist.py) を正本とし、`Commands.CommandBase` / `Keys` / `McuCommandBase` / `PythonCommandBase` / `Sender` / `StickCommand` / `UnitCommand` の 7 経路（名前一覧は [`pokecon/domain/api_surface.py`](../SerialController/pokecon/domain/api_surface.py)、`task api` が欠落を落とす）が対象となる。かつて存在した暫定名（`WakeLink` 等）は廃止・`Commands/PythonCommandBase.py` へ集約され、`PROVISIONAL_COMMANDS_SUBS` は空になっている。
 
-- **凍結**: Modified にあった 7 経路（`Commands.CommandBase` / `Keys` / `McuCommandBase` / `PythonCommandBase` / `Sender` / `StickCommand` / `UnitCommand`）が該当し、名前の一覧は [`pokecon/domain/api_surface.py`](../SerialController/pokecon/domain/api_surface.py) にある（`task api` が欠落を落とす）。
-- **暫定**: v4 で増えた経路（`WakeLink` / `CommandVision` / `CommandAudio` / `CommandColor`）が該当し、v4.0 の公開までは統合・改名してよい。
+区分の検査（[`tools/gates/check_user_api.py`](../tools/gates/check_user_api.py)）では違反、保存時（[`pokecon/domain/blockly_validate.py`](../SerialController/pokecon/domain/blockly_validate.py)）では異常、配布時（[`pokecon/domain/pack_zip.py`](../SerialController/pokecon/domain/pack_zip.py)）では未知を注意に留めるという意図的な使い分けをしている。書式知識の実体は [`config.py`](../SerialController/pokecon/domain/config.py)（Tk なし）にあり、`Settings.GuiSettings` は Tk との鏡と入出力の手順だけを持つ。
 
-区分の正本は [`pokecon/domain/user_api_allowlist.py`](../SerialController/pokecon/domain/user_api_allowlist.py) である。深刻度は扱う場面（表面）によって異なり、検査（[`tools/gates/check_user_api.py`](../tools/gates/check_user_api.py)）では違反、保存時（[`pokecon/domain/blockly_validate.py`](../SerialController/pokecon/domain/blockly_validate.py)）では異常、配布時（[`pokecon/domain/pack_zip.py`](../SerialController/pokecon/domain/pack_zip.py)）では未知を注意に留めるという意図的な使い分けをしている。書式知識の実体は [`config.py`](../SerialController/pokecon/domain/config.py)（Tk なし）にあり、`Settings.GuiSettings` は Tk との鏡と入出力の手順だけを持つ。
+GUI 層（[`Window.py`](../SerialController/Window.py)・[`GuiAssets.py`](../SerialController/pokecon/ui/GuiAssets.py)・[`Settings.py`](../SerialController/pokecon/app/Settings.py) ほか）は [`pokecon/domain/`](../SerialController/pokecon/domain) の利用者である。[`Window.py`](../SerialController/Window.py) は起動の組立・設定の出し入れ・終了処理だけを持ち、画面の部品ごとの手順は [`pokecon/ui/`](../SerialController/pokecon/ui) の Mixin（`camera_panel` / `serial_panel` / `controller_panel` / `command_panel` / `history_panel` / `log_panel` / `audio_panel` / `bcon_panel` / `layout_panel`）と専門パッケージ（`bcon/`・`blockly/`）に分かれる。`history_panel` は実行履歴の一覧・再実行のタブを持ち、`bcon_panel` は通信方式が bcon 系のときだけ「シリアル」の隣へ Bcon タブ（中身は `BconSetup`）を出し入れする。Mixin では mypy のために `self` 越しに触る属性を宣言しておく。循環参照になるため、[`pokecon/ui/`](../SerialController/pokecon/ui) から `Window` 本体の import は禁止されている。
 
-GUI 層（[`Window.py`](../SerialController/Window.py)・[`GuiAssets.py`](../SerialController/pokecon/ui/GuiAssets.py)・[`Settings.py`](../SerialController/pokecon/app/Settings.py) ほか）は [`pokecon/domain/`](../SerialController/pokecon/domain) の利用者である。[`Window.py`](../SerialController/Window.py) は起動の組立・設定の出し入れ・終了処理だけを持ち、画面の部品ごとの手順は [`pokecon/ui/`](../SerialController/pokecon/ui) の Mixin（`camera_panel` / `serial_panel` / `command_panel` / `history_panel` / `log_panel` / `audio_panel` / `bcon_panel`）に分かれる。`history_panel` は実行履歴の一覧・再実行のタブを持ち、`bcon_panel` は通信方式が bcon 系のときだけ「シリアル」の隣へ Bcon タブ（中身は `BconSetup`）を出し入れする。Mixin では mypy のために `self` 越しに触る属性を宣言しておく。循環参照になるため、[`pokecon/ui/`](../SerialController/pokecon/ui) から `Window` 本体の import は禁止されている。
-
-実行の手順は [`pokecon/runtime/`](../SerialController/pokecon/runtime)（`command_runner.py`: 起動・停止・見張り・後始末の状態機械、`serial_service.py`: Sender の所有・接続・切替・キーボードの寿命管理、`audio_service.py`: 取込口の所有・切替・モニター再生の手順）へ委ねる。[`pokecon/runtime/`](../SerialController/pokecon/runtime) は tkinter を import しない。逆向きの依存は [`tools/gates/check_core.py`](../tools/gates/check_core.py)（`task bounds`）で禁止している。
+実行の手順は [`pokecon/runtime/`](../SerialController/pokecon/runtime)（`command_runner.py`: 起動・停止・見張り・後始末の状態機械、`serial_service.py`: Sender の所有・接続・切替管理、`manual_input_service.py`: 手動入力の寿命・調停連動、`imu_service.py`: IMU 入力源構築・変換・記録、`audio_service.py`: 取込口の所有・切替・モニター再生の手順、`blockly/`: オーサリング／部分編集／検証）へ委ねる。[`pokecon/runtime/`](../SerialController/pokecon/runtime) は tkinter を import しない。逆向きの依存は [`tools/gates/check_core.py`](../tools/gates/check_core.py)（`task bounds`）で禁止している。
 
 ## プレビュー（映像）の描画
 

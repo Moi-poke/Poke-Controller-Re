@@ -35,11 +35,10 @@ python .\SerialController\Window.py --profile switch1
 python .\SerialController\Window.py --profile switch1 --transport switch-bcon
 ```
 
-組み込みの通信方式は以下の 3 種類です（`--transport` を省略した場合は設定ファイルの `[Transport] name` を使用します）。
+組み込みの通信方式は以下の 2 種類です（`--transport` を省略した場合は設定ファイルの `[Transport] name` を使用します）。
 
 - `legacy_text`: 本家 Arduino Leonardo 向けの従来方式
-- `switch-bcon`: Raspberry Pi Pico 2 W 向けのバイナリ通信方式
-- `switch-bcon-proc`: `switch-bcon` と同じ BCON 通信を別プロセスで送受信する方式
+- `switch-bcon`: Raspberry Pi Pico 2 W 向けのバイナリ通信方式（別プロセス送受信が標準。旧設定名 `bcon` / `switch-bcon-proc` も互換別名として読み込み時に `switch-bcon` へ解決されます）
 
 通信方式の詳細は [`docs/BCON_TRANSPORT.md`](docs/BCON_TRANSPORT.md) をご覧ください。
 

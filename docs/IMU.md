@@ -12,7 +12,7 @@
 
 ## マウスでジャイロ
 
-IMU パネルの入力源「マウス」で、PC のマウス移動をジャイロとして送る。Windows の Raw Input（`WM_INPUT`、`RIDEV_INPUTSINK`）を使うため、ポインタ加速や画面端の影響を受けない生の移動量（count）で動く。Windows 以外では入力源の候補に出さず、設定に `mouse` が残っていても `パッドAPI` へ寄せる。送り先は BCON の `T_IMU_SAMPLE` 経路（`switch-bcon` / `switch-bcon-proc`）であり、入力は既定 5ms 刻み、Switch への 0x30 報告は約 15ms 刻みとなる。
+IMU パネルの入力源「マウス」で、PC のマウス移動をジャイロとして送る。Windows の Raw Input（`WM_INPUT`、`RIDEV_INPUTSINK`）を使うため、ポインタ加速や画面端の影響を受けない生の移動量（count）で動く。Windows 以外では入力源の候補に出さず、設定に `mouse` が残っていても `パッドAPI` へ寄せる。送り先は BCON の `T_IMU_SAMPLE` 経路（`switch-bcon` / 旧名 `switch-bcon-proc`）であり、入力は既定 5ms 刻み、Switch への 0x30 報告は約 15ms 刻みとなる。
 
 - **設定欄**: 「ジャイロ設定」を開くと、入力源の直下にその入力源の操作が出る。マウスの感度計算と詳細調整は必要なときだけ開く。記録先の指定は「送出値を記録する」にチェックを入れると表示される。
 - **開始/停止**: 入力源を「マウス」にして「開始」を押すと、キャプチャと送出を同時に始める。「停止」で両方を止める。
@@ -37,7 +37,7 @@ IMU パネルの入力源「マウス」で、PC のマウス移動をジャイ�
 
 **未検証（実機での確認が必要）**: 軸の割り当てと符号、ロールの向き、ピッチ上限、`mouse_deg_per_lsb` の実機一致、0x30 での送達率、ゲーム内の感度・遅延は未検証である。ホストは `q_target` / `q_output` の差分から raw へ量子化し、Pico は**別の段階で**未報告の raw を 0x30 の 3 枠へ配分する。古い「最新3件」方式のファームウェアには後者の改善がない。
 
-`switch-bcon-proc` は子が詰まったとき、未送出 IMU を最大 100ms 分だけ保持し、ジャイロ値を合算して送る。超過した古い値や停止・hold 中の未送出値は `imu_stats()["stale"]` に数える。`sent` は親が受理した試料数、`frames` は子へ投入したフレーム数、`delivered` は子がシリアルへ書けたと応答したフレーム数であり、Switch への到着確認ではない。合算で角度を守っても、停滞中の時間を短い報告へ圧縮するため、ゲーム内の動きの滑らかさと遅延は実機で比較する。
+`switch-bcon`（別プロセス送出 `BconProcTransport`）は子が詰まったとき、未送出 IMU を最大 100ms 分だけ保持し、ジャイロ値を合算して送る。超過した古い値や停止・hold 中の未送出値は `imu_stats()["stale"]` に数える。`sent` は親が受理した試料数、`frames` は子へ投入したフレーム数、`delivered` は子がシリアルへ書けたと応答したフレーム数であり、Switch への到着確認ではない。合算で角度を守っても、停滞中の時間を短い報告へ圧縮するため、ゲーム内の動きの滑らかさと遅延は実機で比較する。
 
 ## 3D ジャイロプレビュー
 
@@ -58,7 +58,7 @@ IMU パネルの入力源「マウス」で、PC のマウス移動をジャイ�
 
 描画には pygame と moderngl（OpenGL 3.3 以上）を使い、別プロセスで動かす。更新後は `uv sync` で依存関係を同期する。GPU の滑らかな陰影と材質別の反射を使うため、対応するグラフィックスドライバーが必要である。外部モデルのダウンロードや実行時のネット接続は不要であり、OpenGL を初期化できない場合はログへ理由を表示してプレビューだけを停止する。姿勢はサンプルごとに計算し、描画には最新の姿勢だけを渡すため、描画待ちで送出を待たせない。
 
-実装は `pokecon/domain/imu_orientation.py`（姿勢計算）、`pokecon/ui/imu_preview.py`（窓とプロセス）、`pokecon/ui/controller_mesh.py`（形状）、`pokecon/ui/imu_preview_gpu.py`（GPU 描画）に分かれる。姿勢表示の先例として [JoyCon-Driver の Gyro Window](https://github.com/fossephate/JoyCon-Driver) を確認したが、コードやモデルの流用はしていない。
+実装は `pokecon/domain/imu_orientation.py`（姿勢計算）、`pokecon/domain/imu/`（3D コントローラ形状・SDF・可動定義）、`pokecon/runtime/imu_service.py`（入力源構築・軸変換・波形トリム）、`pokecon/ui/imu_preview.py`（窓とプロセス）、`pokecon/ui/imu_preview_gpu.py`（GPU 描画）に分かれる。姿勢表示の先例として [JoyCon-Driver の Gyro Window](https://github.com/fossephate/JoyCon-Driver) を確認したが、コードやモデルの流用はしていない。
 
 ## ジャイロの記録と再生（.pgyro）
 
