@@ -175,7 +175,7 @@ class BconTransport(Transport):
     #: is_open が手元で完結する（子プロセス経由の方式は立てない）。
     is_open_is_local = True
 
-    name = "bcon"
+    name = "switch-bcon-inproc"
     capability = BCON_STATE
 
     def __init__(self, logger: Any = None, use_len12: bool = False) -> None:

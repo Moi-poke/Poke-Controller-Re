@@ -214,10 +214,10 @@ def test_proc_session_ops_round_trip(monkeypatch):
 
 
 def test_send_config_public_path(monkeypatch):
-    from pokecon.domain.transport import create_transport
+    from pokecon.domain.transport import BconTransport
     from pokecon.domain.transport.bcon_protocol import T_STATUS_REQ
 
-    made = create_transport("switch-bcon")
+    made = BconTransport()
     ser = _ScriptedSer()
     made.ser = ser
     assert made.send_config(T_STATUS_REQ, b"") is True
@@ -231,10 +231,10 @@ def test_proc_pump_delivers_on_arrival():
     """到着確認駆動のポンプが即時分配する（タイムアウト待ちしない）。"""
     import time as _time
 
-    from pokecon.domain.transport import create_transport
+    from pokecon.domain.transport import BconTransport
     from pokecon.domain.transport.bcon_protocol import T_STATUS, frame_build
 
-    made = create_transport("switch-bcon")
+    made = BconTransport()
     ser = _ScriptedSer()
     made.ser = ser
     assert made.start_rx_pump() is True

@@ -19,7 +19,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "SerialControll
 
 from pokecon.domain.imu_wave import SineWave, StaticRest, StepWave  # noqa: E402
 from pokecon.domain.sdl_sensor import SdlSensorReader  # noqa: E402
-from pokecon.domain.transport import create_transport  # noqa: E402
+from pokecon.domain.transport.bcon import BconTransport  # noqa: E402
 
 
 def main() -> int:
@@ -98,7 +98,7 @@ def main() -> int:
 
         gen = recording_gen  # type: ignore[assignment]
 
-    made = create_transport("switch-bcon")
+    made = BconTransport()
     port_num = 0
     digits = "".join(c for c in args.port if c.isdigit())
     if digits:

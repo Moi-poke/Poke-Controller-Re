@@ -120,9 +120,9 @@ class _HuntUpgradeSer:
 
 
 def _open_hunt_upgrade_ser(**kwargs):
-    from pokecon.domain.transport import create_transport
+    from pokecon.domain.transport import BconTransport
 
-    made = create_transport("bcon")
+    made = BconTransport()
     ser = _HuntUpgradeSer(**kwargs)
     made.ser = ser
     made.start_rx_pump()
@@ -130,10 +130,10 @@ def _open_hunt_upgrade_ser(**kwargs):
 
 
 def test_bcon_hello_and_ping_with_scripted_ser():
-    from pokecon.domain.transport import create_transport
+    from pokecon.domain.transport import BconTransport
     from pokecon.domain.transport.bcon_protocol import T_HELLO, T_HELLO_ACK, frame_build
 
-    made = create_transport("bcon")
+    made = BconTransport()
     ser = _make_scripted_ser()
     made.ser = ser
     made.start_rx_pump()
@@ -167,10 +167,10 @@ def test_bcon_hello_and_ping_with_scripted_ser():
 
 
 def test_bcon_hello_always_sends_despite_stale_ack():
-    from pokecon.domain.transport import create_transport
+    from pokecon.domain.transport import BconTransport
     from pokecon.domain.transport.bcon_protocol import T_HELLO, T_HELLO_ACK, frame_build
 
-    made = create_transport("bcon")
+    made = BconTransport()
     ser = _make_scripted_ser()
     made.ser = ser
     made.start_rx_pump()
@@ -215,14 +215,14 @@ def test_bcon_hello_always_sends_despite_stale_ack():
 
 
 def test_bcon_hello_sends_ver4_with_status_flag():
-    from pokecon.domain.transport import create_transport
+    from pokecon.domain.transport import BconTransport
     from pokecon.domain.transport.bcon_protocol import (
         T_HELLO,
         T_HELLO_ACK,
         frame_build,
     )
 
-    made = create_transport("bcon")
+    made = BconTransport()
     ser = _make_scripted_ser()
     made.ser = ser
     made.start_rx_pump()
@@ -260,10 +260,10 @@ def test_bcon_hello_sends_ver4_with_status_flag():
 
 
 def test_bcon_ping_returns_rtt_on_seq_echo():
-    from pokecon.domain.transport import create_transport
+    from pokecon.domain.transport import BconTransport
     from pokecon.domain.transport.bcon_protocol import T_PING, T_PONG, frame_build
 
-    made = create_transport("bcon")
+    made = BconTransport()
     ser = _make_scripted_ser()
     made.ser = ser
     made.start_rx_pump()
@@ -295,10 +295,10 @@ def test_bcon_ping_returns_rtt_on_seq_echo():
 
 
 def test_bcon_ping_waits_full_timeout_for_late_pong():
-    from pokecon.domain.transport import create_transport
+    from pokecon.domain.transport import BconTransport
     from pokecon.domain.transport.bcon_protocol import T_PING, T_PONG, frame_build
 
-    made = create_transport("bcon")
+    made = BconTransport()
     ser = _make_scripted_ser()
     made.ser = ser
     made.start_rx_pump()
@@ -333,10 +333,10 @@ def test_bcon_ping_waits_full_timeout_for_late_pong():
 
 
 def test_bcon_ping_ignores_wrong_seq_burst():
-    from pokecon.domain.transport import create_transport
+    from pokecon.domain.transport import BconTransport
     from pokecon.domain.transport.bcon_protocol import T_PING, T_PONG, frame_build
 
-    made = create_transport("bcon")
+    made = BconTransport()
     ser = _make_scripted_ser()
     made.ser = ser
     made.start_rx_pump()
@@ -373,7 +373,7 @@ def test_bcon_ping_ignores_wrong_seq_burst():
 
 
 def test_bcon_hello_unsupported_holds_neutral_and_stops():
-    from pokecon.domain.transport import create_transport
+    from pokecon.domain.transport import BconTransport
     from pokecon.domain.transport.bcon_protocol import (
         RESULT_UNSUPPORTED,
         T_HELLO,
@@ -382,7 +382,7 @@ def test_bcon_hello_unsupported_holds_neutral_and_stops():
         frame_build,
     )
 
-    made = create_transport("bcon")
+    made = BconTransport()
     ser = _make_scripted_ser()
     made.ser = ser
     made.start_rx_pump()
@@ -420,7 +420,7 @@ def test_bcon_hello_unsupported_holds_neutral_and_stops():
 
 
 def test_bcon_hello_downgraded_holds_neutral_and_stops():
-    from pokecon.domain.transport import create_transport
+    from pokecon.domain.transport import BconTransport
     from pokecon.domain.transport.bcon_protocol import (
         RESULT_DOWNGRADED,
         T_HELLO,
@@ -429,7 +429,7 @@ def test_bcon_hello_downgraded_holds_neutral_and_stops():
         frame_build,
     )
 
-    made = create_transport("bcon")
+    made = BconTransport()
     ser = _make_scripted_ser()
     made.ser = ser
     made.start_rx_pump()
@@ -468,9 +468,9 @@ def test_bcon_hello_downgraded_holds_neutral_and_stops():
 
 
 def test_bcon_hello_timeout_returns_false_without_hang():
-    from pokecon.domain.transport import create_transport
+    from pokecon.domain.transport import BconTransport
 
-    made = create_transport("bcon")
+    made = BconTransport()
     ser = _make_scripted_ser()
     made.ser = ser
     made.start_rx_pump()
@@ -483,7 +483,7 @@ def test_bcon_hello_timeout_returns_false_without_hang():
 
 
 def test_bcon_request_status_updates_last_status_and_player():
-    from pokecon.domain.transport import create_transport
+    from pokecon.domain.transport import BconTransport
     from pokecon.domain.transport.bcon_protocol import (
         T_PLAYER_INFO,
         T_STATUS,
@@ -491,7 +491,7 @@ def test_bcon_request_status_updates_last_status_and_player():
         frame_build,
     )
 
-    made = create_transport("bcon")
+    made = BconTransport()
     ser = _make_scripted_ser()
     made.ser = ser
     assert made.last_status() == {
@@ -540,10 +540,10 @@ def test_bcon_request_status_updates_last_status_and_player():
 
 
 def test_bcon_status_errcode_surfaces_but_keeps_latest():
-    from pokecon.domain.transport import create_transport
+    from pokecon.domain.transport import BconTransport
     from pokecon.domain.transport.bcon_protocol import T_STATUS, frame_build
 
-    made = create_transport("bcon")
+    made = BconTransport()
     ser = _make_scripted_ser()
     made.ser = ser
     made.start_rx_pump()
@@ -562,10 +562,10 @@ def test_bcon_status_errcode_surfaces_but_keeps_latest():
 
 
 def test_bcon_rx_dispatch_reaches_subscriber_and_waiter():
-    from pokecon.domain.transport import create_transport
+    from pokecon.domain.transport import BconTransport
     from pokecon.domain.transport.bcon_protocol import T_PING, frame_build
 
-    made = create_transport("bcon")
+    made = BconTransport()
     ser = _make_scripted_ser()
     made.ser = ser
     made.start_rx_pump()
@@ -591,9 +591,9 @@ def test_bcon_rx_dispatch_reaches_subscriber_and_waiter():
 
 
 def test_bcon_session_never_raises_without_port():
-    from pokecon.domain.transport import create_transport
+    from pokecon.domain.transport import BconTransport
 
-    made = create_transport("bcon")
+    made = BconTransport()
     made.ser = None
     assert made.hello(timeout=0.2) is False
     assert made.ping(timeout=0.2) is None
@@ -611,10 +611,10 @@ def test_bcon_session_never_raises_without_port():
 
 
 def test_bcon_baud_hunt_locks_two_consecutive():
-    from pokecon.domain.transport import create_transport
+    from pokecon.domain.transport import BconTransport
     from pokecon.domain.transport.bcon_protocol import T_HELLO, T_HELLO_ACK, frame_build
 
-    made = create_transport("bcon")
+    made = BconTransport()
     ser = _make_scripted_ser()
     made.ser = ser
     made.start_rx_pump()
@@ -655,7 +655,7 @@ def test_bcon_baud_hunt_locks_two_consecutive():
 
 
 def test_bcon_baud_hunt_holds_tx_until_lock():
-    from pokecon.domain.transport import create_transport
+    from pokecon.domain.transport import BconTransport
     from pokecon.domain.transport.bcon_protocol import (
         T_HELLO,
         T_HELLO_ACK,
@@ -663,7 +663,7 @@ def test_bcon_baud_hunt_holds_tx_until_lock():
         frame_build,
     )
 
-    made = create_transport("bcon")
+    made = BconTransport()
     ser = _make_scripted_ser()
     made.ser = ser
     made.start_rx_pump()
@@ -723,10 +723,10 @@ def test_bcon_baud_hunt_holds_tx_until_lock():
 
 
 def test_bcon_baud_hunt_single_fluke_does_not_lock():
-    from pokecon.domain.transport import create_transport
+    from pokecon.domain.transport import BconTransport
     from pokecon.domain.transport.bcon_protocol import T_HELLO, T_HELLO_ACK, frame_build
 
-    made = create_transport("bcon")
+    made = BconTransport()
     ser = _make_scripted_ser()
     made.ser = ser
     made.start_rx_pump()
@@ -764,9 +764,9 @@ def test_bcon_baud_hunt_single_fluke_does_not_lock():
 
 
 def test_bcon_baud_hunt_fails_to_none_without_hang():
-    from pokecon.domain.transport import create_transport
+    from pokecon.domain.transport import BconTransport
 
-    made = create_transport("bcon")
+    made = BconTransport()
     ser = _make_scripted_ser()
     made.ser = ser
     made.start_rx_pump()
@@ -780,7 +780,7 @@ def test_bcon_baud_hunt_fails_to_none_without_hang():
 
 
 def test_bcon_set_baud_index_guards_and_reverts():
-    from pokecon.domain.transport import create_transport
+    from pokecon.domain.transport import BconTransport
     from pokecon.domain.transport.bcon_protocol import (
         T_BAUD_SET,
         T_HELLO,
@@ -788,7 +788,7 @@ def test_bcon_set_baud_index_guards_and_reverts():
         frame_build,
     )
 
-    made = create_transport("bcon")
+    made = BconTransport()
     ser = _make_scripted_ser()
     made.ser = ser
     ser.baudrate = 1000000
@@ -824,7 +824,7 @@ def test_bcon_set_baud_index_guards_and_reverts():
 
 
 def test_bcon_set_baud_index_switches_on_adopt():
-    from pokecon.domain.transport import create_transport
+    from pokecon.domain.transport import BconTransport
     from pokecon.domain.transport.bcon_protocol import (
         T_BAUD_SET,
         T_HELLO,
@@ -833,7 +833,7 @@ def test_bcon_set_baud_index_switches_on_adopt():
         frame_build,
     )
 
-    made = create_transport("bcon")
+    made = BconTransport()
     ser = _make_scripted_ser()
     made.ser = ser
     ser.baudrate = 1000000
@@ -979,14 +979,14 @@ def test_bcon_baud_hunt_none_when_failed_upgrade_old_rate_unconfirmed():
 
 
 def test_bcon_set_wired_mode_notes_reboot():
-    from pokecon.domain.transport import create_transport
+    from pokecon.domain.transport import BconTransport
     from pokecon.domain.transport.bcon_protocol import (
         T_STATUS,
         T_WIRED_MODE,
         frame_build,
     )
 
-    made = create_transport("bcon")
+    made = BconTransport()
     ser = _make_scripted_ser()
     made.ser = ser
     made.start_rx_pump()
@@ -1031,14 +1031,14 @@ def test_bcon_emulate_mode_constant():
 
 
 def test_bcon_send_beacon_returns_status():
-    from pokecon.domain.transport import create_transport
+    from pokecon.domain.transport import BconTransport
     from pokecon.domain.transport.bcon_protocol import (
         T_BEACON_START,
         T_STATUS,
         frame_build,
     )
 
-    made = create_transport("bcon")
+    made = BconTransport()
     ser = _make_scripted_ser()
     made.ser = ser
     made.start_rx_pump()
@@ -1074,30 +1074,30 @@ def test_bcon_send_beacon_returns_status():
 
 
 def test_bcon_send_beacon_without_ser_is_none():
-    from pokecon.domain.transport import create_transport
+    from pokecon.domain.transport import BconTransport
 
-    made = create_transport("bcon")
+    made = BconTransport()
     assert made.send_beacon(timeout=0.2) is None
 
 
 def test_bcon_set_emulate_mode_rejects_bad_role():
-    from pokecon.domain.transport import create_transport
+    from pokecon.domain.transport import BconTransport
 
-    made = create_transport("bcon")
+    made = BconTransport()
     assert made.set_emulate_mode(3, timeout=0.2) is False
     assert made.set_emulate_mode(-1, timeout=0.2) is False
     assert made.set_emulate_mode("x", timeout=0.2) is False
 
 
 def test_bcon_set_emulate_mode_notes_reboot():
-    from pokecon.domain.transport import create_transport
+    from pokecon.domain.transport import BconTransport
     from pokecon.domain.transport.bcon_protocol import (
         T_EMULATE_MODE,
         T_STATUS,
         frame_build,
     )
 
-    made = create_transport("bcon")
+    made = BconTransport()
     ser = _make_scripted_ser()
     made.ser = ser
     made.start_rx_pump()

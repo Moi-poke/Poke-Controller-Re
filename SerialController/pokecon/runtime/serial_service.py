@@ -214,7 +214,7 @@ class SerialService:
     def uses_bcon(name: str | None) -> bool:
         """その通信方式が bcon 系（能力 BCON_STATE）か。
 
-        名前の直書きではなく能力で見る。別プロセス版（switch-bcon-proc）や
+        名前の直書きではなく能力で見る。別プロセス版（switch-bcon）や
         利用者定義の bcon 互換も同じ口で拾える。
         """
         return transport.transport_capability(name) == transport.BCON_STATE
@@ -351,8 +351,8 @@ class SerialService:
         """
         if self.sender is None:
             return (False, False)
-        # 表示名と実体名は一致しない（BconTransport.name == "bcon" だが
-        # プリセット名は "switch-bcon"）。別名で押し直しただけで作り直すと
+        # プリセット名は "switch-bcon"、旧名 "bcon" / "switch-bcon-proc" も
+        # 同名に解決する）。別名で押し直しただけで作り直すと
         # 線を閉じて HELLO からやり直しになるため、正規化してから比べる。
         # 未登録名を既定へ落とす resolve_transport_name は使わない
         # （未知名どうしが legacy_text に潰れて別方式を取り違える）。

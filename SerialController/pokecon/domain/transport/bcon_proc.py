@@ -37,8 +37,10 @@ from pokecon.domain.transport.base import BCON_STATE, Transport
 from pokecon.domain.transport.bcon import IMU_INTERVAL_S, BconTransport
 from pokecon.domain.transport.bcon_protocol import BAUD_TABLE
 
-PROC_PRESET_NAME = "switch-bcon-proc"
-PROC_PRESET_DESCRIPTION = "Switch-bconを別プロセスで送出（GUI負荷切り離し）"
+PROC_PRESET_NAME = "switch-bcon"
+PROC_PRESET_DESCRIPTION = (
+    "Switch-bconへSTATEバイナリを送る（Pico 2 W・既定1Mbps・HELLO必須・別プロセス送出）"
+)
 PROC_RPC_MARGIN_S = 5.0
 PROC_ALIVE_POLL_S = 0.2
 
@@ -810,7 +812,7 @@ class BconProcTransport(Transport):
     子が死んだ呼出しは安全既定値（False/None/空）で返し、落とさない。
     """
 
-    name = "switch-bcon-proc"
+    name = "switch-bcon"
     capability = BCON_STATE
     #: is_open は子プロセスへの同期往復（timeout 付き）なので、8ms の送出
     #: ループからは問い合わせさせない（周期が崩れる）。
@@ -1889,7 +1891,7 @@ class BconProcTransport(Transport):
         if not getattr(self, "_wait_rx_warned", False):
             self._wait_rx_warned = True
             self._logger.error(
-                "wait_rx は switch-bcon-proc では未対応です（設計で v1 除外）"
+                "wait_rx は switch-bcon（別プロセス）では未対応です（設計で v1 除外）"
             )
         return None
 

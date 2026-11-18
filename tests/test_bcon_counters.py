@@ -189,9 +189,9 @@ class _CountingSer:
 
 def test_bcon_sent_counts_only_successful_writes() -> None:
     """失敗writeでsentを増やさない（run-journalのsent差分を過大にしない）。"""
-    from pokecon.domain.transport import create_transport
+    from pokecon.domain.transport import BconTransport
 
-    made = create_transport("bcon")
+    made = BconTransport()
     ser = _CountingSer(result=0)
     made.ser = ser
     made._hello_established = True
@@ -206,9 +206,9 @@ def test_bcon_sent_counts_only_successful_writes() -> None:
 
 def test_bcon_live_loop_sent_counts_only_successful_writes() -> None:
     """120Hz loopも同じ。書けなかった刻みはsentに載せない。"""
-    from pokecon.domain.transport import create_transport
+    from pokecon.domain.transport import BconTransport
 
-    made = create_transport("bcon")
+    made = BconTransport()
     ser = _CountingSer(result=0)
     made.ser = ser
     made._hello_established = True

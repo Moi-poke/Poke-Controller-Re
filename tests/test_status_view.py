@@ -91,9 +91,7 @@ def test_layout_projects_snapshot_without_querying_transport() -> None:
     )
     LayoutPanelMixin._publish_status(host)
     assert host.status_state.value == "HELLO 確認中"
-    assert host.status_device.value == (
-        "送信先: confirmed-port / Pico 中継（別プロセス）"
-    )
+    assert host.status_device.value == "送信先: confirmed-port / Pico 中継（USB）"
 
 
 def test_bcon_link_state_is_shown_in_the_global_bar_and_marks_stale(

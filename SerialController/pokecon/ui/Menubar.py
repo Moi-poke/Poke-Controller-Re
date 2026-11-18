@@ -376,7 +376,7 @@ class PokeController_Menubar(tk.Menu):
         self.app.transport_cb.focus_set()
         messagebox.showinfo(
             "BCON 設定",
-            "通信方式で switch-bcon または switch-bcon-proc を選択してください。",
+            "通信方式で「Pico 中継（USB）」(switch-bcon) を選択してください。",
         )
 
     def OpenSerialMonitor(self) -> None:

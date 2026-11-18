@@ -150,11 +150,11 @@ def _run(argv: list[str] | None = None) -> int:
     if str(root) not in sys.path:
         sys.path.insert(0, str(root))
     try:
-        from pokecon.domain.transport import create_transport
+        from pokecon.domain.transport.bcon import BconTransport
     except Exception as e:
         print(f"bconの読込に失敗しました: {e!r}", file=sys.stderr)
         return 2
-    made = create_transport("bcon")
+    made = BconTransport()
     try:
         opened = made.open(0, str(args.port), int(args.baud))
     except Exception as e:

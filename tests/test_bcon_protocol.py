@@ -128,7 +128,7 @@ def test_bcon_rx_seq_first_not_counted_and_gap_events():
     import threading
     import time
 
-    from pokecon.domain.transport import create_transport
+    from pokecon.domain.transport import BconTransport
     from pokecon.domain.transport.bcon_protocol import T_PING, frame_build
 
     class ScriptedSer:
@@ -154,7 +154,7 @@ def test_bcon_rx_seq_first_not_counted_and_gap_events():
         def write(self, data: bytes) -> int:
             return len(data)
 
-    made = create_transport("bcon")
+    made = BconTransport()
     ser = ScriptedSer()
     made.ser = ser
     assert made.live_stats()["seq_gap"] == 0

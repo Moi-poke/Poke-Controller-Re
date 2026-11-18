@@ -15,7 +15,6 @@ from pokecon.domain.transport.registry import canonical_transport_name
 DISPLAY_NAMES: dict[str, str] = {
     "legacy_text": "マイコン直結（USB シリアル）",
     "switch-bcon": "Pico 中継（USB）",
-    "switch-bcon-proc": "Pico 中継（別プロセス）",
 }
 
 

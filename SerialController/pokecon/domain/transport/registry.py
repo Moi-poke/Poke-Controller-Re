@@ -21,7 +21,6 @@ from logging import getLogger
 from typing import Any
 
 from pokecon.domain.transport.base import LEGACY_ROW, VALID_CAPABILITIES, Transport
-from pokecon.domain.transport.bcon import BconTransport
 from pokecon.domain.transport.bcon_proc import (
     PROC_PRESET_DESCRIPTION,
     PROC_PRESET_NAME,
@@ -33,7 +32,7 @@ from pokecon.domain.transport.text_serial import TextSerialTransport
 DEFAULT_TRANSPORT = "legacy_text"
 
 # 旧名 → 現行名。表示名の変更後も既存の設定・起動引数を動かす。
-TRANSPORT_ALIASES = {"bcon": "switch-bcon"}
+TRANSPORT_ALIASES = {"bcon": "switch-bcon", "switch-bcon-proc": "switch-bcon"}
 
 # 名前 → {"factory": 呼ぶと Transport を返すもの, "description": 説明,
 #         "capability": 許可済み能力, "builtin": 最初から入っているか}
@@ -224,13 +223,6 @@ register_transport(
     TextSerialTransport.name,
     TextSerialTransport,
     description="従来と同じテキスト行を pyserial で送る（本家 Leonardo 用）",
-    builtin=True,
-)
-
-register_transport(
-    "switch-bcon",
-    BconTransport,
-    description="Switch-bconへSTATEバイナリを送る（Pico 2 W・既定1Mbps・HELLO必須）",
     builtin=True,
 )
 

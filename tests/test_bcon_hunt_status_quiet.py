@@ -61,9 +61,9 @@ def _make_scripted_ser() -> Any:
 
 
 def _open_transport() -> tuple[Any, Any]:
-    from pokecon.domain.transport import create_transport
+    from pokecon.domain.transport import BconTransport
 
-    made = create_transport("bcon")
+    made = BconTransport()
     ser = _make_scripted_ser()
     made.ser = ser
     made.start_rx_pump()
