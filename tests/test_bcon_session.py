@@ -3,6 +3,8 @@
 import threading
 import time
 
+from fakes import _HuntUpgradeSer
+
 
 def _make_scripted_ser(feed_delay: float = 0.001):
     """読み書きの記録を持つ疑似シリアル。ポンプ横取り防止の単一読み口用。"""
@@ -41,82 +43,7 @@ def _make_scripted_ser(feed_delay: float = 0.001):
     return ScriptedSer()
 
 
-class _HuntUpgradeSer:
-    """115200でlockした後、BAUD_SETで1Mへ移る疑似Pico（実機不要）。
-
-    - 確定後はpico_rateとhostのbaudrateが一致するHELLOにだけACKする。
-    - BAUD_SETは旧rateで受けたらSTATUS ACKを返し、成功時はpico_rateを
-      1Mへ進める。失敗（adopt_1m=False）は既定でpico_rateを据え置き、
-      hostが1Mへ切り替えた間のHELLOは届かない（復帰確認の検証用）。
-      revert_pico=FalseならPicoだけ1Mへ進んだ不明状態を真似る。
-    """
-
-    is_open = True
-
-    def __init__(
-        self,
-        *,
-        rate: int = 115200,
-        adopt_1m: bool = True,
-        ack_baud_set: bool = True,
-        revert_pico: bool = True,
-    ) -> None:
-        from pokecon.domain.transport.bcon_protocol import BAUD_TABLE
-
-        self._chunks: list[bytes] = []
-        self._lock = threading.Lock()
-        self.written: list[bytes] = []
-        self.baudrate = int(rate)
-        self.pico_rate = int(rate)
-        self.adopt_1m = bool(adopt_1m)
-        self.ack_baud_set = bool(ack_baud_set)
-        self.revert_pico = bool(revert_pico)
-        self.upgrade_rate = int(BAUD_TABLE[3])
-        self._seq = 0
-
-    def read(self, n: int) -> bytes:
-        _ = n
-        with self._lock:
-            if self._chunks:
-                return self._chunks.pop(0)
-        time.sleep(0.001)
-        return b""
-
-    @property
-    def in_waiting(self) -> int:
-        with self._lock:
-            return sum(len(c) for c in self._chunks)
-
-    def _reply(self, type_: int, payload: bytes) -> None:
-        from pokecon.domain.transport.bcon_protocol import frame_build
-
-        self._chunks.append(frame_build(type_, payload, self._seq))
-        self._seq = (self._seq + 1) & 0xFF
-
-    def write(self, data: bytes) -> int:
-        from pokecon.domain.transport.bcon_protocol import (
-            T_BAUD_SET,
-            T_HELLO,
-            T_HELLO_ACK,
-            T_STATUS,
-        )
-
-        with self._lock:
-            self.written.append(bytes(data))
-            if len(data) < 4 or data[0] != 0xAB:
-                return len(data)
-            if self.baudrate != self.pico_rate:
-                return len(data)
-            if data[1] == T_HELLO:
-                # 1Mへ進んだPicoがadoptを受けない場合はACKしない。
-                if self.baudrate != self.upgrade_rate or self.adopt_1m:
-                    self._reply(T_HELLO_ACK, bytes([0x04, 0x00, 0x01, 0x00]))
-            elif data[1] == T_BAUD_SET and int(data[3]) == 3:
-                if self.ack_baud_set:
-                    self._reply(T_STATUS, bytes(7))
-                if self.adopt_1m or not self.revert_pico:
-                    self.pico_rate = self.upgrade_rate
-            return len(data)
+# _HuntUpgradeSer is shared from tests/fakes.py (imported above).
 
 
 def _open_hunt_upgrade_ser(**kwargs):
