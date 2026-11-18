@@ -328,14 +328,6 @@ class ImuPanel:
             command=self._on_debug_toggled,
         )
         self._debug_cb.grid(row=0, column=2, sticky=tk.E, padx=2, pady=2)
-        self._detail_var = tk.BooleanVar(value=False)
-        self._detail_cb = ttk.Checkbutton(
-            body,
-            text="詳細表示",
-            variable=self._detail_var,
-            command=self._on_detail_toggled,
-        )
-        self._detail_cb.grid(row=7, column=0, sticky=tk.W, padx=2, pady=2)
         # 記録は任意。チェックするまで保存先を畳み、入力源の設定を先に見せる。
         # 記録の有無は開始時に読む（送出中の切替は次回の開始から効く）。
         self._record_frame = ttk.Frame(body)
@@ -395,7 +387,7 @@ class ImuPanel:
             spin.bind("<Return>", normalize, add="+")
             var.trace_add("write", self._make_manual_trace(i, var))
             self._manual_vars.append(var)
-        # 反転・感度の行（4）と重ねない。詳細表示（7）の手前へ置く。
+        # 反転・感度の行（4）と重ねない。
         self._manual_frame.grid(
             row=6, column=0, columnspan=3, sticky=tk.EW, pady=(4, 0)
         )
@@ -564,9 +556,6 @@ class ImuPanel:
         self._mouse_frame.grid(row=2, column=0, columnspan=3, sticky=tk.EW, pady=(4, 0))
         self._mouse_frame.grid_remove()
         self._source_cb.bind("<<ComboboxSelected>>", self._on_source_changed, add="")
-        # 詳細の可視化パネル。チェックONのときだけ同frame内に展開する。
-        # _apply_visibility() がデバッグOFFで畳むため、先に用意する。
-        self._gyro_view: Any = None
         self._apply_visibility()
         self._load_settings_into_vars()
         # この部品は Window.loadSettings() より先に作られる。設定がまだ
@@ -836,17 +825,6 @@ class ImuPanel:
                 widget.grid()
             else:
                 widget.grid_remove()
-        if debug:
-            self._detail_cb.grid()
-        else:
-            self._detail_cb.grid_remove()
-            # デバッグOFFで詳細チェックだけ消すと波形が残る。チェックも
-            # 畳み、入力源を通常へ戻した後も見えない状態に揃える。
-            try:
-                self._detail_var.set(False)
-            except Exception:
-                pass
-            self._collapse_detail()
         if not debug and source in DEBUG_SOURCES:
             # デバッグ源を選んだまま通常へ戻したら実機源へ寄せる。
             for name, label in SOURCE_LABELS:
@@ -1483,47 +1461,6 @@ class ImuPanel:
             return
         self._motion_preview = preview
 
-    def _on_detail_toggled(self) -> None:
-        """詳細表示の切替。ONでジャイロ設定の中へ展開、OFFで畳む。送出は続ける。"""
-        try:
-            show = bool(self._detail_var.get())
-        except Exception:
-            show = False
-        if show:
-            if getattr(self, "_gyro_view", None) is not None:
-                return
-            try:
-                from pokecon.ui.GyroView import GyroView
-
-                view = GyroView(getattr(self, "_body", self.frame), rate_range=500)
-                # 反転（3）・感度（4）・記録（5）・手動入力（6）・詳細
-                # チェック（7）と重ねない。それらの下へ置く。
-                view.grid(row=8, column=0, columnspan=3, sticky=tk.EW)
-                reset = ttk.Button(view, text="ヨーリセット", command=view.reset_yaw)
-                reset.pack(pady=(0, 4))
-                self._gyro_view = view
-            except Exception as e:
-                self._queue.put(("log", f"詳細表示を作れません: {e!r}"))
-                try:
-                    self._detail_var.set(False)
-                except Exception:
-                    pass
-        else:
-            self._collapse_detail()
-
-    def _collapse_detail(self) -> None:
-        """詳細表示を畳む。送出は続ける。"""
-        view, self._gyro_view = getattr(self, "_gyro_view", None), None
-        if view is not None:
-            try:
-                view.close()
-            except Exception:
-                pass
-            try:
-                view.destroy()
-            except Exception:
-                pass
-
     def _build_source(self, source: str, pad: int) -> Any:
         """入力源の生成器を作る。失敗はNone。"""
         self._source_error = ""
@@ -1834,12 +1771,6 @@ class ImuPanel:
             except Exception as exc:
                 self._motion_preview = None
                 self._queue.put(("preview_error", (preview, exc)))
-        view = getattr(self, "_gyro_view", None)
-        if view is not None:
-            try:
-                view.push_raw(*sample)
-            except Exception:
-                pass
 
     @staticmethod
     def _sample_transform(
@@ -2433,10 +2364,6 @@ class ImuPanel:
         preview, self._motion_preview = self._motion_preview, None
         if preview is not None:
             preview.close()
-        try:
-            self._collapse_detail()
-        except Exception:
-            pass
         # 開始/停止ワーカーが走っている間に別の停止を重ねない。
         deadline = time.monotonic() + 1.0
         while (self._starting or self._stopping) and time.monotonic() < deadline:

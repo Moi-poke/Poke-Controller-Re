@@ -272,27 +272,6 @@ def test_imu_panel_closed_serial_logs_and_stays_stopped(tk_root: tk.Tk) -> None:
         root.destroy()
 
 
-def test_imu_panel_detail_expands_and_collapses(tk_root: tk.Tk) -> None:
-    panel, root, _transport, _settings, _root = _make_panel(tk_root)
-    try:
-        assert getattr(panel, "_gyro_view", None) is None
-        panel._detail_var.set(True)
-        panel._on_detail_toggled()
-        root.update()
-        view = getattr(panel, "_gyro_view", None)
-        assert view is not None
-        view.push_raw(0, 0, 4096, 100, 0, 0)
-        root.update()
-        panel._detail_var.set(False)
-        panel._on_detail_toggled()
-        root.update()
-        assert getattr(panel, "_gyro_view", None) is None
-        assert view._stop is True
-    finally:
-        panel.close()
-        root.destroy()
-
-
 def test_imu_panel_hid_invert_reads_and_writes_hid_keys(tk_root: tk.Tk) -> None:
     """HID直結の反転は hid_* を読み書きし、SDL用の符号へ混ぜない。"""
     data = {
@@ -395,10 +374,10 @@ def test_imu_panel_manual_out_of_range_is_normalized_on_start(
         root.destroy()
 
 
-def test_imu_panel_manual_and_detail_rows_stay_below_controls(
+def test_imu_panel_manual_row_stays_below_controls(
     tk_root: tk.Tk,
 ) -> None:
-    """手動入力と詳細表示が反転・感度の行へ重ならない。"""
+    """手動入力が反転・感度の行へ重ならない。"""
     panel, root, _transport, _settings, _root = _make_panel(
         tk_root, {"source": "manual"}
     )
@@ -408,42 +387,8 @@ def test_imu_panel_manual_and_detail_rows_stay_below_controls(
         root.update()
         scale = panel._scale_cb
         manual = panel._manual_frame
-        detail = panel._detail_cb
         assert manual.winfo_rooty() >= scale.winfo_rooty() + scale.winfo_height()
-
-        panel._detail_var.set(True)
-        panel._on_detail_toggled()
-        root.update()
-        view = panel._gyro_view
-        assert view is not None
         assert panel._invert_cb.winfo_ismapped()
-        assert view.winfo_rooty() >= manual.winfo_rooty() + manual.winfo_height()
-        assert view.winfo_rooty() >= detail.winfo_rooty() + detail.winfo_height()
-    finally:
-        panel.close()
-        root.destroy()
-
-
-def test_imu_panel_debug_off_collapses_detail(tk_root: tk.Tk) -> None:
-    """デバッグOFFで詳細チェックだけでなく波形も畳む。"""
-    panel, root, _transport, _settings, _root = _make_panel(tk_root)
-    try:
-        panel._debug_var.set(True)
-        panel._on_debug_toggled()
-        panel._detail_var.set(True)
-        panel._on_detail_toggled()
-        root.update()
-        view = panel._gyro_view
-        assert view is not None
-
-        panel._debug_var.set(False)
-        panel._on_debug_toggled()
-        root.update()
-
-        assert panel._detail_var.get() is False
-        assert panel._gyro_view is None
-        assert panel._detail_cb.winfo_manager() == ""
-        assert view._stop is True
     finally:
         panel.close()
         root.destroy()
