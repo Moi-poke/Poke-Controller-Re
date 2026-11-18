@@ -1,0 +1,432 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#0d1116">
+<title>Poke-Controller — 操作コンソール</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<a class="skip" href="#main">本文へ</a>
+<h1 class="sr-only">Poke-Controller 操作コンソール</h1>
+<svg class="sprite" aria-hidden="true" focusable="false">
+  <symbol id="i-play" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></symbol>
+  <symbol id="i-stop" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="1.5"/></symbol>
+  <symbol id="i-pause" viewBox="0 0 24 24"><rect x="7" y="5" width="3.5" height="14" rx="1"/><rect x="13.5" y="5" width="3.5" height="14" rx="1"/></symbol>
+  <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></symbol>
+  <symbol id="i-plug" viewBox="0 0 24 24"><path d="M9 3v5M15 3v5M6 8h12v4a6 6 0 0 1-12 0z"/><path d="M12 18v3"/></symbol>
+  <symbol id="i-pulse" viewBox="0 0 24 24"><path d="M3 12h4l2.5-6 4 12 2.5-6h5"/></symbol>
+  <symbol id="i-blocks" viewBox="0 0 24 24"><rect x="4" y="4" width="7" height="7" rx="1.5"/><rect x="13" y="4" width="7" height="7" rx="1.5"/><rect x="4" y="13" width="7" height="7" rx="1.5"/><path d="M13 16.5h7M16.5 13v7"/></symbol>
+  <symbol id="i-camera" viewBox="0 0 24 24"><path d="M4 8h3l1.5-2h7L17 8h3v11H4z"/><circle cx="12" cy="13" r="3.2"/></symbol>
+  <symbol id="i-crop" viewBox="0 0 24 24"><path d="M7 3v14h14M3 7h14v14"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5 21 21"/></symbol>
+  <symbol id="i-close" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></symbol>
+  <symbol id="i-pin" viewBox="0 0 24 24"><path d="M9 3h6l-1 6 3 3H7l3-3z"/><path d="M12 12v9"/></symbol>
+  <symbol id="i-popout" viewBox="0 0 24 24"><path d="M14 4h6v6M20 4l-8 8"/><path d="M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></symbol>
+  <symbol id="i-chevron" viewBox="0 0 24 24"><path d="M8 10l4 4 4-4"/></symbol>
+  <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 3v12M7 11l5 5 5-5"/><path d="M4 20h16"/></symbol>
+  <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.5-5.8"/><path d="M20 4v4h-4"/></symbol>
+  <symbol id="i-keyboard" viewBox="0 0 24 24"><rect x="3" y="6" width="18" height="12" rx="2"/><path d="M7 10h.01M11 10h.01M15 10h.01M7 14h10"/></symbol>
+  <symbol id="i-gamepad" viewBox="0 0 24 24"><path d="M7 7h10a5 5 0 0 1 4.9 6l-.8 4a2.5 2.5 0 0 1-4.4 1.2L15 16H9l-1.7 2.2A2.5 2.5 0 0 1 2.9 17l-.8-4A5 5 0 0 1 7 7z"/><path d="M8 10v4M6 12h4M16 11h.01M18 13h.01"/></symbol>
+  <symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 4 3 20h18z"/><path d="M12 10v4M12 17h.01"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="M5 12.5 10 17l9-10"/></symbol>
+  <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></symbol>
+  <symbol id="i-terminal" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9l3 3-3 3M13 15h4"/></symbol>
+</svg>
+
+<!-- 常時表示の帯（ISA-101 Level 1 / VS Code Status Bar 相当） -->
+<header class="statusbar">
+  <div class="brand">Poke<span>Con</span></div>
+  <button class="chip" id="profileBtn" aria-haspopup="menu" aria-expanded="false">
+    <span class="swatch" id="profileSwatch"></span>
+    <span id="profileName">default</span>
+    <svg class="ic"><use href="#i-chevron"/></svg>
+  </button>
+  <div class="sep" role="presentation"></div>
+
+  <button class="stat" id="linkStat" title="接続の詳細を開く">
+    <span class="dot" id="linkDot"></span>
+    <span class="stat-main" id="linkText">pico_uart</span>
+    <span class="stat-sub" id="linkSub">COM4 · 115200</span>
+  </button>
+
+  <div class="stat run-stat" id="runStat">
+    <span class="stat-main" id="runText">待機</span>
+    <span class="stat-sub tnum" id="runTime"></span>
+    <span class="run-actions" id="runActions" hidden>
+      <button class="mini" id="btnPause" title="一時停止" aria-label="一時停止"><svg class="ic"><use href="#i-pause"/></svg></button>
+      <button class="mini danger" id="btnStop" title="停止" aria-label="停止"><svg class="ic"><use href="#i-stop"/></svg></button>
+    </span>
+  </div>
+
+  <div class="stat" id="capStat" title="キャプチャ映像の状態">
+    <span class="stat-main tnum" id="capRes">1920×1080</span>
+    <span class="stat-sub tnum" id="capFps">60 fps · 18 ms</span>
+  </div>
+
+  <div class="stat" id="audioStat" title="音声モニター">
+    <span class="meter" aria-hidden="true"><span id="audioBar"></span></span>
+    <span class="stat-sub tnum" id="audioDb">−18 dB</span>
+  </div>
+
+  <div class="spacer"></div>
+
+  <button class="pill" id="problemBtn" title="警告・エラーの行へ移動">
+    <svg class="ic"><use href="#i-alert"/></svg>
+    <span id="problemCount">0</span>
+  </button>
+  <button class="icon-btn" id="btnSidebar" title="サイドバーの表示切替" aria-label="サイドバーの表示切替"><svg class="ic"><use href="#i-pin"/></svg></button>
+  <button class="icon-btn" id="btnPalette" title="コマンドパレット (Ctrl+K)" aria-label="コマンドパレット"><svg class="ic"><use href="#i-search"/></svg></button>
+</header>
+
+<div class="shell">
+  <!-- 行き先（VS Code Activity Bar 相当） -->
+  <nav class="activity" aria-label="画面の切り替え">
+    <button class="act is-active" data-view="run" title="実行" aria-label="実行">
+      <svg class="ic"><use href="#i-play"/></svg><span>実行</span>
+    </button>
+    <button class="act" data-view="history" title="履歴" aria-label="履歴">
+      <svg class="ic"><use href="#i-clock"/></svg><span>履歴</span>
+    </button>
+    <button class="act" data-view="devices" title="機器" aria-label="機器">
+      <svg class="ic"><use href="#i-plug"/></svg><span>機器</span>
+    </button>
+    <button class="act" data-view="diag" title="診断" aria-label="診断">
+      <svg class="ic"><use href="#i-pulse"/></svg><span>診断</span>
+    </button>
+    <div class="spacer"></div>
+    <button class="act" id="btnEditor" title="Blockly エディタ（別タブ）" aria-label="Blockly エディタ">
+      <svg class="ic"><use href="#i-blocks"/></svg><span>編集</span>
+    </button>
+  </nav>
+
+  <!-- 映像はどの画面でも消えない -->
+  <main class="stage" id="main" tabindex="-1">
+    <div class="stage-head">
+      <div class="stage-title">
+        <span class="live-dot" id="liveDot"></span>
+        <span id="stageTitle">キャプチャ</span>
+      </div>
+      <div class="stage-tools">
+        <button class="tool" id="btnShot" title="今のフレームを保存"><svg class="ic"><use href="#i-camera"/></svg><span>保存</span></button>
+        <button class="tool" id="btnCrop" title="範囲を切り抜き"><svg class="ic"><use href="#i-crop"/></svg><span>切り抜き</span></button>
+        <button class="tool" id="btnFreeze" title="プレビューを止める"><svg class="ic"><use href="#i-pause"/></svg><span>静止</span></button>
+        <span class="tool-sep"></span>
+        <button class="tool" id="btnPadToggle" title="ソフトウェアコントローラ"><svg class="ic"><use href="#i-gamepad"/></svg><span>パッド</span></button>
+      </div>
+    </div>
+
+    <div class="video-wrap" id="videoWrap">
+      <div class="frame" id="frame">
+        <canvas id="feed" width="1280" height="720" aria-label="キャプチャ映像（モック）"></canvas>
+        <div class="hud hud-tl">
+          <span class="badge live">LIVE</span>
+          <span class="badge mono" id="hudRes">1920×1080</span>
+        </div>
+        <div class="hud hud-tr">
+          <span class="badge mono" id="hudFps">60 fps</span>
+          <span class="badge mono" id="hudLat">18 ms</span>
+        </div>
+        <div class="hud hud-bl" id="inputOverlay" aria-live="off"></div>
+        <div class="hud hud-br"><span class="badge mono">MOCK FEED</span></div>
+        <div class="crop-rect" id="cropRect" hidden></div>
+      </div>
+      <div class="stage-empty" id="stageEmpty" hidden>
+        <p>カメラが開けません</p>
+        <button class="btn" data-goto="devices">カメラ設定を開く</button>
+      </div>
+    </div>
+
+    <div class="stage-foot">
+      <div class="mirror" aria-label="入力の現在値">
+        <span class="mirror-label">入力</span>
+        <div class="mirror-btns" id="mirrorBtns"></div>
+        <div class="mirror-sticks">
+          <span class="stick-readout"><span class="k">L</span><span class="tnum" id="mirrorL">0, 0</span></span>
+          <span class="stick-readout"><span class="k">R</span><span class="tnum" id="mirrorR">0, 0</span></span>
+        </div>
+      </div>
+      <div class="foot-actions">
+        <button class="tool" id="btnArbitration" title="入力の優先を切り替え"><span class="k">優先</span><span id="arbText">human</span></button>
+        <button class="tool" id="btnFollow" title="ログの追従"><span class="k">追従</span><span id="followText">ON</span></button>
+      </div>
+    </div>
+  </main>
+
+  <!-- 文脈パネル（ISA-101 Level 2/3） -->
+  <aside class="sidebar" id="sidebar" aria-label="作業パネル">
+    <section class="view is-active" data-view="run">
+      <div class="run-card">
+        <div class="run-card-top">
+          <div>
+            <p class="eyebrow">現在の実行</p>
+            <p class="run-name" id="runName">なし</p>
+          </div>
+          <span class="state-pill" id="runPill">待機</span>
+        </div>
+        <div class="progress"><span id="runProgress"></span></div>
+        <div class="run-meta">
+          <span>手順 <span class="tnum" id="runStep">0 / 0</span></span>
+          <span>入力 <span class="tnum" id="runInputs">0</span></span>
+        </div>
+      </div>
+
+      <div class="field">
+        <svg class="ic field-ic"><use href="#i-search"/></svg>
+        <input id="cmdSearch" type="search" placeholder="コマンドを検索" autocomplete="off" aria-label="コマンドを検索">
+        <kbd>Ctrl K</kbd>
+      </div>
+
+      <div class="chips" id="tagChips" role="group" aria-label="タグで絞り込み"></div>
+
+      <div class="list-head">
+        <span>コマンド</span>
+        <span class="tnum" id="cmdCount">0 件</span>
+      </div>
+      <div class="cmd-list" id="cmdList" role="listbox" aria-label="コマンド一覧"></div>
+
+      <div class="side-foot">
+        <button class="btn primary block" id="btnRun"><svg class="ic"><use href="#i-play"/></svg><span>実行</span></button>
+        <button class="btn block" id="btnReload" title="コマンドを再読み込み"><svg class="ic"><use href="#i-refresh"/></svg><span>再読み込み</span></button>
+      </div>
+    </section>
+
+    <section class="view" data-view="history">
+      <div class="field">
+        <svg class="ic field-ic"><use href="#i-search"/></svg>
+        <input id="histSearch" type="search" placeholder="履歴を検索（名前・結果）" autocomplete="off" aria-label="履歴を検索">
+      </div>
+      <div class="list-head"><span>実行履歴</span><span class="tnum" id="histCount">0 件</span></div>
+      <div class="hist-list" id="histList"></div>
+      <p class="hint">行をダブルクリックすると同じコマンドをもう一度実行します。</p>
+    </section>
+
+    <section class="view" data-view="devices">
+      <div class="card">
+        <div class="card-head"><h2>接続</h2><span class="state-pill" id="devPill">ready</span></div>
+        <div class="form">
+          <label>通信方式
+            <select id="selTransport">
+              <option value="legacy_text">legacy_text — 従来のテキスト行</option>
+              <option value="pico_uart">pico_uart — Pico UART</option>
+              <option value="switch-bcon">switch-bcon — STATE バイナリ</option>
+              <option value="switch-bcon-proc">switch-bcon-proc — 別プロセス送出</option>
+            </select>
+          </label>
+          <label>ポート
+            <select id="selPort">
+              <option>COM4 — USB シリアル (Pico)</option>
+              <option>COM7 — USB シリアル (Leonardo)</option>
+              <option>COM12 — Bluetooth リンク</option>
+            </select>
+          </label>
+          <label>ボーレート
+            <select id="selBaud"><option>9600</option><option>115200</option><option>1000000</option></select>
+          </label>
+          <label>入力の優先
+            <select id="selArb"><option value="human">human — 人の操作を優先</option><option value="script">script — スクリプトを優先</option><option value="off">off — 調停しない</option></select>
+          </label>
+        </div>
+        <p class="desc" id="transportDesc">従来と同じテキスト行を pyserial で送る。</p>
+        <div class="row">
+          <button class="btn primary" id="btnConnect">接続</button>
+          <button class="btn" id="btnSerialMonitor">通信ログを見る</button>
+        </div>
+      </div>
+
+      <div class="card" id="bconCard" hidden>
+        <div class="card-head"><h2>BCON</h2><span class="state-pill">無線</span></div>
+        <div class="form">
+          <label>動作モード
+            <select><option>無線 (Pro Con)</option><option>有線 (Pro Con)</option><option>Joy-Con L</option><option>Joy-Con R</option></select>
+          </label>
+          <label>本体色
+            <input type="color" value="#e60012" aria-label="本体色">
+          </label>
+        </div>
+        <div class="row"><button class="btn" data-mock="ペアリングを開始しました（30 秒待機）">ペアリング開始</button><button class="btn" data-mock="疎通確認 OK（12 ms）">疎通確認</button><button class="btn danger-ghost" data-mock="BOOTSEL で再起動しました">BOOTSEL 再起動</button></div>
+      </div>
+
+      <div class="card">
+        <div class="card-head"><h2>カメラ</h2></div>
+        <div class="form">
+          <label>解像度
+            <select id="selRes"><option>1920×1080</option><option>1280×720</option><option>960×540</option><option>640×360</option></select>
+          </label>
+          <label>FPS
+            <select id="selFps"><option>60</option><option>45</option><option>30</option><option>15</option></select>
+          </label>
+          <label>描画
+            <select><option>auto</option><option>sdl (GPU)</option><option>gdi (CPU)</option><option>photo</option></select>
+          </label>
+        </div>
+        <div class="row"><button class="btn" id="btnCameraReload">カメラを再読み込み</button><button class="btn" id="btnFilter">表示フィルタ</button></div>
+      </div>
+
+      <div class="card">
+        <div class="card-head"><h2>入力デバイス</h2></div>
+        <div class="form">
+          <label class="switch-row">キーボード操作 <input type="checkbox" id="swKeyboard" checked></label>
+          <label class="switch-row">ゲームパッド操作 <input type="checkbox" id="swGamepad" checked></label>
+          <label>パッド
+            <select id="selPad"><option>0 — Pro Controller</option><option>1 — Joy-Con (L/R)</option></select>
+          </label>
+          <label>遊び（デッドゾーン） <input type="range" id="rngDeadzone" min="0" max="8192" value="2048"><span class="range-val tnum" id="deadzoneVal">2048</span></label>
+          <label class="switch-row">左スティックをマウスで <input type="checkbox"></label>
+          <label class="switch-row">右スティックをマウスで <input type="checkbox"></label>
+        </div>
+        <div class="row"><button class="btn" id="btnHidHide">HidHide セットアップ</button><button class="btn" id="btnKeymap">キーコンフィグ</button></div>
+      </div>
+
+      <div class="card">
+        <div class="card-head"><h2>音声</h2></div>
+        <div class="form">
+          <label>入力
+            <select><option>3 — USB Capture Audio</option><option>1 — ステレオ ミキサー</option></select>
+          </label>
+          <label>出力
+            <select><option>0 — スピーカー</option><option>2 — ヘッドホン</option></select>
+          </label>
+          <label class="switch-row">モニター <input type="checkbox" id="swMonitor" checked></label>
+          <label>音量 <input type="range" id="rngVolume" min="0" max="100" value="60"><span class="range-val tnum" id="volumeVal">60%</span></label>
+        </div>
+        <div class="meter-row"><span class="meter wide"><span id="audioBar2"></span></span><span class="tnum" id="audioDb2">−18 dB</span></div>
+      </div>
+    </section>
+
+    <section class="view" data-view="diag">
+      <div class="card">
+        <div class="card-head"><h2>接続の状態</h2><span class="state-pill" id="diagPill">ready</span></div>
+        <dl class="kv">
+          <div><dt>phase</dt><dd id="kvPhase">ready</dd></div>
+          <div><dt>baud</dt><dd id="kvBaud">115200</dd></div>
+          <div><dt>HELLO</dt><dd>OK (12 ms)</dd></div>
+          <div><dt>送信 / 受信</dt><dd class="tnum">18,204 / 1,902</dd></div>
+          <div><dt>滞留</dt><dd class="tnum">0</dd></div>
+        </dl>
+      </div>
+      <div class="card">
+        <div class="card-head"><h2>シリアルモニタ</h2><button class="btn small" id="btnWireTab">通信タブへ</button></div>
+        <pre class="mini-log" id="miniWire"></pre>
+      </div>
+      <div class="card">
+        <div class="card-head"><h2>エラー報告</h2></div>
+        <p class="desc">版・OS・Python・profile・transport と traceback をまとめてコピーします。</p>
+        <div class="row"><button class="btn" id="btnCopyReport">クリップボードにコピー</button><button class="btn" data-mock="logs/ フォルダを開きました">ログフォルダを開く</button></div>
+      </div>
+      <div class="card">
+        <div class="card-head"><h2>ショートカット</h2></div>
+        <dl class="kv">
+          <div><dt>実行 / 停止</dt><dd><kbd>Ctrl</kbd> <kbd>Enter</kbd></dd></div>
+          <div><dt>一時停止</dt><dd><kbd>Ctrl</kbd> <kbd>Space</kbd></dd></div>
+          <div><dt>パレット</dt><dd><kbd>Ctrl</kbd> <kbd>K</kbd></dd></div>
+          <div><dt>ログ検索</dt><dd><kbd>Ctrl</kbd> <kbd>F</kbd></dd></div>
+        </dl>
+      </div>
+    </section>
+  </aside>
+</div>
+
+<!-- ログ（常時・下段ドック） -->
+<section class="dock" id="dock" aria-label="ログ">
+  <div class="dock-grip" id="dockGrip" role="separator" aria-orientation="horizontal" tabindex="0" aria-label="ログの高さを変更"></div>
+  <div class="dock-head">
+    <div class="dock-tabs" role="tablist" aria-label="ログの種類">
+      <button class="dtab is-active" data-log="log" role="tab" aria-selected="true">ログ <span class="count tnum" id="countLog">0</span></button>
+      <button class="dtab" data-log="input" role="tab" aria-selected="false">入力 <span class="count tnum" id="countInput">0</span></button>
+      <button class="dtab" data-log="wire" role="tab" aria-selected="false">通信 <span class="count tnum" id="countWire">0</span></button>
+    </div>
+    <div class="dock-tools">
+      <div class="level-chips" id="levelChips" role="group" aria-label="水準で絞り込み">
+        <button class="lvl is-on" data-level="info">INFO</button>
+        <button class="lvl is-on" data-level="result">RESULT</button>
+        <button class="lvl is-on" data-level="warn">WARN</button>
+        <button class="lvl is-on" data-level="error">ERROR</button>
+        <button class="lvl is-on" data-level="debug">DEBUG</button>
+      </div>
+      <div class="field small">
+        <svg class="ic field-ic"><use href="#i-search"/></svg>
+        <input id="logSearch" type="search" placeholder="絞り込み" autocomplete="off" aria-label="ログを絞り込み">
+      </div>
+      <button class="icon-btn" id="btnFollowDock" title="追従の切替" aria-label="追従の切替"><svg class="ic"><use href="#i-arrow"/></svg></button>
+      <button class="icon-btn" id="btnCopy" title="表示中のログをコピー" aria-label="コピー"><svg class="ic"><use href="#i-check"/></svg></button>
+      <button class="icon-btn" id="btnClear" title="ログを消す" aria-label="ログを消す"><svg class="ic"><use href="#i-close"/></svg></button>
+    </div>
+  </div>
+  <div class="dock-body" id="dockBody">
+    <div class="log-scroll" id="logScroll" tabindex="0">
+      <div class="log-lines" id="logLines"></div>
+    </div>
+  </div>
+  <button class="new-lines" id="newLines" hidden></button>
+</section>
+
+<!-- ソフトウェアコントローラ（独立した浮遊パネル） -->
+<div class="pad" id="pad" role="group" aria-label="ソフトウェアコントローラ">
+  <div class="pad-head" id="padHead">
+    <svg class="ic"><use href="#i-gamepad"/></svg>
+    <span class="pad-title">コントローラ</span>
+    <span class="pad-source" id="padSource">マウス</span>
+    <div class="pad-tools">
+      <button class="mini" id="padPopout" title="別ウィンドウで開く" aria-label="別ウィンドウで開く"><svg class="ic"><use href="#i-popout"/></svg></button>
+      <button class="mini" id="padCollapse" title="たたむ" aria-label="たたむ"><svg class="ic"><use href="#i-chevron"/></svg></button>
+    </div>
+  </div>
+  <div class="pad-body" id="padBody">
+    <button class="pbtn shoulder l" data-btn="ZL">ZL</button>
+    <button class="pbtn shoulder l2" data-btn="L">L</button>
+    <button class="pbtn shoulder r2" data-btn="R">R</button>
+    <button class="pbtn shoulder r" data-btn="ZR">ZR</button>
+
+    <button class="pbtn center" data-btn="MINUS" style="--x:118px;--y:34px">−</button>
+    <button class="pbtn center" data-btn="PLUS" style="--x:170px;--y:34px">＋</button>
+    <button class="pbtn center small" data-btn="HOME" style="--x:222px;--y:32px">⌂</button>
+    <button class="pbtn center small" data-btn="CAPTURE" style="--x:222px;--y:52px">□</button>
+
+    <button class="pbtn dpad up" data-btn="UP">▲</button>
+    <button class="pbtn dpad down" data-btn="DOWN">▼</button>
+    <button class="pbtn dpad left" data-btn="LEFT">◀</button>
+    <button class="pbtn dpad right" data-btn="RIGHT">▶</button>
+
+    <button class="pbtn face y" data-btn="Y">Y</button>
+    <button class="pbtn face x" data-btn="X">X</button>
+    <button class="pbtn face b" data-btn="B">B</button>
+    <button class="pbtn face a" data-btn="A">A</button>
+
+    <div class="stick" data-stick="L" role="slider" aria-label="左スティック" tabindex="0" aria-valuemin="-100" aria-valuemax="100" aria-valuenow="0">
+      <span class="stick-knob"></span>
+    </div>
+    <div class="stick" data-stick="R" role="slider" aria-label="右スティック" tabindex="0" aria-valuemin="-100" aria-valuemax="100" aria-valuenow="0">
+      <span class="stick-knob"></span>
+    </div>
+  </div>
+  <div class="pad-foot">
+    <svg class="ic"><use href="#i-keyboard"/></svg>
+    <span>←↑↓→ 移動 / Z X A S ボタン / Q E 肩</span>
+  </div>
+</div>
+
+<div class="toasts" id="toasts" aria-live="polite"></div>
+
+<dialog id="palette" class="palette">
+  <div class="field">
+    <svg class="ic field-ic"><use href="#i-search"/></svg>
+    <input id="paletteInput" type="text" placeholder="コマンド・画面を検索" autocomplete="off" aria-label="コマンド・画面を検索">
+    <kbd>Esc</kbd>
+  </div>
+  <div class="palette-list" id="paletteList" role="listbox"></div>
+</dialog>
+
+<dialog id="modal" class="modal">
+  <div class="modal-head">
+    <h2 id="modalTitle">設定</h2>
+    <button class="icon-btn" id="modalClose" aria-label="閉じる"><svg class="ic"><use href="#i-close"/></svg></button>
+  </div>
+  <div class="modal-body" id="modalBody"></div>
+  <div class="modal-foot" id="modalFoot"></div>
+</dialog>
+
+<script src="app.js" type="module"></script>
+</body>
+</html>
