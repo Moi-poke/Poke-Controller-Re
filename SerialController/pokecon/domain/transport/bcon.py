@@ -9,6 +9,7 @@ Phase 2では送信ループ区画だけを別プロセスへ移設する。
 from __future__ import annotations
 
 import math
+import sys
 import threading
 import time
 from collections.abc import Callable
@@ -64,6 +65,26 @@ LIVE_INTERVAL_S = 1.0 / 120.0
 # IMU loopの既定周期（200Hz・§5.13）。live loopとは独立スレッドで回す。
 # STATEと同じ_write_lockで排他し、線上のSEQ順＝採番順を保つ。
 IMU_INTERVAL_S = 1.0 / 200.0
+
+
+def _precise_timer(on: bool) -> None:
+    """Windowsの待ち粒度を1msへ上げる（5msのIMU刻みのため）。
+
+    senderのlive loopも同じAPIを参照カウントで使う。上げられない環境は
+    粗いままで送信を続ける（壊れない）。
+    """
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+
+        if on:
+            ctypes.windll.winmm.timeBeginPeriod(1)
+        else:
+            ctypes.windll.winmm.timeEndPeriod(1)
+    except Exception:
+        pass
+
 
 # baud huntの呼び水。Picoは未確定のあいだ各rateに150ms (HUNT_DWELL_MS) ずつ
 # 留まり、同じ滞在中に有効frameが2連続で届いたときだけ確定する。HELLOの
@@ -773,58 +794,64 @@ class BconTransport(Transport):
         stopはこの世代専用のイベント。startが次の世代を起こした場合は
         世代番号の不一致で抜ける（旧sourceで送り続けない）。
         """
+        _precise_timer(True)
         try:
-            with self._lock:
-                interval = float(self._imu_interval_s)
-        except Exception:
-            interval = IMU_INTERVAL_S
-        next_tx = time.perf_counter() + interval
-        while not stop.is_set():
-            now = time.perf_counter()
-            timeout = next_tx - now
-            if timeout > 0:
-                if stop.wait(timeout):
-                    break
-            if stop.is_set():
-                break
-            now = time.perf_counter()
-            with self._lock:
-                if self._imu_gen != generation:
-                    break
-                held = self._tx_hold or self._input_hold or not self._hello_established
-                source = self._imu_source
-            if held:
+            try:
                 with self._lock:
-                    self._imu_dropped += 1
-                next_tx = now + interval
-                continue
-            if source is None:
-                next_tx = now + interval
-                continue
-            try:
-                sample = source()
+                    interval = float(self._imu_interval_s)
             except Exception:
-                self._logger.debug("IMU生成器で例外", exc_info=True)
-                next_tx = now + interval
-                continue
-            if sample is None:
-                next_tx = now + interval
-                continue
-            try:
-                ax, ay, az, gx, gy, gz = (int(v) for v in sample)
-            except (TypeError, ValueError):
-                self._logger.debug("IMU生成器の戻りが6値でないため捨てます")
-                next_tx = now + interval
-                continue
-            with self._lock:
-                if self._imu_gen != generation:
+                interval = IMU_INTERVAL_S
+            next_tx = time.perf_counter() + interval
+            while not stop.is_set():
+                now = time.perf_counter()
+                timeout = next_tx - now
+                if timeout > 0:
+                    if stop.wait(timeout):
+                        break
+                if stop.is_set():
                     break
-            self.send_imu(ax, ay, az, gx, gy, gz)
-            now = time.perf_counter()
-            if next_tx <= now:
-                next_tx = now + interval
-            else:
-                next_tx += interval
+                now = time.perf_counter()
+                with self._lock:
+                    if self._imu_gen != generation:
+                        break
+                    held = (
+                        self._tx_hold or self._input_hold or not self._hello_established
+                    )
+                    source = self._imu_source
+                if held:
+                    with self._lock:
+                        self._imu_dropped += 1
+                    next_tx = now + interval
+                    continue
+                if source is None:
+                    next_tx = now + interval
+                    continue
+                try:
+                    sample = source()
+                except Exception:
+                    self._logger.debug("IMU生成器で例外", exc_info=True)
+                    next_tx = now + interval
+                    continue
+                if sample is None:
+                    next_tx = now + interval
+                    continue
+                try:
+                    ax, ay, az, gx, gy, gz = (int(v) for v in sample)
+                except (TypeError, ValueError):
+                    self._logger.debug("IMU生成器の戻りが6値でないため捨てます")
+                    next_tx = now + interval
+                    continue
+                with self._lock:
+                    if self._imu_gen != generation:
+                        break
+                self.send_imu(ax, ay, az, gx, gy, gz)
+                now = time.perf_counter()
+                if next_tx <= now:
+                    next_tx = now + interval
+                else:
+                    next_tx += interval
+        finally:
+            _precise_timer(False)
 
     def imu_stats(self) -> dict[str, int]:
         """IMU送出統計の写しを返す（読むだけ・副作用なし）。例外は投げない。"""

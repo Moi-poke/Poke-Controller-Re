@@ -28,6 +28,7 @@ import sys
 import threading
 import time
 import traceback
+from collections import deque
 from collections.abc import Callable
 from typing import Any
 
@@ -38,6 +39,21 @@ PROC_PRESET_NAME = "switch-bcon-proc"
 PROC_PRESET_DESCRIPTION = "Switch-bconを別プロセスで送出（GUI負荷切り離し）"
 PROC_RPC_MARGIN_S = 5.0
 PROC_ALIVE_POLL_S = 0.2
+
+#: 子が受け取って ack を返すまで親が持つIMUフレームの上限。
+#: 200Hzの通常運転では0〜1。子がRPCで詰まっている間だけ2で頭打ちに
+#: なり、以降は親の合算メールボックスへ畳む（窓内の角度は合計で保存）。
+PROC_IMU_INFLIGHT_MAX = 2
+#: 子が詰まっている間に親が畳むサンプルの上限（200Hzなら20件＝100ms）。
+#: 件数に加えて実時間でも100msを超えた古い分を捨てる。
+#: 厳密な角度保存はこの窓の内側だけ（hold/stop/openでも待ちは捨てる）。
+PROC_IMU_MERGE_MAX = 20
+PROC_IMU_WINDOW_S = 0.1
+#: 子が1回で読み進むIMUフレーム数の上限（FIFOを独占しない）。
+PROC_IMU_BATCH_MAX = 64
+#: 子が1バッチで線へ出すフレーム数の上限。int16に収まらない合計は
+#: 次バッチへ繰り越し、合計角度を落とさない。
+PROC_IMU_CHUNKS_MAX = 3
 
 # 子へ送ってよい会話op（親の公開口と1:1）。増やすときは子実装と同時に。
 _ALLOWED_CALLS = frozenset(
@@ -116,6 +132,113 @@ class _PeerGone(EOFError):
     """相手が死んだ（ソケットEOF）。"""
 
 
+#: 非ブロッキングgetで「まだ無い」を表す。None（有効なメッセージ）と区別する。
+_NO_IMU = object()
+
+
+def _queue_get_nowait(q: Any) -> Any:
+    """キューから1件を非ブロッキングで取る。無ければ `_NO_IMU`。
+
+    `_SocketQueue` はソケットをselect(0)で覗く。標準のqueue.Queueは
+    get_nowait()。どちらも「空」と「壊れた」を混ぜない。
+    """
+    getter = getattr(q, "get_nowait", None)
+    if callable(getter):
+        try:
+            return getter()
+        except queue.Empty:
+            return _NO_IMU
+    try:
+        return q.get(timeout=0)
+    except queue.Empty:
+        return _NO_IMU
+
+
+def _imu_sample_of(msg: Any) -> tuple[int, int, int, int, int, int] | None:
+    """`("imu", ax, ay, az, gx, gy, gz[, seq])` から6値を取り出す。
+
+    親の合算メールボックスはint16を超える和を載せ得るため、ここでは
+    飽和させない（線へ出す直前に割る）。形が違えばNone。
+    """
+    if not (isinstance(msg, tuple) and len(msg) >= 7 and msg[0] == "imu"):
+        return None
+    try:
+        vals = tuple(int(v) for v in msg[1:7])
+    except (TypeError, ValueError):
+        return None
+    if len(vals) != 6:
+        return None
+    return (vals[0], vals[1], vals[2], vals[3], vals[4], vals[5])
+
+
+def _imu_combine(
+    samples: list[tuple[int, int, int, int, int, int]]
+    | deque[tuple[int, int, int, int, int, int]],
+) -> tuple[int, int, int, int, int, int]:
+    """複数サンプルを1つへ畳む。加速度は最新、ジャイロは合計。
+
+    ジャイロは5msあたりの角速度なので、和＝その区間に回った合計角度。
+    最新値だけを残すと動きが消えるため、ここは必ず和にする。
+    """
+    last = samples[-1]
+    return (
+        int(last[0]),
+        int(last[1]),
+        int(last[2]),
+        sum(int(s[3]) for s in samples),
+        sum(int(s[4]) for s in samples),
+        sum(int(s[5]) for s in samples),
+    )
+
+
+def _imu_split_even(total: int, parts: int) -> list[int]:
+    """整数をparts個へ、合計を保ったままできるだけ均等に割る。
+
+    Pythonのdivmodは負数でも床除算なので、剰余の配り方だけで
+    各値の差は高々1になり、合計は必ずtotalへ戻る。
+    """
+    base, rem = divmod(int(total), parts)
+    return [base + (1 if i < rem else 0) for i in range(parts)]
+
+
+def _imu_plan_frames(
+    samples: list[tuple[int, int, int, int, int, int]],
+    carry: list[int],
+) -> tuple[list[tuple[int, int, int, int, int, int]], list[int]]:
+    """合算済みサンプルをint16のIMUフレーム列へ割る。
+
+    戻り値は (フレーム列, 次のバッチへ繰り越す残差)。最大
+    PROC_IMU_CHUNKS_MAX フレームに抑え、収まらない角度は残差として
+    次のサンプルへ足す（黙って捨てない）。加速度は全フレームで最新値。
+    """
+    merged = _imu_combine(samples)
+    ax, ay, az = merged[0], merged[1], merged[2]
+    totals = [
+        int(carry[0]) + int(merged[3]),
+        int(carry[1]) + int(merged[4]),
+        int(carry[2]) + int(merged[5]),
+    ]
+    parts = 1
+    for total in totals:
+        if total >= 0:
+            need = (total + 32766) // 32767
+        else:
+            need = (-total + 32767) // 32768
+        if need > parts:
+            parts = need
+    parts = max(1, min(parts, PROC_IMU_CHUNKS_MAX))
+    columns: list[list[int]] = []
+    residual: list[int] = []
+    for total in totals:
+        split = [max(-32768, min(32767, v)) for v in _imu_split_even(total, parts)]
+        residual.append(total - sum(split))
+        columns.append(split)
+    frames = [
+        (ax, ay, az, columns[0][i], columns[1][i], columns[2][i]) for i in range(parts)
+    ]
+    return frames, residual
+
+
 class _SocketQueue:
     """TCP上のキュー代役。put/get(timeout)の口だけ持つ。
 
@@ -134,16 +257,10 @@ class _SocketQueue:
             pass
 
     def put(self, obj: Any) -> None:
-        try:
-            raw = pickle.dumps(obj, protocol=4)
-        except Exception:
-            return
+        raw = pickle.dumps(obj, protocol=4)
         blob = len(raw).to_bytes(4, "big") + raw
         with self._send_lock:
-            try:
-                self._sock.sendall(blob)
-            except Exception:
-                pass
+            self._sock.sendall(blob)
 
     def get(self, timeout: float | None = None) -> Any:
         import select as _select
@@ -175,6 +292,37 @@ class _SocketQueue:
             try:
                 chunk = self._sock.recv(65536)
             except Exception:
+                raise _PeerGone(f"{self._name} recv failed")
+            if not chunk:
+                raise _PeerGone(f"{self._name} EOF")
+            self._buf.extend(chunk)
+
+    def get_nowait(self) -> Any:
+        """1件を非ブロッキングで取る。無ければ `_NO_IMU`。"""
+        import select as _select
+
+        while True:
+            while len(self._buf) >= 4:
+                size = int.from_bytes(bytes(self._buf[:4]), "big")
+                if len(self._buf) < 4 + size:
+                    break
+                raw = bytes(self._buf[4 : 4 + size])
+                del self._buf[: 4 + size]
+                try:
+                    return pickle.loads(raw)
+                except Exception:
+                    continue
+            try:
+                ready, _, _ = _select.select([self._sock], [], [], 0)
+            except Exception:
+                raise _PeerGone(f"{self._name} select failed")
+            if not ready:
+                return _NO_IMU
+            try:
+                chunk = self._sock.recv(65536)
+            except Exception:
+                # ブロッキングソケットのselect(0)直後は通常起きない。
+                # 起きたら「まだ無い」と誤認せず相手死亡として扱う。
                 raise _PeerGone(f"{self._name} recv failed")
             if not chunk:
                 raise _PeerGone(f"{self._name} EOF")
@@ -303,9 +451,24 @@ def _worker_main(cmd_q: Any, evt_q: Any, cfg: dict) -> None:
         except Exception:
             pass
 
+    def _ack_imu(seq: Any, ok: bool) -> None:
+        """IMUフレームの処理完了を親へ返す（親のack待ち枠を空ける）。"""
+        if seq is None:
+            return
+        try:
+            evt_q.put(("imu_ack", int(seq), bool(ok)))
+        except Exception:
+            pass
+
+    # 子が1件処理している間に届いたIMUを合流させるための保留。
+    # 非IMUのopは順序を保つため、次の周回で処理する。
+    pending: deque[Any] = deque()
+    # int16に割り切れなかった角度。次のサンプルへ足して合計を保つ。
+    imu_carry = [0, 0, 0]
+
     while True:
         try:
-            msg = cmd_q.get()
+            msg = pending.popleft() if pending else cmd_q.get()
         except _PeerGone:
             # 親が死んだ（ソケットEOF）。線を閉じて静かに抜ける。
             break
@@ -317,8 +480,10 @@ def _worker_main(cmd_q: Any, evt_q: Any, cfg: dict) -> None:
             continue
         try:
             if op == "stop":
+                imu_carry = [0, 0, 0]
                 break
             if op == "close":
+                imu_carry = [0, 0, 0]
                 _, call_id = msg[:2]
                 try:
                     transport.close()
@@ -326,16 +491,72 @@ def _worker_main(cmd_q: Any, evt_q: Any, cfg: dict) -> None:
                     traceback.print_exc()
                 _reply(call_id, True, True)
                 continue
+            if op == "imu_reset":
+                # stop/start の境目。前の持ち主が割り切れず残した角度を
+                # 次のサンプルへ混ぜない（子側の繰越だけを捨てる）。
+                imu_carry = [0, 0, 0]
+                continue
             if op == "imu":
-                # 返信しない。親はキュー投入までを成功とみなし、成否を
-                # 待たない（200HzのIPC往復を無くすための専用op）。
-                _, ax, ay, az, gx, gy, gz = msg[:7]
-                try:
-                    transport.send_imu(ax, ay, az, gx, gy, gz)
-                except Exception:
-                    traceback.print_exc()
+                # 返信待ちはしない。子のRPCが長引いた間に溜まったIMUは、
+                # 1本ずつ書かず「加速度=最新・ジャイロ=和」で畳む。
+                # 40本の古いフレームを線へ流さないための要。
+                samples: list[tuple[int, int, int, int, int, int]] = []
+                seqs: list[int] = []
+                incoming: Any = msg
+                peer_gone = False
+                while True:
+                    sample = _imu_sample_of(incoming)
+                    seq: int | None = None
+                    if isinstance(incoming, tuple) and len(incoming) >= 8:
+                        try:
+                            seq = int(incoming[7])
+                        except (TypeError, ValueError):
+                            seq = None
+                    if sample is None:
+                        # 形が壊れたIMU。親の枠を塞がないようackは返す。
+                        _ack_imu(seq, False)
+                        break
+                    samples.append(sample)
+                    if seq is not None:
+                        seqs.append(seq)
+                    if len(samples) >= PROC_IMU_BATCH_MAX:
+                        break
+                    try:
+                        incoming = _queue_get_nowait(cmd_q)
+                    except _PeerGone:
+                        peer_gone = True
+                        break
+                    if incoming is _NO_IMU:
+                        break
+                    if not (
+                        isinstance(incoming, tuple)
+                        and incoming
+                        and incoming[0] == "imu"
+                    ):
+                        pending.appendleft(incoming)
+                        break
+                carry_next = imu_carry
+                frames: list[tuple[int, int, int, int, int, int]] = []
+                if samples:
+                    frames, carry_next = _imu_plan_frames(samples, imu_carry)
+                ok_all = True
+                for frame in frames:
+                    try:
+                        if not bool(transport.send_imu(*frame)):
+                            ok_all = False
+                    except Exception:
+                        traceback.print_exc()
+                        ok_all = False
+                # 線へ出せなかった残差は持ち越さない。hold/close/再openの
+                # あとに古い角度を再生しないため（出せた分だけが正）。
+                imu_carry = carry_next if ok_all else [0, 0, 0]
+                for seq in seqs:
+                    _ack_imu(seq, ok_all)
+                if peer_gone:
+                    break
                 continue
             if op == "open":
+                imu_carry = [0, 0, 0]
                 _, call_id, port_num, port_name, baudrate = msg[:5]
                 try:
                     ok = bool(transport.open(port_num, port_name, baudrate))
@@ -363,6 +584,14 @@ def _worker_main(cmd_q: Any, evt_q: Any, cfg: dict) -> None:
                 if method not in _ALLOWED_CALLS:
                     _reply(call_id, False, {"error": f"unknown op: {method!r}"})
                     continue
+                if (
+                    method == "hold_input"
+                    and isinstance(args, tuple)
+                    and args
+                    and bool(args[0])
+                ):
+                    # hold後の再開にhold前の残差を混ぜない。
+                    imu_carry = [0, 0, 0]
                 try:
                     func = getattr(transport, method)
                     result = func(*args) if isinstance(args, tuple) else func()
@@ -589,6 +818,20 @@ class BconProcTransport(Transport):
         self._imu_stats_lock = threading.Lock()
         self._imu_sent = 0
         self._imu_dropped = 0
+        self._imu_coalesced = 0
+        self._imu_frames = 0
+        self._imu_delivered = 0
+        self._imu_stale = 0
+        # 子のack待ちIMUフレーム番号。子が詰まっている間はここが増えず、
+        # 新しいサンプルは下のメールボックスへ畳まれる（FIFOを伸ばさない）。
+        self._imu_tx_lock = threading.Lock()
+        self._imu_inflight: set[int] = set()
+        self._imu_seq = 0
+        self._imu_mailbox: deque[tuple[float, tuple[int, int, int, int, int, int]]] = (
+            deque()
+        )
+        # hold中は子へIMUを積まない（解除時に古い角度を送らない）。
+        self._imu_hold = False
         # 親が投入したIMUサンプルを配る相手（Blocklyの記録など）。
         self._imu_listeners: list[
             Callable[[tuple[int, int, int, int, int, int]], None]
@@ -621,6 +864,43 @@ class BconProcTransport(Transport):
                 event.set()
             except Exception:
                 pass
+        self._reset_imu_delivery()
+
+    def _reset_imu_delivery(self) -> None:
+        """子の入れ替え・死亡でIMUの持ち越しを捨てる。
+
+        メールボックスに残ったサンプルはもう線へ出せない（子が死んだ/
+        作り直された）。黙って消さず stale として数える。
+        """
+        with self._imu_tx_lock:
+            stale = len(self._imu_mailbox)
+            self._imu_mailbox.clear()
+            self._imu_inflight.clear()
+            self._imu_hold = False
+        if stale:
+            with self._imu_stats_lock:
+                self._imu_stale += int(stale)
+                self._imu_coalesced = max(0, self._imu_coalesced - int(stale))
+
+    def _drop_imu_mailbox(self) -> int:
+        """合算待ちだけを捨てる（ack待ちのフレームは取り消せない）。"""
+        with self._imu_tx_lock:
+            stale = len(self._imu_mailbox)
+            self._imu_mailbox.clear()
+        if stale:
+            with self._imu_stats_lock:
+                self._imu_stale += int(stale)
+                self._imu_coalesced = max(0, self._imu_coalesced - int(stale))
+        return int(stale)
+
+    def _send_imu_reset(self) -> None:
+        """子側の繰越角度を捨てる（stop/startの境目で使う）。"""
+        try:
+            cmd_q = self._cmd_q
+            if cmd_q is not None and self._worker_alive():
+                cmd_q.put(("imu_reset",))
+        except Exception:
+            pass
 
     def _warn(self, msg: str) -> None:
         """親側の失敗理由を残す。振る舞いは変えない（落とさない）。"""
@@ -644,6 +924,7 @@ class BconProcTransport(Transport):
             pass
 
     def _terminate_worker(self) -> None:
+        self._reset_imu_delivery()
         worker, cmd_q, evt_q = self._worker, self._cmd_q, self._evt_q
         self._worker = None
         self._cmd_q = None
@@ -793,6 +1074,12 @@ class BconProcTransport(Transport):
                             event.set()
                         except Exception:
                             pass
+                elif kind == "imu_ack":
+                    # 子がIMUフレームを処理し終えた。ack待ちを減らし、
+                    # 畳んであったサンプルがあれば1フレームだけ流す。
+                    _, ack_seq = evt[:2]
+                    ok = bool(evt[2]) if len(evt) > 2 else True
+                    self._on_imu_ack(ack_seq, ok)
                 # 未知evtは無視する。
             except Exception:
                 continue
@@ -912,6 +1199,16 @@ class BconProcTransport(Transport):
             )
             self._warn(f"bcon-procの子を起こせませんでした({label})")
             return False
+        # openの応答待ちの間に積んだIMUを、開いた後の線へ遅れて流さない。
+        # hold扱いにしてIMUループのsource読みも止める（成功時に解除）。
+        with self._imu_tx_lock:
+            self._imu_hold = True
+            stale = len(self._imu_mailbox)
+            self._imu_mailbox.clear()
+        if stale:
+            with self._imu_stats_lock:
+                self._imu_stale += int(stale)
+                self._imu_coalesced = max(0, self._imu_coalesced - int(stale))
         with self._pending_lock:
             self._call_seq += 1
             call_id = self._call_seq
@@ -952,6 +1249,16 @@ class BconProcTransport(Transport):
         self._opened = ok
         if ok:
             self._tx_last_note = None
+            # openし直しは新しい握手。前の線で溜めた合算角度を送らない。
+            with self._imu_tx_lock:
+                stale = len(self._imu_mailbox)
+                self._imu_mailbox.clear()
+                self._imu_inflight.clear()
+                self._imu_hold = False
+            if stale:
+                with self._imu_stats_lock:
+                    self._imu_stale += int(stale)
+                    self._imu_coalesced = max(0, self._imu_coalesced - int(stale))
         if not ok:
             self._warn(f"bcon-procのopenが子で失敗しました({label}): {box!r}")
             self._terminate_worker()
@@ -961,7 +1268,28 @@ class BconProcTransport(Transport):
         return self._open_error
 
     def hold_input(self, hold: bool) -> bool:
-        return self._rpc_bool("hold_input", (bool(hold),), 3.0)
+        """入力を抑止する。hold中/解除直後に古い角度を送らない。
+
+        hold=True では、まだ子へ出していない合算メールボックスを捨てる
+        （すでにack待ちのフレームは子がhold指示より先に処理するため、
+        それはhold前の動きとして届く）。hold中は `send_imu` も投入しない。
+        """
+        want = bool(hold)
+        if want:
+            with self._imu_tx_lock:
+                stale = len(self._imu_mailbox)
+                self._imu_mailbox.clear()
+                if stale:
+                    with self._imu_stats_lock:
+                        self._imu_stale += int(stale)
+                        self._imu_coalesced = max(0, self._imu_coalesced - int(stale))
+                # staleの加算後にholdを立てる（外から見て統計と状態が揃う）。
+                self._imu_hold = True
+        ok = self._rpc_bool("hold_input", (want,), 3.0)
+        if not want and ok:
+            with self._imu_tx_lock:
+                self._imu_hold = False
+        return ok
 
     def current_baud(self) -> int | None:
         ok, value = self._call("current_baud", (), timeout=3.0)
@@ -969,6 +1297,9 @@ class BconProcTransport(Transport):
 
     def close(self) -> None:
         """線を閉じて子を畳む。二重安全。例外は投げない。"""
+        # 閉じる間にIMUループが生き残っていても、新しいIMUを積まない。
+        with self._imu_tx_lock:
+            self._imu_hold = True
         try:
             # 親側のIMUループを先に止める（子を畳むとRPCが失敗し続ける）。
             self.stop_imu_loop()
@@ -1158,6 +1489,68 @@ class BconProcTransport(Transport):
     def hello_established(self) -> bool:
         return self._rpc_bool("hello_established", (), 3.0)
 
+    def _emit_imu_locked(self, vals: tuple[int, int, int, int, int, int]) -> bool:
+        """IMUフレームを1本だけ子へ積む（呼び側が `_imu_tx_lock` を持つ）。"""
+        cmd_q = self._cmd_q
+        if cmd_q is None:
+            return False
+        self._imu_seq += 1
+        seq = self._imu_seq
+        try:
+            cmd_q.put(("imu", *vals, seq))
+        except Exception:
+            return False
+        self._imu_inflight.add(seq)
+        with self._imu_stats_lock:
+            self._imu_frames += 1
+        return True
+
+    def _expire_imu_mailbox_locked(self, now: float) -> None:
+        """子の停止中に古くなった合算待ちを、復帰時にも再生しない。"""
+        expired = 0
+        while self._imu_mailbox and now - self._imu_mailbox[0][0] > PROC_IMU_WINDOW_S:
+            self._imu_mailbox.popleft()
+            expired += 1
+        if expired:
+            with self._imu_stats_lock:
+                self._imu_stale += expired
+                self._imu_coalesced -= expired
+
+    def _on_imu_ack(self, seq: Any, delivered: bool = True) -> None:
+        """子がIMUフレームを処理し終えた合図。ack待ちを減らして再開する。
+
+        子がRPCで詰まっている間はackが来ないので、`_imu_inflight` が
+        上限に達したままになり、新しいサンプルは送らずメールボックスへ
+        畳まれる。ackが戻った時点で畳んだ1フレームだけを流す（40本の
+        古いフレームを一気に書かせない）。
+
+        未知・重複・前世代のackは何もしない。それでメールボックスを
+        押し出すと、新しい世代の最初の1フレームを古い合図で送ってしまう。
+        """
+        try:
+            seq_i = int(seq)
+        except (TypeError, ValueError):
+            return
+        with self._imu_tx_lock:
+            if seq_i not in self._imu_inflight:
+                # 前の世代・重複・未知のack。新しい世代のメールボックスを
+                # これで押し出さない（flushの引き金にしない）。
+                return
+            self._imu_inflight.discard(seq_i)
+            if delivered:
+                with self._imu_stats_lock:
+                    self._imu_delivered += 1
+            self._expire_imu_mailbox_locked(time.monotonic())
+            if (
+                self._imu_mailbox
+                and not self._imu_hold
+                and len(self._imu_inflight) < PROC_IMU_INFLIGHT_MAX
+                and self._worker_alive()
+            ):
+                merged = _imu_combine([sample for _, sample in self._imu_mailbox])
+                if self._emit_imu_locked(merged):
+                    self._imu_mailbox.clear()
+
     def send_imu(
         self,
         ax: int,
@@ -1167,17 +1560,28 @@ class BconProcTransport(Transport):
         gy: int,
         gz: int,
     ) -> bool:
-        """子のIMU送出キューへ載せるだけ。同期RPCしない。
+        """子のIMU送出キューへ載せる（返信待ちはしない）。
 
-        200Hzで親子のIPC往復（Event待ち）を行うとGUIスレッドが詰まる
-        ため、返信不要の "imu" op を投げて投入成否だけ返す。子側の
-        write成否は待たない（厳密な数えは子のlive_stats/別統計の領分）。
-        送信統計 sent/dropped は親側の投入結果で維持する。
+        子がRPCで詰まっている間は、線へ出すのを最大
+        `PROC_IMU_INFLIGHT_MAX` フレームで止め、残りは加速度=最新・
+        ジャイロ=和として最大 `PROC_IMU_MERGE_MAX` 件・実時間100msまで
+        メールボックスへ畳む。200ms止まっても40本の古いIMUを書かない。
+        100msを超えた古いサンプルは stale として数えて捨てる（FWも
+        100ms超の古い動きを捨てる前提）。合計角度が厳密に残るのは
+        窓の内側だけで、cap/hold/stop/open で捨てた分は戻らない。
+        これは遅延を有界にするための不可避な取引。
+
+        統計（`imu_stats`）の意味:
+        - sent: 受理した入力サンプル数（200Hzの入力そのもの）
+        - coalesced: 合算待ち/合算フレームとして残っている受理サンプル数
+          （staleへ転じた分はここから差し引く）
+        - frames: 子へ積んだIMUフレーム数（畳んだ分は1）
+        - delivered: 子が線へ出せたとackしたフレーム数
+        - dropped: 受理しなかった入力（死んでいる・hold中・不正値）
+        - stale: cap/hold/stop/open/死亡で捨てたサンプル（coalescedから移る）
+
+        受理サンプルは sent = 単独フレームで出した数 + coalesced + stale。
         """
-        if not self._worker_alive():
-            with self._imu_stats_lock:
-                self._imu_dropped += 1
-            return False
         try:
             vals = (
                 max(-32768, min(32767, int(ax))),
@@ -1191,16 +1595,33 @@ class BconProcTransport(Transport):
             with self._imu_stats_lock:
                 self._imu_dropped += 1
             return False
-        try:
-            self._cmd_q.put(("imu", *vals))
-        except Exception:
+        with self._imu_tx_lock:
+            if self._imu_hold or not self._worker_alive():
+                with self._imu_stats_lock:
+                    self._imu_dropped += 1
+                return False
+            now = time.monotonic()
+            self._expire_imu_mailbox_locked(now)
+            if len(self._imu_inflight) < PROC_IMU_INFLIGHT_MAX:
+                if not self._emit_imu_locked(vals):
+                    with self._imu_stats_lock:
+                        self._imu_dropped += 1
+                    return False
+            else:
+                if len(self._imu_mailbox) >= PROC_IMU_MERGE_MAX:
+                    self._imu_mailbox.popleft()
+                    with self._imu_stats_lock:
+                        self._imu_stale += 1
+                        # staleへ転じた分は「畳んで残った」数から外す。
+                        if self._imu_coalesced > 0:
+                            self._imu_coalesced -= 1
+                self._imu_mailbox.append((now, vals))
+                with self._imu_stats_lock:
+                    self._imu_coalesced += 1
             with self._imu_stats_lock:
-                self._imu_dropped += 1
-            if not self._worker_alive():
-                self._mark_dead()
-            return False
-        with self._imu_stats_lock:
-            self._imu_sent += 1
+                self._imu_sent += 1
+        # 記録・プレビュー用の聞き手には入力サンプルを1件も欠かさず配る。
+        # 線への畳み込みは下流（子）の都合であり、記録の角度積分を変えない。
         self._notify_imu(vals)
         return True
 
@@ -1283,6 +1704,9 @@ class BconProcTransport(Transport):
             self._imu_gen += 1
             generation = self._imu_gen
             self._imu_owner = str(owner)
+            # 新しい持ち主の開始に、前の持ち主が畳んだ角度を持ち越さない。
+            self._drop_imu_mailbox()
+            self._send_imu_reset()
             stop = threading.Event()
             self._imu_loop_stop = stop
             worker = threading.Thread(
@@ -1302,29 +1726,37 @@ class BconProcTransport(Transport):
         source: Any,
         interval_s: float,
     ) -> None:
-        deadline = time.perf_counter()
-        while not stop.is_set():
-            deadline += interval_s
-            with self._imu_lock:
-                if self._imu_gen != generation:
-                    break
-            try:
-                sample = source()
-            except Exception:
-                sample = None
-            if sample is not None:
+        _precise_timer(True)
+        try:
+            deadline = time.perf_counter()
+            while not stop.is_set():
+                deadline += interval_s
                 with self._imu_lock:
                     if self._imu_gen != generation:
                         break
                 try:
-                    self.send_imu(*sample)
+                    # 本家と同じくhold中はsourceを読まない（PC側の未送出
+                    # 角度を進めない。記録にも残さない）。
+                    with self._imu_tx_lock:
+                        held = self._imu_hold
+                    sample = None if held else source()
                 except Exception:
-                    pass
-            remain = deadline - time.perf_counter()
-            if remain > 0:
-                stop.wait(remain)
-            else:
-                deadline = time.perf_counter()
+                    sample = None
+                if sample is not None:
+                    with self._imu_lock:
+                        if self._imu_gen != generation:
+                            break
+                    try:
+                        self.send_imu(*sample)
+                    except Exception:
+                        pass
+                remain = deadline - time.perf_counter()
+                if remain > 0:
+                    stop.wait(remain)
+                else:
+                    deadline = time.perf_counter()
+        finally:
+            _precise_timer(False)
 
     def stop_imu_loop(self, owner: str | None = None) -> bool:
         """止まるまで待つ（上限0.5秒）。死んでいなければ handle を残す。
@@ -1342,6 +1774,11 @@ class BconProcTransport(Transport):
             stop = self._imu_loop_stop
             thread = self._imu_loop_thread
             self._imu_owner = ""
+            # 停止後に古い合算を流さない。ack待ちの数フレーム（<=10ms）は
+            # 停止指示より先に子が処理するので、ここでは畳んだ分だけ捨てる。
+            # startとの順序が入れ替わらないよう、世代の錠の中で送る。
+            self._drop_imu_mailbox()
+            self._send_imu_reset()
         stop.set()
         if thread is None:
             return True
@@ -1355,7 +1792,14 @@ class BconProcTransport(Transport):
 
     def imu_stats(self) -> dict[str, int]:
         with self._imu_stats_lock:
-            return {"sent": int(self._imu_sent), "dropped": int(self._imu_dropped)}
+            return {
+                "sent": int(self._imu_sent),
+                "dropped": int(self._imu_dropped),
+                "coalesced": int(self._imu_coalesced),
+                "frames": int(self._imu_frames),
+                "delivered": int(self._imu_delivered),
+                "stale": int(self._imu_stale),
+            }
 
     def live_stats(self) -> dict[str, Any]:
         ok, result = self._call("live_stats", (), timeout=3.0)

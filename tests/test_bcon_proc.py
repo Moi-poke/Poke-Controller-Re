@@ -10,6 +10,7 @@ import queue
 import threading
 from typing import Any
 
+import pytest
 from pokecon.domain.transport.bcon_protocol import T_BEACON_START as _T_BEACON
 
 
@@ -313,8 +314,20 @@ def test_proc_socket_framing_round_trip_and_eof():
     getter = bcon_proc._SocketQueue(conn, name="get")
     try:
         putter.put(("hello", 1, b"abc"))
-        assert getter.get(timeout=5.0) == ("hello", 1, b"abc")
+        # 1本目は非ブロッキングget（子のIMU合流が使う口）で取る。
+        deadline = _time.perf_counter() + 5.0
+        got: Any = bcon_proc._NO_IMU
+        while got is bcon_proc._NO_IMU and _time.perf_counter() < deadline:
+            got = getter.get_nowait()
+            if got is bcon_proc._NO_IMU:
+                _time.sleep(0.002)
+        assert got == ("hello", 1, b"abc")
+        assert getter.get_nowait() is bcon_proc._NO_IMU, "空なのに値が返る"
+        putter.put(("hello", 2, b"def"))
+        assert getter.get(timeout=5.0) == ("hello", 2, b"def")
         sender.close()
+        with pytest.raises(OSError):
+            putter.put(("imu", 0, 0, 4096, 0, 0, 125))
         deadline = _time.perf_counter() + 5.0
         while True:
             try:
@@ -328,7 +341,7 @@ def test_proc_socket_framing_round_trip_and_eof():
 
 
 def test_proc_send_imu_queues_without_rpc(monkeypatch):
-    """IMUは同期RPCを通らず、子が50フレーム書く。統計は親側で数える。"""
+    """IMUは同期RPCを通らず、窓内なら和で畳む。合計角度は保つ。"""
     import time as _time
 
     from pokecon.domain.transport.bcon_protocol import T_IMU_SAMPLE
@@ -345,26 +358,405 @@ def test_proc_send_imu_queues_without_rpc(monkeypatch):
     try:
         assert made.hello(timeout=2.0)
         calls.clear()
-        for i in range(50):
-            assert made.send_imu(i, 0, 4096, 0, 0, 0) is True
+        for i in range(20):  # 100ms窓に収まる範囲（cap超過は別テスト）。
+            # ジャイロを変える（加速度は最新だけ残るので合計の証拠にならない）。
+            assert made.send_imu(0, 0, 4096, i, 0, 0) is True
         assert calls == [], f"IMUが同期RPCを通った: {calls}"
-        assert made.imu_stats() == {"sent": 50, "dropped": 0}
         deadline = _time.perf_counter() + 5.0
         frames: list[bytes] = []
+        gx_total = 0
         while _time.perf_counter() < deadline:
             frames = [
                 f
                 for f in _all_written(sers)
                 if len(f) >= 2 and f[0] == 0xAB and f[1] == T_IMU_SAMPLE
             ]
-            if len(frames) >= 50:
+            gx_total = sum(
+                int.from_bytes(f[9:11], "little", signed=True) for f in frames
+            )
+            if gx_total >= 190:  # 0+1+...+19。全サンプルのジャイロが届いた証拠。
                 break
             _time.sleep(0.005)
-        assert len(frames) == 50, f"子のIMUフレームが{len(frames)}件"
+        assert frames, "子のIMUフレームが1本も出ない"
+        assert len(frames) <= 20, f"畳まずに{len(frames)}本書いた"
+        assert gx_total == 190, f"ジャイロの合計が欠けた: {gx_total}"
         assert all(f[2] == 12 for f in frames)
+        stats = made.imu_stats()
+        assert stats["sent"] == 20
+        assert stats["dropped"] == 0
+        assert stats["stale"] == 0
+        assert stats["frames"] >= 1
     finally:
         stop.set()
         worker.join(1.0)
+        made.close()
+
+
+class _SeamTransport:
+    """子プロセス内のBconTransport代役（worker/parent境界の検査用）。
+
+    最初の `send_imu` だけを指定イベントまで止める。止めている間に
+    親が何フレーム積むか、復帰後に何本線へ出るかを決定的に見る。
+    """
+
+    instances: list["_SeamTransport"] = []
+    block_first = True
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        self.calls: list[tuple[int, int, int, int, int, int]] = []
+        self.lock = threading.Lock()
+        self.entered = threading.Event()
+        self.release = threading.Event()
+        self.closed = False
+        type(self).instances.append(self)
+
+    def set_hooks(self, *args: Any, **kwargs: Any) -> None:
+        return None
+
+    def subscribe_rx(self, *args: Any, **kwargs: Any) -> None:
+        return None
+
+    def add_listener(self, *args: Any, **kwargs: Any) -> None:
+        return None
+
+    def send_imu(self, ax: int, ay: int, az: int, gx: int, gy: int, gz: int) -> bool:
+        with self.lock:
+            self.calls.append((ax, ay, az, gx, gy, gz))
+            first = len(self.calls) == 1
+        if first and type(self).block_first:
+            self.entered.set()
+            self.release.wait(5.0)
+        return True
+
+    def hold_input(self, hold: bool) -> bool:
+        return True
+
+    def close(self) -> None:
+        self.closed = True
+
+
+def _start_seam(
+    monkeypatch: Any, *, block_first: bool = True
+) -> tuple[Any, type[_SeamTransport]]:
+    """fake spawn＋本物の `_worker_main` をスレッドで起こす。"""
+    import time as _time
+
+    from pokecon.domain.transport import bcon_proc
+
+    monkeypatch.setattr(bcon_proc, "BconTransport", _SeamTransport)
+    # 直前のテストの子が残した実体と混ざらないようにする。
+    _SeamTransport.instances.clear()
+    _SeamTransport.block_first = bool(block_first)
+    made = bcon_proc.BconProcTransport(_spawn=_fake_spawn)
+    assert made._spawn_worker() is True
+    deadline = _time.perf_counter() + 5.0
+    while not _SeamTransport.instances and _time.perf_counter() < deadline:
+        _time.sleep(0.005)
+    assert _SeamTransport.instances, "子のtransportが作られない"
+    return made, _SeamTransport
+
+
+def _wait_imu_idle(made: Any, timeout: float = 5.0) -> dict[str, int]:
+    """全IMUフレームのackが返るまで待ち、統計を返す。"""
+    import time as _time
+
+    deadline = _time.perf_counter() + timeout
+    while _time.perf_counter() < deadline:
+        stats = made.imu_stats()
+        if stats["delivered"] >= stats["frames"]:
+            return stats
+        _time.sleep(0.005)
+    return made.imu_stats()
+
+
+def test_proc_imu_blocked_child_bounds_and_coalesces_backlog(monkeypatch):
+    """100ms窓内の子ブロックで、古いIMUを1本ずつ線へ書かせない。
+
+    Given: 子の最初のIMU書き込みを止める / When: その間に20サンプル投入 /
+    Then: FIFOはack待ち上限で頭打ち・復帰後の線への書き込みは数本で、
+    窓内のジャイロ合計と最新加速度は保たれる。
+    """
+    from pokecon.domain.transport import bcon_proc
+
+    made, cls = _start_seam(monkeypatch)
+    tr = cls.instances[0]
+    try:
+        assert made.send_imu(0, 0, 4096, 0, 0, 0) is True
+        assert tr.entered.wait(2.0), "子の最初のIMU書き込みが始まらない"
+        # ここから先は子がRPCで詰まっている状態（ackが返らない）。
+        for i in range(1, 20):
+            assert made.send_imu(i % 7, 0, 4096, i, -i, 2 * i) is True
+        # 入力は20件すべて受理。子のFIFOはack待ち上限で頭打ち。
+        assert made._cmd_q.qsize() <= bcon_proc.PROC_IMU_INFLIGHT_MAX
+        stats = made.imu_stats()
+        assert stats["sent"] == 20
+        assert stats["dropped"] == 0
+        assert stats["coalesced"] == 18
+        assert stats["frames"] == 2
+        assert stats["stale"] == 0, "100ms窓内で捨ててはいけない"
+        # 復帰させ、線へ出た本数と合計を見る。
+        tr.release.set()
+        final = _wait_imu_idle(made)
+        assert final["delivered"] == final["frames"]
+        with tr.lock:
+            calls = list(tr.calls)
+        assert 1 <= len(calls) <= 1 + bcon_proc.PROC_IMU_INFLIGHT_MAX
+        assert sum(c[3] for c in calls) == sum(range(20))
+        assert sum(c[4] for c in calls) == -sum(range(20))
+        assert sum(c[5] for c in calls) == 2 * sum(range(20))
+        assert calls[-1][:3] == (19 % 7, 0, 4096), "加速度が最新でない"
+        assert all(-32768 <= v <= 32767 for c in calls for v in c[3:])
+        assert final["stale"] == 0
+    finally:
+        tr.release.set()
+        made.close()
+
+
+def test_proc_imu_single_sample_survives_accounting(monkeypatch):
+    """子が止まっていても5ms1件の小さな入力は1本・統計1件で通る。"""
+    made, cls = _start_seam(monkeypatch)
+    tr = cls.instances[0]
+    try:
+        assert made.send_imu(0, 0, 4096, 125, -3, 7) is True
+        assert tr.entered.wait(2.0)
+        # 子がこの1本で止まっている間も、入力は畳まれずそのまま残る。
+        stats = made.imu_stats()
+        assert stats["sent"] == 1
+        assert stats["coalesced"] == 0
+        assert stats["frames"] == 1
+        tr.release.set()
+        stats = _wait_imu_idle(made)
+        with tr.lock:
+            calls = list(tr.calls)
+        assert calls == [(0, 0, 4096, 125, -3, 7)]
+        assert stats == {
+            "sent": 1,
+            "dropped": 0,
+            "coalesced": 0,
+            "frames": 1,
+            "delivered": 1,
+            "stale": 0,
+        }
+    finally:
+        tr.release.set()
+        made.close()
+
+
+def test_proc_imu_hold_drops_stale_angle_and_stops_delivery(monkeypatch):
+    """holdで合算待ちを捨て、解除後に古い角度を再生しない。"""
+    import time as _time
+
+    made, cls = _start_seam(monkeypatch)
+    tr = cls.instances[0]
+    holder: dict[str, Any] = {}
+
+    def _hold() -> None:
+        holder["ok"] = made.hold_input(True)
+
+    thread = threading.Thread(target=_hold, daemon=True)
+    try:
+        assert made.send_imu(0, 0, 4096, 0, 0, 0) is True
+        assert tr.entered.wait(2.0)
+        for i in range(1, 40):
+            assert made.send_imu(0, 0, 4096, i, 0, 0) is True
+        thread.start()
+        deadline = _time.perf_counter() + 2.0
+        while not made._imu_hold and _time.perf_counter() < deadline:
+            _time.sleep(0.002)
+        assert made._imu_hold, "holdが親側で立たない"
+        # 100ms窓を超えて捨てた18本 + holdで捨てた20本。
+        assert made.imu_stats()["stale"] == 38, "合算待ちが捨てられていない"
+        tr.release.set()
+        thread.join(5.0)
+        assert not thread.is_alive()
+        assert holder.get("ok") is True
+        # hold中の入力は受理しない（子へ積まない）。
+        assert made.send_imu(0, 0, 4096, 999, 0, 0) is False
+        stats = made.imu_stats()
+        assert stats["sent"] == 40
+        assert stats["dropped"] == 1
+        assert stats["stale"] == 38
+        assert stats["coalesced"] == 0, "捨てた分が合算待ちに残っている"
+        with tr.lock:
+            calls = list(tr.calls)
+        # hold前にack待ちだった2本（0と1）だけ。合算待ち20本とcap超過18本は出ない。
+        assert sum(c[3] for c in calls) == 1
+        assert max(c[3] for c in calls) <= 1
+        # 解除後の新しい動きは通る。捨てた合算が混ざらないこと。
+        assert made.hold_input(False) is True
+        assert made.send_imu(0, 0, 4096, 7, 0, 0) is True
+        _wait_imu_idle(made)
+        with tr.lock:
+            calls = list(tr.calls)
+        assert sum(c[3] for c in calls) == 8
+    finally:
+        tr.release.set()
+        made.close()
+
+
+def test_proc_imu_large_backlog_splits_i16_without_losing_angle(monkeypatch):
+    """窓内で合算がint16を超えても、分割して合計角度を保つ（飽和で消さない）。"""
+    from pokecon.domain.transport import bcon_proc
+
+    made, cls = _start_seam(monkeypatch)
+    tr = cls.instances[0]
+    try:
+        assert made.send_imu(0, 0, 4096, 4000, 0, 0) is True
+        assert tr.entered.wait(2.0)
+        for _ in range(19):  # 20サンプル=100ms窓内。
+            assert made.send_imu(0, 0, 4096, 4000, 0, 0) is True
+        tr.release.set()
+        final = _wait_imu_idle(made)
+        with tr.lock:
+            calls = list(tr.calls)
+        assert (
+            len(calls)
+            <= bcon_proc.PROC_IMU_INFLIGHT_MAX + bcon_proc.PROC_IMU_CHUNKS_MAX
+        ), f"分割が多すぎる: {len(calls)}本"
+        assert sum(c[3] for c in calls) == 4000 * 20, "窓内の合計角度が欠けた"
+        assert all(-32768 <= c[3] <= 32767 for c in calls)
+        assert final["delivered"] == final["frames"]
+        assert final["stale"] == 0
+    finally:
+        tr.release.set()
+        made.close()
+
+
+def test_proc_imu_tail_100ms_cap_drops_oldest_keeps_fresh(monkeypatch):
+    """100msを超えたら最古を stale として捨て、直近の微小動作は残す。
+
+    40サンプル（200ms相当）を子ブロック中に投入する。窓は20サンプル。
+    最初の2本はack待ちでFIFOにあり、残り38本のうち古い18本が捨てられ、
+    直近20本だけが畳まれる。最後の1本（1LSB相当）は生きたまま届く。
+    """
+    from pokecon.domain.transport import bcon_proc
+
+    made, cls = _start_seam(monkeypatch)
+    tr = cls.instances[0]
+    try:
+        assert made.send_imu(0, 0, 4096, 1000, 0, 0) is True
+        assert tr.entered.wait(2.0)
+        for _ in range(38):
+            assert made.send_imu(0, 0, 4096, 1000, 0, 0) is True
+        # 最後だけ微小な1LSB。畳んだ和の末尾に残ることを見る。
+        assert made.send_imu(0, 0, 4096, 1, 0, 0) is True
+        stats = made.imu_stats()
+        assert stats["sent"] == 40
+        assert stats["dropped"] == 0
+        assert stats["coalesced"] == 20, "staleへ転じた分が残っている"
+        assert stats["frames"] == 2
+        assert stats["stale"] == 18, "窓を超えた古い18本が数えられていない"
+        assert len(made._imu_mailbox) == bcon_proc.PROC_IMU_MERGE_MAX
+        tr.release.set()
+        final = _wait_imu_idle(made)
+        with tr.lock:
+            calls = list(tr.calls)
+        # sample1+sample2+直近20本。捨てた18本×1000は出ない。
+        assert sum(c[3] for c in calls) == 39 * 1000 + 1 - 18 * 1000
+        assert sum(c[3] for c in calls) % 1000 == 1, "直近の1LSBが消えた"
+        assert all(-32768 <= c[3] <= 32767 for c in calls)
+        assert len(calls) <= 1 + bcon_proc.PROC_IMU_INFLIGHT_MAX
+        assert final["stale"] == 18
+        assert final["delivered"] == final["frames"]
+    finally:
+        tr.release.set()
+        made.close()
+
+
+def test_proc_imu_ack_discards_mailbox_older_than_wall_clock_window(monkeypatch):
+    """入力が止まった後の長い子ブロックでは、古い角度を復帰時に再生しない。"""
+    from pokecon.domain.transport import bcon_proc
+
+    clock = [100.0]
+    monkeypatch.setattr(bcon_proc.time, "monotonic", lambda: clock[0])
+    made, cls = _start_seam(monkeypatch)
+    tr = cls.instances[0]
+    try:
+        assert made.send_imu(0, 0, 4096, 0, 0, 0)
+        assert tr.entered.wait(2.0)
+        assert made.send_imu(0, 0, 4096, 0, 0, 0)
+        assert made.send_imu(0, 0, 4096, 500, 0, 0)
+        clock[0] += 0.2
+        tr.release.set()
+        final = _wait_imu_idle(made)
+        with tr.lock:
+            calls = list(tr.calls)
+        assert sum(sample[3] for sample in calls) == 0
+        assert final["stale"] == 1
+        assert final["coalesced"] == 0
+    finally:
+        tr.release.set()
+        made.close()
+
+
+def test_proc_imu_stale_ack_does_not_flush_new_mailbox(monkeypatch):
+    """未知・前世代のackで、新しい世代の合算待ちを押し出さない。"""
+    made, cls = _start_seam(monkeypatch)
+    tr = cls.instances[0]
+    try:
+        assert made.send_imu(0, 0, 4096, 0, 0, 0) is True
+        assert tr.entered.wait(2.0)
+        # sample2はFIFO、sample3はメールボックスに残る。
+        assert made.send_imu(0, 0, 4096, 1, 0, 0) is True
+        assert made.send_imu(0, 0, 4096, 2, 0, 0) is True
+        assert len(made._imu_mailbox) == 1
+        before = made.imu_stats()
+        made._on_imu_ack(999999, True)
+        stats = made.imu_stats()
+        assert len(made._imu_mailbox) == 1, "未知ackでメールボックスが流れた"
+        assert made._cmd_q.qsize() == 1
+        assert stats["frames"] == before["frames"]
+        assert stats["delivered"] == before["delivered"]
+        assert stats["stale"] == 0
+        tr.release.set()
+        final = _wait_imu_idle(made)
+        with tr.lock:
+            calls = list(tr.calls)
+        assert sum(c[3] for c in calls) == 0 + 1 + 2
+        assert final["delivered"] == final["frames"]
+    finally:
+        tr.release.set()
+        made.close()
+
+
+def test_proc_imu_stop_and_reopen_do_not_replay_stale_angle(monkeypatch):
+    """停止で合算待ちを捨て、再open後に古い角度を流さない。"""
+    import time as _time
+
+    made, cls = _start_seam(monkeypatch)
+    tr = cls.instances[0]
+    try:
+        assert made.send_imu(0, 0, 4096, 0, 0, 0) is True
+        assert tr.entered.wait(2.0)
+        for i in range(1, 40):
+            assert made.send_imu(0, 0, 4096, i, 0, 0) is True
+        assert made.stop_imu_loop() is True
+        # 100ms窓を超えて捨てた18本 + stopで捨てた20本。
+        assert made.imu_stats()["stale"] == 38
+        assert made.imu_stats()["coalesced"] == 0
+        tr.release.set()
+        _wait_imu_idle(made)
+        with tr.lock:
+            calls = list(tr.calls)
+        assert sum(c[3] for c in calls) == 1, "停止後に合算が流れた"
+        assert max(c[3] for c in calls) <= 1
+        made.close()
+        # 作り直し: 新しい子には新しい入力だけが渡る。
+        cls.block_first = False
+        assert made._spawn_worker() is True
+        deadline = _time.perf_counter() + 5.0
+        while len(cls.instances) < 2 and _time.perf_counter() < deadline:
+            _time.sleep(0.005)
+        assert len(cls.instances) >= 2
+        new_tr = cls.instances[1]
+        assert made.send_imu(0, 0, 4096, 123, 0, 0) is True
+        _wait_imu_idle(made)
+        with new_tr.lock:
+            new_calls = list(new_tr.calls)
+        assert [c[3] for c in new_calls] == [123]
+    finally:
+        cls.block_first = True
+        tr.release.set()
         made.close()
 
 

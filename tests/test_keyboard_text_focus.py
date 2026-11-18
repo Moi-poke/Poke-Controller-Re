@@ -64,3 +64,59 @@ def test_focus_into_search_entry_closes_the_keyboard_gate(tk_root: tk.Tk) -> Non
         assert not host._kb_window_active.is_set()
     finally:
         top.destroy()
+
+
+def _hook_host(
+    focus: object, *, enabled: bool = True, keyboard: object = object()
+) -> tuple[SerialPanelMixin, list[str]]:
+    """フォーカス判定とフック停止だけを持つ最小のホスト。"""
+    calls: list[str] = []
+
+    class _Host(SerialPanelMixin):
+        pass
+
+    host = _Host()
+    host.root = SimpleNamespace(focus_get=lambda: focus)
+    host._kb_window_active = threading.Event()
+    host.is_use_keyboard = SimpleNamespace(get=lambda: enabled)
+    host.serial = SimpleNamespace(
+        keyboard=keyboard,
+        stop_keyboard=lambda: calls.append("stop"),
+    )
+    return host, calls
+
+
+def test_focus_out_stops_the_system_wide_keyboard_hook() -> None:
+    # Given: 窓外（どの部品にもフォーカスが無い）
+    host, calls = _hook_host(None)
+    # When: 遅延判定が走る
+    SerialPanelMixin._syncKeyboardFocus(host)  # type: ignore[arg-type]
+    # Then: 打鍵の門が下り、OS 全体のフックも外れる
+    assert not host._kb_window_active.is_set()
+    assert calls == ["stop"]
+
+
+def test_focus_inside_keeps_the_keyboard_hook() -> None:
+    # Given: 窓内の部品にフォーカスがある
+    host, calls = _hook_host(object())
+    # When: 遅延判定が走る
+    SerialPanelMixin._syncKeyboardFocus(host)  # type: ignore[arg-type]
+    # Then: フックは外さない
+    assert host._kb_window_active.is_set()
+    assert calls == []
+
+
+def test_bind_sync_does_not_stop_the_hook_when_no_widget_has_focus() -> None:
+    # Given: 有効化直後で、まだどの部品にもフォーカスが無い
+    host, calls = _hook_host(None)
+    # When: 結線直後の同期が走る
+    SerialPanelMixin._syncKeyboardFocus(host, stop_hook=False)  # type: ignore[arg-type]
+    # Then: 門だけ下ろし、フックは残す（直後の FocusIn で使う）
+    assert not host._kb_window_active.is_set()
+    assert calls == []
+
+
+def test_unfocused_with_keyboard_control_off_does_not_touch_the_hook() -> None:
+    host, calls = _hook_host(None, enabled=False)
+    SerialPanelMixin._syncKeyboardFocus(host)  # type: ignore[arg-type]
+    assert calls == []
