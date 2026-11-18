@@ -36,6 +36,22 @@ from typing import Any
 from pokecon.domain.transport.base import BCON_STATE, Transport
 from pokecon.domain.transport.bcon import IMU_INTERVAL_S, BconTransport
 from pokecon.domain.transport.bcon_protocol import BAUD_TABLE
+from pokecon.domain.transport.bcon_shared import (
+    ZERO_LIVE_STATS as _ZERO_LIVE_STATS,
+    ZERO_STATUS as _ZERO_STATUS,
+    add_unique_listener,
+    clamp_imu_tuple,
+    imu_combine as _imu_combine,
+    imu_plan_frames as _imu_plan_frames,
+    imu_sample_of as _imu_sample_of,
+    imu_split_even as _imu_split_even,
+    normalize_live_stats,
+    normalize_status,
+    notify_imu_listeners,
+    notify_tx_listeners,
+    precise_timer as _precise_timer,
+    remove_registered_listener,
+)
 
 PROC_PRESET_NAME = "switch-bcon"
 PROC_PRESET_DESCRIPTION = (
@@ -103,23 +119,8 @@ _ALLOWED_CALLS = frozenset(
     }
 )
 
-_ZERO_STATUS = {
-    "flags": 0,
-    "last_seq": 0,
-    "err_crc": 0,
-    "err_drop": 0,
-    "errcode": 0,
-}
-
-_ZERO_LIVE_STATS = {
-    "sent": 0,
-    "merged": 0,
-    "dropped": 0,
-    "seq_gap": 0,
-    "err_crc": 0,
-    "err_drop": 0,
-    "rtt_ms": None,
-}
+#: bcon_shared から移植したヘルパー群の再公開（互換・テスト用参照）。
+_ = (_imu_split_even, _ZERO_STATUS, _ZERO_LIVE_STATS)
 
 
 def _picklable(value: Any) -> bool:
@@ -202,89 +203,12 @@ def _queue_get_nowait(q: Any) -> Any:
         return _NO_IMU
 
 
-def _imu_sample_of(msg: Any) -> tuple[int, int, int, int, int, int] | None:
-    """`("imu", ax, ay, az, gx, gy, gz[, seq])` から6値を取り出す。
-
-    親の合算メールボックスはint16を超える和を載せ得るため、ここでは
-    飽和させない（線へ出す直前に割る）。形が違えばNone。
-    """
-    if not (isinstance(msg, tuple) and len(msg) >= 7 and msg[0] == "imu"):
-        return None
-    try:
-        vals = tuple(int(v) for v in msg[1:7])
-    except (TypeError, ValueError):
-        return None
-    if len(vals) != 6:
-        return None
-    return (vals[0], vals[1], vals[2], vals[3], vals[4], vals[5])
-
-
-def _imu_combine(
-    samples: list[tuple[int, int, int, int, int, int]]
-    | deque[tuple[int, int, int, int, int, int]],
-) -> tuple[int, int, int, int, int, int]:
-    """複数サンプルを1つへ畳む。加速度は最新、ジャイロは合計。
-
-    ジャイロは5msあたりの角速度なので、和＝その区間に回った合計角度。
-    最新値だけを残すと動きが消えるため、ここは必ず和にする。
-    """
-    last = samples[-1]
-    return (
-        int(last[0]),
-        int(last[1]),
-        int(last[2]),
-        sum(int(s[3]) for s in samples),
-        sum(int(s[4]) for s in samples),
-        sum(int(s[5]) for s in samples),
-    )
-
-
-def _imu_split_even(total: int, parts: int) -> list[int]:
-    """整数をparts個へ、合計を保ったままできるだけ均等に割る。
-
-    Pythonのdivmodは負数でも床除算なので、剰余の配り方だけで
-    各値の差は高々1になり、合計は必ずtotalへ戻る。
-    """
-    base, rem = divmod(int(total), parts)
-    return [base + (1 if i < rem else 0) for i in range(parts)]
-
-
-def _imu_plan_frames(
+def _imu_plan_for_worker(
     samples: list[tuple[int, int, int, int, int, int]],
     carry: list[int],
 ) -> tuple[list[tuple[int, int, int, int, int, int]], list[int]]:
-    """合算済みサンプルをint16のIMUフレーム列へ割る。
-
-    戻り値は (フレーム列, 次のバッチへ繰り越す残差)。最大
-    PROC_IMU_CHUNKS_MAX フレームに抑え、収まらない角度は残差として
-    次のサンプルへ足す（黙って捨てない）。加速度は全フレームで最新値。
-    """
-    merged = _imu_combine(samples)
-    ax, ay, az = merged[0], merged[1], merged[2]
-    totals = [
-        int(carry[0]) + int(merged[3]),
-        int(carry[1]) + int(merged[4]),
-        int(carry[2]) + int(merged[5]),
-    ]
-    parts = 1
-    for total in totals:
-        if total >= 0:
-            need = (total + 32766) // 32767
-        else:
-            need = (-total + 32767) // 32768
-        if need > parts:
-            parts = need
-    parts = max(1, min(parts, PROC_IMU_CHUNKS_MAX))
-    columns: list[list[int]] = []
-    residual: list[int] = []
-    for total in totals:
-        split = [max(-32768, min(32767, v)) for v in _imu_split_even(total, parts)]
-        residual.append(total - sum(split))
-        columns.append(split)
-    frames = [
-        (ax, ay, az, columns[0][i], columns[1][i], columns[2][i]) for i in range(parts)
-    ]
-    return frames, residual
+    """PROC_IMU_CHUNKS_MAX を反映して IMU フレーム列を組む。"""
+    return _imu_plan_frames(samples, carry, chunks_max=PROC_IMU_CHUNKS_MAX)
 
 
 class _SocketQueue:
@@ -404,21 +328,6 @@ class _QueueLogWriter:
 
     def flush(self) -> None:
         return None
-
-
-def _precise_timer(on: bool) -> None:
-    """子も待ち粒度1msで刻む。失敗は黙って coarse のままにする。"""
-    if sys.platform != "win32":
-        return
-    try:
-        import ctypes
-
-        if on:
-            ctypes.windll.winmm.timeBeginPeriod(1)
-        else:
-            ctypes.windll.winmm.timeEndPeriod(1)
-    except Exception:
-        pass
 
 
 def _worker_main(cmd_q: Any, evt_q: Any, cfg: dict) -> None:
@@ -586,7 +495,7 @@ def _worker_main(cmd_q: Any, evt_q: Any, cfg: dict) -> None:
                 carry_next = imu_carry
                 frames: list[tuple[int, int, int, int, int, int]] = []
                 if samples:
-                    frames, carry_next = _imu_plan_frames(samples, imu_carry)
+                    frames, carry_next = _imu_plan_for_worker(samples, imu_carry)
                 ok_all = True
                 for frame in frames:
                     try:
@@ -1251,12 +1160,7 @@ class BconProcTransport(Transport):
         # hold扱いにしてIMUループのsource読みも止める（成功時に解除）。
         with self._imu_tx_lock:
             self._imu_hold = True
-            stale = len(self._imu_mailbox)
-            self._imu_mailbox.clear()
-        if stale:
-            with self._imu_stats_lock:
-                self._imu_stale += int(stale)
-                self._imu_coalesced = max(0, self._imu_coalesced - int(stale))
+            self._clear_imu_mailbox_locked()
         with self._pending_lock:
             self._call_seq += 1
             call_id = self._call_seq
@@ -1297,16 +1201,10 @@ class BconProcTransport(Transport):
         self._opened = ok
         if ok:
             self._tx_last_note = None
-            # openし直しは新しい握手。前の線で溜めた合算角度を送らない。
             with self._imu_tx_lock:
-                stale = len(self._imu_mailbox)
-                self._imu_mailbox.clear()
+                self._clear_imu_mailbox_locked()
                 self._imu_inflight.clear()
                 self._imu_hold = False
-            if stale:
-                with self._imu_stats_lock:
-                    self._imu_stale += int(stale)
-                    self._imu_coalesced = max(0, self._imu_coalesced - int(stale))
         if not ok:
             self._warn(f"bcon-procのopenが子で失敗しました({label}): {box!r}")
             self._terminate_worker()
@@ -1315,23 +1213,22 @@ class BconProcTransport(Transport):
     def last_open_error(self) -> str | None:
         return self._open_error
 
-    def hold_input(self, hold: bool) -> bool:
-        """入力を抑止する。hold中/解除直後に古い角度を送らない。
+    def _clear_imu_mailbox_locked(self) -> None:
+        """合算メールボックスを空にし、捨てた件数を stale へ移す（_imu_tx_lock 保持）。"""
+        stale = len(self._imu_mailbox)
+        if not stale:
+            return
+        self._imu_mailbox.clear()
+        with self._imu_stats_lock:
+            self._imu_stale += int(stale)
+            self._imu_coalesced = max(0, self._imu_coalesced - int(stale))
 
-        hold=True では、まだ子へ出していない合算メールボックスを捨てる
-        （すでにack待ちのフレームは子がhold指示より先に処理するため、
-        それはhold前の動きとして届く）。hold中は `send_imu` も投入しない。
-        """
+    def hold_input(self, hold: bool) -> bool:
+        """入力を抑止する。hold中/解除直後に古い角度を送らない。"""
         want = bool(hold)
         if want:
             with self._imu_tx_lock:
-                stale = len(self._imu_mailbox)
-                self._imu_mailbox.clear()
-                if stale:
-                    with self._imu_stats_lock:
-                        self._imu_stale += int(stale)
-                        self._imu_coalesced = max(0, self._imu_coalesced - int(stale))
-                # staleの加算後にholdを立てる（外から見て統計と状態が揃う）。
+                self._clear_imu_mailbox_locked()
                 self._imu_hold = True
         ok = self._rpc_bool("hold_input", (want,), 3.0)
         if not want and ok:
@@ -1414,71 +1311,32 @@ class BconProcTransport(Transport):
             pass
 
     def add_listener(self, func: Any) -> bool:
-        """送信行を受け取る相手を足す。入力ログはここへ繋ぐ。
-
-        子が送った行の写しをevt経路で受け、配る。選別（STATEのみ・
-        同一行削り）は子側の本家が済ませている。重ねて足さない。
-        子が死んでいるあいだも受け付け、復帰後の行から配る。
-        """
-        if not callable(func):
-            return False
-        with self._subs_lock:
-            if func not in self._tx_listeners:
-                self._tx_listeners.append(func)
-            try:
-                self._tx_listener_ng.discard(id(func))
-            except Exception:
-                pass
-        return True
+        """送信行を受け取る相手を足す。入力ログはここへ繋ぐ。"""
+        return add_unique_listener(
+            self._subs_lock, self._tx_listeners, func, self._tx_listener_ng
+        )
 
     def remove_listener(self, func: Any) -> None:
         """聞き手を外す。外したら苦情の記録も消す（付け直せる）。"""
-        try:
-            with self._subs_lock:
-                if func in self._tx_listeners:
-                    self._tx_listeners.remove(func)
-                try:
-                    self._tx_listener_ng.discard(id(func))
-                except Exception:
-                    pass
-        except Exception:
-            pass
+        remove_registered_listener(
+            self._subs_lock, self._tx_listeners, func, self._tx_listener_ng
+        )
 
     def _notify_tx(self, row: str) -> None:
-        """子から届いた行の写しを聞き手へ配る。聞き手が落ちても止めない。
+        """子から届いた行の写しを聞き手へ配る。聞き手が落ちても止めない。"""
 
-        子側で同一行削り済みだが、再送・再接続の境で同じ行が重なるため
-        親側でも基準を持つ（本家と同一規律）。聞き手が無いあいだは基準を
-        進めない（後付けの聞き手が最初の変化を見落とさないため）。
-        """
-        text = row if isinstance(row, str) else ""
-        if not text:
-            return
-        with self._subs_lock:
-            if text == self._tx_last_note:
-                return
-            funcs = list(self._tx_listeners)
-            if not funcs:
-                return
-            self._tx_last_note = text
-        for func in funcs:
-            try:
-                func(text)
-            except Exception as e:
-                try:
-                    key = id(func)
-                    with self._subs_lock:
-                        if key in self._tx_listener_ng:
-                            continue
-                        self._tx_listener_ng.add(key)
-                except Exception:
-                    pass
-                try:
-                    logging.getLogger(__name__).warning(
-                        f"送信行の受け取りで例外が出ました（以後は黙ります）: {e!r}"
-                    )
-                except Exception:
-                    pass
+        def _set_note(val: str) -> None:
+            self._tx_last_note = val
+
+        notify_tx_listeners(
+            self._subs_lock,
+            self._tx_listeners,
+            self._tx_listener_ng,
+            row,
+            lambda: self._tx_last_note,
+            _set_note,
+            logging.getLogger(__name__).warning,
+        )
 
     def set_hooks(self, on_write_begin: Any = None, on_write_end: Any = None) -> None:
         """親側で保持し、子からのhook転送で呼ぶ。"""
@@ -1512,11 +1370,27 @@ class BconProcTransport(Transport):
         ok, result = self._call(method, args, timeout=timeout)
         return bool(ok and result)
 
-    def hello(self, timeout: float = 3.0, quiet: bool = False) -> bool:
-        return self._rpc_bool("hello", (timeout, quiet), timeout)
+    def _rpc_bytes(self, method: str, timeout: float = 3.0) -> bytes:
+        ok, result = self._call(method, (), timeout=timeout)
+        if not ok or result is None:
+            return b""
+        try:
+            return bytes(result)
+        except Exception:
+            return b""
 
-    def ping(self, timeout: float = 1.0, quiet: bool = False) -> float | None:
-        ok, result = self._call("ping", (timeout, quiet), timeout=timeout)
+    def _rpc_optional_dict(
+        self, method: str, args: tuple[Any, ...], timeout: float
+    ) -> dict[str, int] | None:
+        ok, result = self._call(method, args, timeout=timeout)
+        if not ok or not isinstance(result, dict):
+            return None
+        return {str(k): v for k, v in result.items()}
+
+    def _rpc_optional_float(
+        self, method: str, args: tuple[Any, ...], timeout: float
+    ) -> float | None:
+        ok, result = self._call(method, args, timeout=timeout)
         if not ok or result is None:
             return None
         try:
@@ -1524,9 +1398,23 @@ class BconProcTransport(Transport):
         except (TypeError, ValueError):
             return None
 
+    def _rpc_limit_bool(
+        self, method: str, timeout: Any, *, default: float = 1.0, extra_s: float = 3.0
+    ) -> bool:
+        try:
+            limit = float(timeout)
+        except (TypeError, ValueError):
+            limit = default
+        return self._rpc_bool(method, (limit,), limit + extra_s)
+
+    def hello(self, timeout: float = 3.0, quiet: bool = False) -> bool:
+        return self._rpc_bool("hello", (timeout, quiet), timeout)
+
+    def ping(self, timeout: float = 1.0, quiet: bool = False) -> float | None:
+        return self._rpc_optional_float("ping", (timeout, quiet), timeout)
+
     def live_loop_running(self) -> bool:
-        ok, result = self._call("live_loop_running", (), timeout=3.0)
-        return bool(ok and result)
+        return self._rpc_bool("live_loop_running", (), 3.0)
 
     def start_live_loop(self, interval_s: float = 1.0 / 120.0) -> bool:
         return self._rpc_bool("start_live_loop", (interval_s,), 5.0)
@@ -1653,13 +1541,8 @@ class BconProcTransport(Transport):
         受理サンプルは sent = 単独フレームで出した数 + coalesced + stale。
         """
         try:
-            vals = (
-                max(-32768, min(32767, int(ax))),
-                max(-32768, min(32767, int(ay))),
-                max(-32768, min(32767, int(az))),
-                max(-32768, min(32767, int(gx))),
-                max(-32768, min(32767, int(gy))),
-                max(-32768, min(32767, int(gz))),
+            vals = clamp_imu_tuple(
+                (int(ax), int(ay), int(az), int(gx), int(gy), int(gz))
             )
         except (TypeError, ValueError):
             with self._imu_stats_lock:
@@ -1697,37 +1580,15 @@ class BconProcTransport(Transport):
 
     def _notify_imu(self, sample: tuple[int, int, int, int, int, int]) -> None:
         """投入済みのIMUサンプルを聞き手へ配る。例外は外へ出さない。"""
-        try:
-            with self._imu_stats_lock:
-                funcs = list(self._imu_listeners)
-            for func in funcs:
-                try:
-                    func(sample)
-                except Exception:
-                    pass
-        except Exception:
-            pass
+        notify_imu_listeners(self._imu_stats_lock, self._imu_listeners, sample)
 
     def add_imu_listener(self, func: Any) -> bool:
         """投入したIMUサンプルを受け取る相手を足す（Blocklyの記録用）。"""
-        if not callable(func):
-            return False
-        try:
-            with self._imu_stats_lock:
-                if func not in self._imu_listeners:
-                    self._imu_listeners.append(func)
-            return True
-        except Exception:
-            return False
+        return add_unique_listener(self._imu_stats_lock, self._imu_listeners, func)
 
     def remove_imu_listener(self, func: Any) -> None:
         """IMU の聞き手を外す。例外は投げない。"""
-        try:
-            with self._imu_stats_lock:
-                if func in self._imu_listeners:
-                    self._imu_listeners.remove(func)
-        except Exception:
-            pass
+        remove_registered_listener(self._imu_stats_lock, self._imu_listeners, func)
 
     def imu_loop_running(self) -> bool:
         thread = self._imu_loop_thread
@@ -1873,21 +1734,10 @@ class BconProcTransport(Transport):
 
     def live_stats(self) -> dict[str, Any]:
         ok, result = self._call("live_stats", (), timeout=3.0)
-        if not ok or not isinstance(result, dict):
-            return dict(_ZERO_LIVE_STATS)
-        merged = dict(_ZERO_LIVE_STATS)
-        for key in merged:
-            if key in result:
-                merged[key] = result[key]
-        return merged
+        return normalize_live_stats(result) if ok else normalize_live_stats(None)
 
     def wait_rx(self, prefixes: Any, timeout: float = 0.5) -> str | None:
-        """v1 では子へ転送しない（設計: 2026-09-22-bcon-proc-phase2.md:211）。
-
-        基底の実装は proxy 自身の受信状態を見るため、呼ばれると黙って
-        タイムアウトする。原因が分かるよう 1 回だけ error を残して None を
-        返す（規約: 公開操作から例外は出さない）。
-        """
+        """v1 では子へ転送しない（設計: 2026-09-22-bcon-proc-phase2.md:211）。"""
         if not getattr(self, "_wait_rx_warned", False):
             self._wait_rx_warned = True
             self._logger.error(
@@ -1896,68 +1746,27 @@ class BconProcTransport(Transport):
         return None
 
     def rx_dead(self) -> bool:
-        """子側の受信ポンプが諦めたか。RPC 越しに問う。
-
-        親側に受信ポンプは無い（線を持っているのは子）。自前で False を
-        返すと「死んでいない」と嘘をつくことになるので、子へ問い合わせる。
-        問い合わせに失敗したときは False（死んだと決めつけない）。
-        """
-        ok, result = self._call("rx_dead", (), timeout=3.0)
-        return bool(result) if ok else False
+        """子側の受信ポンプが諦めたか。RPC 越しに問う。"""
+        return self._rpc_bool("rx_dead", (), 3.0)
 
     def last_rumble(self) -> bytes:
-        """直近RUMBLE payloadの写し。未受信・失敗は空。例外は投げない。
-
-        本家 BconTransport と同じ操作面を保つために要る。欠けると
-        BconSetup の getattr(transport, "last_rumble", None) が None になり、
-        振動表示が必ず「（なし）」になる。
-        """
-        ok, result = self._call("last_rumble", (), timeout=3.0)
-        if not ok or result is None:
-            return b""
-        try:
-            return bytes(result)
-        except Exception:
-            self._logger.debug("last_rumble の結果を bytes にできません", exc_info=True)
-            return b""
+        """直近RUMBLE payloadの写し。未受信・失敗は空。例外は投げない。"""
+        return self._rpc_bytes("last_rumble")
 
     def last_status(self) -> dict[str, int]:
         ok, result = self._call("last_status", (), timeout=3.0)
-        if not ok or not isinstance(result, dict):
-            return dict(_ZERO_STATUS)
-        merged = dict(_ZERO_STATUS)
-        for key in merged:
-            if key in result:
-                try:
-                    merged[key] = int(result[key])
-                except (TypeError, ValueError):
-                    pass
-        return merged
+        return normalize_status(result) if ok else normalize_status(None)
 
     def last_player_info(self) -> bytes:
-        ok, result = self._call("last_player_info", (), timeout=3.0)
-        if not ok or result is None:
-            return b""
-        try:
-            return bytes(result)
-        except (TypeError, ValueError):
-            return b""
+        return self._rpc_bytes("last_player_info")
 
     def request_status(
         self, timeout: float = 1.0, quiet: bool = False
     ) -> dict[str, int] | None:
-        ok, result = self._call("request_status", (timeout, quiet), timeout=timeout)
-        if not ok or not isinstance(result, dict):
-            return None
-        return {str(k): v for k, v in result.items()}
+        return self._rpc_optional_dict("request_status", (timeout, quiet), timeout)
 
     def baud_hunt(self, candidates: Any = None, timeout_per: float = 0.5) -> int | None:
-        """子で scan し、lock 後の上位rate昇格まで含む結果を返す。
-
-        RPC待ちは候補数と timeout_per から見積もる（子は lock 後に
-        set_baud_index(3) と失敗時の復帰を行う）。子の BconTransport が
-        返した bps をそのまま返し、失敗・timeout は None。
-        """
+        """子で scan し、lock 後の上位rate昇格まで含む結果を返す。"""
         ok, result = self._call(
             "baud_hunt",
             (candidates, timeout_per),
@@ -1980,10 +1789,7 @@ class BconProcTransport(Transport):
         return self._rpc_bool("set_emulate_mode", (role, timeout), timeout)
 
     def send_beacon(self, timeout: float = 2.0) -> dict[str, int] | None:
-        ok, result = self._call("send_beacon", (timeout,), timeout=timeout)
-        if not ok or not isinstance(result, dict):
-            return None
-        return {str(k): v for k, v in result.items()}
+        return self._rpc_optional_dict("send_beacon", (timeout,), timeout)
 
     def send_config(self, type_: int, payload: bytes) -> bool:
         try:
@@ -2004,32 +1810,12 @@ class BconProcTransport(Transport):
             payload = bytes(result)
         except (TypeError, ValueError):
             return None
-        if len(payload) != 12:
-            return None
-        return payload
+        return payload if len(payload) == 12 else None
 
     def request_bootsel(self, timeout: float = 1.0) -> bool:
-        """BOOTSEL突入を子へ要求する。失敗はFalse（例外は投げない）。
-
-        実装は子（BconTransport）側にある。線は子が握っているので
-        応答待ちの繰り返し送信も子の中で行われる。返るのは
-        「Picoが要求を受け取った」ことまで。
-        """
-        try:
-            limit = float(timeout)
-        except (TypeError, ValueError):
-            limit = 1.0
-        # 子の応答待ち（ACKまでの反復送信）を見込むため往復に余裕を持たせる。
-        return self._rpc_bool("request_bootsel", (limit,), limit + 3.0)
+        """BOOTSEL突入を子へ要求する。失敗はFalse（例外は投げない）。"""
+        return self._rpc_limit_bool("request_bootsel", timeout)
 
     def request_reconnect(self, timeout: float = 1.0) -> bool:
-        """待機状態の明示解除を子へ要求する。失敗はFalse（例外は投げない）。
-
-        request_bootsel と同じ形の子RPC。Switch が受け入れるかまでは
-        判定しない（別問題）。
-        """
-        try:
-            limit = float(timeout)
-        except (TypeError, ValueError):
-            limit = 1.0
-        return self._rpc_bool("request_reconnect", (limit,), limit + 3.0)
+        """待機状態の明示解除を子へ要求する。失敗はFalse（例外は投げない）。"""
+        return self._rpc_limit_bool("request_reconnect", timeout)
