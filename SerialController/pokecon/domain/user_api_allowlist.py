@@ -41,7 +41,6 @@ FROZEN_COMMANDS_SUBS = frozenset(
 #   へ移す（移動の判断はこのファイル1か所で行う）。
 PROVISIONAL_COMMANDS_SUBS = frozenset(
     {
-        "WakeLink",
         "CommandVision",
         "CommandAudio",
         "CommandColor",

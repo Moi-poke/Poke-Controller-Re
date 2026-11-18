@@ -20,8 +20,8 @@ class WakeSwitch2(PythonCommand):
             self.print2("シリアルが開いていません。先に接続してください。")
             self.finish()
             return
-        if getattr(transport, "name", "") != "bcon":
-            self.print2("bconを選んで接続してください。")
+        if getattr(transport, "capability", "") != "BCON_STATE":
+            self.print2("BCON（Pico 中継）で接続してください。")
             self.finish()
             return
         sender = getattr(transport, "send_beacon", None)
@@ -67,9 +67,6 @@ class WakeSwitch2(PythonCommand):
         sender = getattr(keys, "ser", None)
         transport = getattr(sender, "transport", None)
         if transport is None:
-            return None
-        ser = getattr(transport, "ser", None)
-        if ser is None:
             return None
         try:
             if not transport.is_open():

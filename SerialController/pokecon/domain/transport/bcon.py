@@ -482,9 +482,8 @@ class BconTransport(Transport):
     def get_raw_serial(self) -> None:
         """生のシリアルは渡さない。bconはバイナリ専用のため直読み禁止。
 
-        基底の既定は所持のserを返すが、bconの口をWakeLinkのテキスト
-        直読み（CRLF区切り）へ渡すと応答の取り違え・化けの元になる。
-        Noneを返すとWakeLinkは例外なく失敗扱い（False/空）で返し、
+        基底の既定は所持のserを返すが、bconの口をテキスト直読み（CRLF区切り）
+        へ渡すと応答の取り違え・化けの元になる。
         bcon側の読みはsubscribe_rx/wait_rx経由へ寄る。
         """
         return None
@@ -2770,7 +2769,7 @@ class BconTransport(Transport):
 
         戻りのerrcodeは 0x00=受付（再生開始）・0x11=未保存・
         0x10=有線中拒否（0x10+(TYPE&0x0F)のCONFIG拒否域）。
-        利用者スクリプト（WakeSwitch2）から叩く公開口。例外は投げない。
+        例外は投げない。
         """
         try:
             try:

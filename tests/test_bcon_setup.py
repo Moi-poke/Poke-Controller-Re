@@ -11,7 +11,6 @@ def test_bcon_setup_imports_without_touching_wake():
     from pathlib import Path
 
     assert Path("SerialController/pokecon/ui/BconSetup.py").exists()
-    assert Path("SerialController/pokecon/ui/WakeSetup.py").exists()
     spec = importlib.util.spec_from_file_location(
         "bcon_setup", "SerialController/pokecon/ui/BconSetup.py"
     )

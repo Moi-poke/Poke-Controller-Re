@@ -253,7 +253,6 @@ class PokeControllerApp(
         self.baud_rate_state = "disabled"
         self.os_name = platform.system()
 
-        self.poke_treeview: Any = None
         self.camera: Camera | None = None
         self.audio_service = AudioService(notify_user=print)
         # 送り先と実行状態の所有者。実体は services が持つ。

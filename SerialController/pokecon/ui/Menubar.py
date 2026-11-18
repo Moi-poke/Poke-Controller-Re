@@ -6,7 +6,6 @@ from typing import Any
 
 from loguru import logger
 from pokecon.app import DiscordNotify
-from pokecon.app.get_pokestatistics import GetFromHomeGUI
 from pokecon.domain.pane_arrangement import ARRANGEMENTS
 from pokecon.ui import WindowUtils
 from pokecon.ui.InputLogConfig import InputLogConfig
@@ -36,7 +35,6 @@ class PokeController_Menubar(tk.Menu):
         self.app = master
         tk.Menu.__init__(self, master.root, **kw)
 
-        self.poke_treeview: Any | None = None
         self.key_config: PokeKeycon | None = None
         self.serial_monitor: SerialMonitor | None = None
         self.input_log_config: InputLogConfig | None = None
@@ -228,7 +226,6 @@ class PokeController_Menubar(tk.Menu):
         m.add_command(
             label="Discord通知の設定...", command=self.open_discord_notify_setting
         )
-        m.add_command(label="Pokemon HOME 連携...", command=self.OpenPokeHomeCoop)
         m.add_command(label="HidHide 設定...", command=self.OpenHidHideSetup)
 
         m = self.menu_help
@@ -298,29 +295,6 @@ class PokeController_Menubar(tk.Menu):
             return window is not None and bool(window.winfo_exists())
         except Exception:
             return False
-
-    def OpenPokeHomeCoop(self) -> None:
-        logger.debug("Open Pokemon home cooperate window")
-        treeview = self.poke_treeview
-        if treeview is not None and self._alive(treeview):
-            treeview.focus_force()
-            return
-        self.poke_treeview = None
-
-        window2 = GetFromHomeGUI(
-            self.root, self.settings.season, self.settings.is_SingleBattle
-        )
-        window2.protocol("WM_DELETE_WINDOW", self.closingGetFromHome)
-        self.poke_treeview = window2
-
-    def closingGetFromHome(self) -> None:
-        logger.debug("Close Pokemon home cooperate window")
-        if self.poke_treeview is not None:
-            try:
-                self.poke_treeview.destroy()
-            except Exception:
-                pass
-            self.poke_treeview = None
 
     def OpenKeyConfig(self) -> None:
         logger.debug("Open KeyConfig window")
@@ -446,7 +420,6 @@ class PokeController_Menubar(tk.Menu):
             pass
         for name in (
             "key_config",
-            "poke_treeview",
             "input_log_config",
             "display_settings",
         ):

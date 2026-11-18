@@ -60,7 +60,7 @@ def test_build_report_contains_env_and_tail_without_secrets() -> None:
         os_name="Windows",
         python_version="3.12.10",
         profile="switch1",
-        transport="pico_uart",
+        transport="switch-bcon",
         error_text="ValueError: boom",
         log_path="C:\\x\\log_20200102-000000.log",
         log_tail=["line8", "line9"],
@@ -69,7 +69,7 @@ def test_build_report_contains_env_and_tail_without_secrets() -> None:
     assert "Windows" in text
     assert "3.12.10" in text
     assert "switch1" in text
-    assert "pico_uart" in text
+    assert "switch-bcon" in text
     assert "ValueError: boom" in text
     assert "line9" in text
     # webhook のような秘密を引数で渡さない設計の確認。

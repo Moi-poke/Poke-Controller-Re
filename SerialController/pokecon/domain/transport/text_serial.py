@@ -19,7 +19,7 @@ from logging import DEBUG, NullHandler, getLogger
 from typing import Any
 
 import serial
-from pokecon.domain.transport.base import PICO_LIVE_STATE, Transport
+from pokecon.domain.transport.base import Transport
 
 # 送信の最小間隔(秒)。この間隔より短く呼ばれた分は最新値へまとめて1回にする。
 # 9600bps 時代の固定値 0.02 をそのまま使うと、通信速度を上げても間引きが
@@ -36,9 +36,6 @@ SEND_INTERVAL_MARGIN = 2.0  # 伝送時間の何倍を下限にするか
 # write が無期限にブロックし、GUI ごと固まるのを防ぐ
 READ_TIMEOUT = 0.5
 WRITE_TIMEOUT = 0.5
-# Pico の UART は 115200 固定（UART0 115200 8N1＋USB CDC）。
-# 9600 既定のまま開くと watchdog（200ms 維持）に間に合わない。
-PICO_UART_BAUDRATE = 115200
 
 
 class TextSerialTransport(Transport):
@@ -77,7 +74,7 @@ class TextSerialTransport(Transport):
         self._listener_ng: set[int] = set()
         # 受信の分配先。読みスレッドは1本だけで、購読者と応答待ちの
         # 両方へ同じ行を届ける。2か所で read すると横取りが起きるため、
-        # 読み口はここへ一本化する (WakeLink もここを通る)。
+        # 読み口はここへ一本化する。
         self._rx_lock = threading.Lock()
         self._rx_subs: list[Callable[[str], None]] = []
         self._rx_waiters: list[tuple[tuple[str, ...], threading.Event, dict]] = []
@@ -106,8 +103,8 @@ class TextSerialTransport(Transport):
             self._listener_ng.discard(id(func))
 
     # -- 受信の読みポンプ -----------------------------------------------------
-    # 読みスレッドは1本だけにする。WakeLink の応答待ちとモニタ表示が
-    # 別々に read すると、相手の行を横取りして応答が消える。
+    # 読みスレッドは1本だけにする。複数の口から別々に read すると、
+    # 応答の行を横取りして待機側が取りこぼす。
     # ポンプが読んだ行は購読者全員と、待機中の wait_rx へ届ける。
 
     def subscribe_rx(self, func: Callable[[str], None]) -> Callable[[], None]:
@@ -646,68 +643,3 @@ class TextSerialTransport(Transport):
         # いないので、記録に残すとログと実機の挙動がずれる。送信の成否は
         # 問わない（送れなかった操作が記録から消えると切り分けができない）。
         self._notify(row)
-
-
-class PicoUartTransport(TextSerialTransport):
-    """Pico 用。フルステートの S 行をシリアルへ送出する。
-
-    繋ぎ方は2通りあり、この層から見ると どちらも同じ「COM ポート」である:
-
-      ①有線: PC → USBシリアル変換器 → Pico の UART → Switch
-          Pico の USB は Switch が占有するため、PC とは繋げない。
-          そこで FT232 などの変換器を挟む。115200bps。
-
-      ②無線（pico-wakecon）: PC → Pico の USB(CDC) → Bluetooth → Switch
-          無線化で Pico の USB が空いたので、PC と直結できる。
-          変換器が要らず、線が1本になる。
-
-    どちらも送る中身は同じ S 行なので、この実装を分ける必要は無い。
-      違うのは「どの COM 番号か」だけで、それは利用者が選ぶ。
-
-    注意: Q/R の時刻付きキューを持つのは pico_firmware の Pico だけ
-      であり、pico-wakecon は持たない。Q へ回すかは Sender が応答で
-      確かめるため、ここで相手を選ぶ必要は無い。
-    """
-
-    name = "pico_uart"
-    capability = PICO_LIVE_STATE
-
-    def open(
-        self,
-        portNum: int,
-        portName: str = "",
-        baudrate: int = PICO_UART_BAUDRATE,
-        **extra: Any,
-    ) -> bool:
-        # Pico は 115200 固定。9600 既定のまま呼ばれると取りこぼすため、
-        # 求められた速度が違えば直して続ける。間引き幅も直した速度で決まる。
-        # baudrate は StringVar 由来の str が来るため int に直して比べる。
-        try:
-            asked = int(baudrate)  # type: ignore[arg-type]
-        except (TypeError, ValueError):
-            # 不正値は親へ任せ、False で終える（mac/linux でも落とさない）。
-            return super().open(portNum, portName, baudrate, **extra)
-        if asked != PICO_UART_BAUDRATE:
-            # 利用者の次の行動は変わらないため GUI には出さず、記録だけ残す。
-            self._logger.warning(
-                f"Pico は {PICO_UART_BAUDRATE}bps 固定のため "
-                f"{asked}bps を {PICO_UART_BAUDRATE}bps に直します"
-            )
-            baudrate = PICO_UART_BAUDRATE
-        return super().open(portNum, portName, baudrate, **extra)
-
-    def add_listener(self, func: Callable[[str], None]) -> bool:
-        # 125 Hz の送信行と keepalive を入力ログに流さない。
-        return False
-
-    def remove_listener(self, func: Callable[[str], None]) -> None:
-        pass
-
-    def send_row(self, row: str, measure_perf: bool = True) -> None:
-        # mailbox で最新状態に畳んでいるため、ここでは間引かない。
-        # 錠は写しの取り出しだけに使い、書き出しは外で行う。
-        with self._lock:
-            begin = self._on_write_begin
-            end = self._on_write_end
-            ser = self.ser
-        self._write_one(row, measure_perf, begin, end, ser)

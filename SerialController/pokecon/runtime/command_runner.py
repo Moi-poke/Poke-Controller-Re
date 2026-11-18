@@ -49,7 +49,7 @@ STOP_NOTIFY_MS = 5000
 STOP_ESCALATE_MS = 30000
 
 # 作業側からの完了届けを取り出す間隔(ms)。作業スレッドはTkを触らず
-# 行列へ積むだけにし、GUI側がafterで取り出す（LogPane/WakeSetup式）。
+# 行列へ積むだけにし、GUI側がafterで取り出す（LogPane式）。
 COMPLETION_POLL_MS = 50
 
 # 終了時の合流を区切る幅(秒)。1秒一息に待つと固まって見えるため。
@@ -560,10 +560,9 @@ class CommandRunner:
 
         呼び出し元は PythonCommandBase の _cleanup で、コマンドを走らせて
         いるワーカースレッドから直接呼ばれる。作業側はTkを触らず行列へ
-        積むだけにし、GUI側がafterで取り出してpost_on_guiする
-        （LogPane/WakeSetup式）。root.afterを作業側から呼ぶのは公式に
-        非対応で、終了時に壊れる。二重照合（積んだ時点＋走る時点）は
-        GUI側で保つ。
+        積むだけにし、GUI側がafterで取り出してpost_on_guiする（LogPane式）。
+        root.afterを作業側から呼ぶのは公式に非対応で、終了時に壊れる。
+        二重照合（積んだ時点＋走る時点）はGUI側で保つ。
         """
         if threading.get_ident() != self._gui_thread_id:
             # 作業スレッド。Tk予約はしない。積むだけはスレッド安全。

@@ -363,41 +363,6 @@ def test_cui_dialog_polls_stop(monkeypatch: Any) -> None:
         cmd._stop_event.clear()
 
 
-def test_wakesetup_close_drains_and_clears_busy() -> None:
-    """閉じるとき溜まりを捨て使用中を戻す。閉じた後の届けは無視する。"""
-    import queue as _q
-
-    from pokecon.ui.WakeSetup import WakeSetup
-
-    obj = WakeSetup.__new__(WakeSetup)
-    obj._sender = object()
-    obj._queue = _q.Queue()
-    obj._busy = True
-    obj._stop = False
-    obj._closed = False
-
-    class StubWindow:
-        def winfo_exists(self) -> bool:
-            return False
-
-        def destroy(self) -> None:
-            return None
-
-        def after(self, _ms: int, _fn: Any) -> Any:
-            return None
-
-    obj.window = StubWindow()  # type: ignore[attr-defined]
-    obj._queue.put(("log", "あと"))
-    obj._queue.put(("done", ""))
-    obj.close()
-    assert obj._busy is False
-    assert obj._queue.empty()
-    # 閉じた後の届けは溜めない（捨てる）。
-    obj._guarded(lambda: None)
-    assert obj._queue.empty()
-    assert obj._busy is False
-
-
 def test_token_double_check_on_gui_side() -> None:
     """世代照合は積む時点＋走る時点の二重で行う。古い届けは捨てる。"""
     from fakes import FakeCommand, FakeSer, FakeThread

@@ -1,11 +1,11 @@
-"""Transport / Sender / WakeLink の headless 検証。
+"""Transport / Sender の headless 検証。
 
 実機（COM ポート・ファーム）が無くても回せるものだけを置く。
 ハード必須の確認（遅延体感・end 時中立）は実機で行う。
 """
 
-from fakes import FakeTransport, NoSerTransport
-from pokecon.domain import WakeLink as WakeLink, transport as Transport
+from fakes import FakeLiveTransport, FakeTransport, NoSerTransport
+from pokecon.domain import transport as Transport
 from pokecon.domain.serial import sender as Sender
 
 
@@ -46,7 +46,7 @@ def test_coalescable_only_stick() -> None:
 def test_live_capable_matrix() -> None:
     probe = Sender.Sender.__new__(Sender.Sender)
     assert probe._liveCapable(Transport.TextSerialTransport()) is False
-    assert probe._liveCapable(Transport.PicoUartTransport()) is True
+    assert probe._liveCapable(FakeLiveTransport()) is True
     # 未知 capability は legacy 等価（worker なし）で動く
     assert probe._liveCapable(NoSerTransport()) is False
     assert probe._liveCapable(FakeTransport()) is False
@@ -69,13 +69,6 @@ def test_open_never_raises() -> None:
     # 不正 baud・存在しないポートでも例外なく False
     assert t.open(0, "", "not-a-number") is False  # type: ignore[arg-type]
     assert t.open(9999, "", 9600) is False
-
-
-def test_wakelink_without_serial() -> None:
-    # ser なし方式は例外なく失敗扱い（Sender は従来経路へ回す）
-    assert WakeLink.send_line(NoSerTransport(), "Q") is False
-    assert WakeLink.expect(NoSerTransport(), "Q", "QOK", timeout=0.05) is None
-    WakeLink.drain(NoSerTransport())
 
 
 def test_sender_writes_through_fake() -> None:

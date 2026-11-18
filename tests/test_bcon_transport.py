@@ -85,33 +85,24 @@ def test_bcon_open_closes_previous_port_and_resets_parser(monkeypatch):
     assert len(made._parser._buf) == 0
 
 
-def test_bcon_get_raw_serial_is_none_and_wakelink_falls_back():
-    from pokecon.domain import WakeLink
+def test_bcon_get_raw_serial_is_none():
     from pokecon.domain.transport import create_transport
 
     made = create_transport("bcon")
-    written: list[bytes] = []
 
     class FakeSer:
         is_open = True
 
         def write(self, data: bytes) -> int:
-            written.append(bytes(data))
             return len(data)
 
         def read(self, n: int) -> bytes:
             return b""
 
     made.ser = FakeSer()
-    # 送出形式の単体試験は HELLO 確立後を前提とする。
     made._hello_established = True
-    # バイナリ口をテキスト直読みへ渡さない。WakeLinkは例外なく失敗扱い。
+    # バイナリ口を生シリアル直読みへ渡さない。
     assert made.get_raw_serial() is None
-    assert WakeLink.send_line(made, "Q") is False
-    assert WakeLink.read_lines(made, 0.01) == []
-    assert WakeLink.expect(made, "Q", "QOK", timeout=0.05) is None
-    WakeLink.drain(made)
-    assert written == []
 
 
 def test_bcon_set_hooks_fire_on_send_row():

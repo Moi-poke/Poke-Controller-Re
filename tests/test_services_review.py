@@ -191,7 +191,7 @@ def test_switch_transport_failure_keeps_target_and_finishes_failed() -> None:
     try:
         service.sender = StuckSender(is_show_serial=False, transport=FakeTransport())
         old_name = service.sender.getTransportName()
-        switched, linked = service.switch_transport("pico_uart")
+        switched, linked = service.switch_transport("switch-bcon")
 
         assert (switched, linked) == (False, False)
         assert service.sender.getTransportName() == old_name

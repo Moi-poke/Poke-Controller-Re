@@ -1,27 +1,17 @@
-"""プロコンの色を GUI で選んで変える。
+"""プロコンの色を GUI で選んで変える（BCON 専用）。
 
-bcon の口では COLOR_SET（send_config 0x32・12B）を1発送り、
-直後の STATUS で確かめる。O 行・query・WakeLink・direct_serial は
-bcon の口では使わない（非bconの旧来口だけに残す）。
+bcon の口で COLOR_SET（send_config 0x32・12B）を1発送り、
+直後の STATUS で確かめる。
 色はフラッシュに保存されるので、Pico の電源を切っても残る。
 
 反映のタイミング:
     Switch 側で登録し直すまで変わらないことがある。
     変わらないときは、Switch のコントローラー登録を解除して繋ぎ直す。
-
-相手:
-    非bconの旧来口では pico-wakecon の O 行（ui.c handle_line）。
-    旧 C と同書式で先頭1字を読み飛ばすため、O で送る。C は
-    取込（秒数）のため、色を C で送ると取込が始まってしまう。
-    書式は hid.c の probe_parse_color_line と対（4つの16進 /
-    応答は color 行）。
 """
 
 from typing import Any
 
-# 色の読み・荷造り・errcode説明の実体は core/procon_color.py に1つだけ置く。
-# 利用者台本の凍結面では BconSetup・core を直接読めないため、公開口の
-# Commands/CommandColor.py から読む（BconSetup の小窓も同じ実体を読む）。
+# 色の読み・荷造り・errcode説明の実体は domain/procon_color.py に1つだけ置く。
 from Commands.CommandColor import (
     build_color_payload,
     describe_bcon_errcode,
@@ -30,7 +20,6 @@ from Commands.CommandColor import (
     send_config_frame,
 )
 from Commands.PythonCommandBase import PythonCommand
-from Commands.WakeLink import query
 
 # 色の並び: 本体 / ボタン / 左グリップ / 右グリップ
 #   本体色とボタン色は switchbrew の公式配色をそのまま使う。
@@ -147,60 +136,17 @@ class SetProconColor(PythonCommand):
                 return
             colors.append(fixed)
 
-        # bcon の口では COLOR_SET を1発送り、直後の STATUS で確かめる。
-        # O 行・query・WakeLink・direct_serial は使わない。
+        # bcon の口で COLOR_SET を1発送り、直後の STATUS で確かめる。
         transport = self._color_transport()
-        if transport is not None and is_bcon_transport(transport):
-            self.print2("色を「{}」にします。".format(label))
-            for name, value in zip(PART_NAMES, colors):
-                self.print2("  {} #{}".format(name, value))
-            self._send_bcon_color(transport, colors)
+        if transport is None or not is_bcon_transport(transport):
+            self.print2("BCON（Switch-bcon）で接続してから実行してください。")
             self.finish()
             return
-
-        # 送る行を組み立てる。書式は pico-wakecon の O 行と対。
-        # 非bconの旧来口だけで使う。bcon の口では送らない。
-        #     O <本体> <ボタン> <左> <右>
-        #   C ではいけない。C は取込（秒数）のため、色を C で送ると
-        #   取込スキャンが始まってしまう。
-        row = "O " + " ".join(colors)
 
         self.print2("色を「{}」にします。".format(label))
         for name, value in zip(PART_NAMES, colors):
             self.print2("  {} #{}".format(name, value))
-
-        if transport is not None:
-            # 応答を読む形で送る。成功なら color 行、書式違いなら usage 行。
-            # 旧ファーム（O を知らない版）は何も返さない。
-            found = query(transport, row, ("color ", "usage:"), timeout=3.0)
-            if any(line.startswith("color ") for line in found):
-                self.print2("送りました。色はフラッシュに保存されます。")
-                self.print2(
-                    "画面に反映されないときは、Switch 側で登録を"
-                    "解除して繋ぎ直してください。"
-                )
-            elif any(line.startswith("usage:") for line in found):
-                self.print2(
-                    "Pico が書式違いを返しました。4つの6桁16進を確かめてください。"
-                )
-            else:
-                self.print2("応答がありません。旧ファームの可能性があります。")
-                self.print2("pico-wakecon の O 行に対応した版を使ってください。")
-            self.finish()
-            return
-
-        # 送る口が無いときは従来の口で送るだけにする（応答は読めない）。
-        # 既存の口をそのまま使う。direct_serial は1件ごとに停止を見る。
-        self.direct_serial([row], [0.0])
-
-        # Pico がフラッシュへ書き終えるまで少し待つ。
-        self.wait(0.5)
-
-        self.print2("送りました（応答は未確認）。色はフラッシュに保存されます。")
-        self.print2(
-            "画面に反映されないときは、Switch 側で登録を解除して繋ぎ直してください。"
-        )
-
+        self._send_bcon_color(transport, colors)
         self.finish()
 
     def _send_bcon_color(self, transport: Any, colors: list[str]) -> None:
@@ -245,9 +191,6 @@ class SetProconColor(PythonCommand):
         sender = getattr(keys, "ser", None)
         transport = getattr(sender, "transport", None)
         if transport is None:
-            return None
-        ser = getattr(transport, "ser", None)
-        if ser is None:
             return None
         try:
             if not transport.is_open():
