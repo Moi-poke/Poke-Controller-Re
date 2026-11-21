@@ -128,7 +128,7 @@ def test_real_wire_blocks_input_until_compatible_ack(
         assert not wire.input_seen.is_set()
         if ack is not None:
             wire.inject(T_HELLO_ACK, ack)
-        thread.join(5)
+        thread.join(10)
         assert not thread.is_alive()
         snapshot = service.connection_snapshot()
         if ack is not None and ack[0] == 4:

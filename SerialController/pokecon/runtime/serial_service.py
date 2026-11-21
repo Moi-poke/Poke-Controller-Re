@@ -746,24 +746,7 @@ class SerialService(ManualInputMixin):
             return False, False
         self._publish(generation, opened=True)
         if is_bcon_transport(target):
-            # 低速の保存設定から接続しても、探索後の1Mbps引き上げを通す。
-            # 手動の速度変更・HELLO再確認では選択した速度を維持する。
-            hunt = getattr(target, "baud_hunt", None)
-            if baud < 1000000 and callable(hunt):
-                if not target.hold_input(True) or not self._current(generation):
-                    return False, False
-                rate = hunt(candidates=list(BAUD_TABLE.values()))
-                if not self._current(generation):
-                    return False, False
-                if rate is None:
-                    self._clear_connection(
-                        generation,
-                        "failed",
-                        "通信速度を検出できませんでした。",
-                        opened=True,
-                    )
-                    return False, False
-            if not self._establish_bcon(generation, target, sender):
+            if not self._establish_bcon(generation, target, sender, discover=True):
                 return False, False
         else:
             if not self._prepare_connection_inputs(generation, sender):
@@ -791,7 +774,9 @@ class SerialService(ManualInputMixin):
                 self.set_keyboard_enabled(True, setting_path)
         return self._current(generation)
 
-    def _establish_bcon(self, generation: int, target: Any, sender: Any) -> bool:
+    def _establish_bcon(
+        self, generation: int, target: Any, sender: Any, *, discover: bool = False
+    ) -> bool:
         if not all(
             callable(getattr(target, name, None))
             for name in (
@@ -825,11 +810,45 @@ class SerialService(ManualInputMixin):
             controller_role=None,
             rumble=b"",
         )
+
+        def handshake() -> bool:
+            if not self._current(generation):
+                return False
+            hunt = getattr(target, "baud_hunt", None)
+            initial_rate = target.current_baud()
+            if discover and initial_rate is not None and initial_rate < 1000000:
+                if not callable(hunt) or hunt() is None:
+                    self._connection_log(
+                        generation,
+                        "通信速度を検出できませんでした。データ用ポートと配線を確認してください。",
+                    )
+                    return False
+            if not self._current(generation):
+                return False
+            if target.hello(timeout=0.2 if discover else 3.0, quiet=True):
+                return True
+            if (
+                discover
+                and self._current(generation)
+                and self.connection_snapshot().hello_ack is None
+                and callable(hunt)
+            ):
+                self._connection_log(
+                    generation, "応答がないため通信速度を自動で確認します。"
+                )
+                return (
+                    hunt() is not None
+                    and self._current(generation)
+                    and bool(target.hello(timeout=3.0, quiet=True))
+                )
+            return False
+
         ok = connect_bcon(
             target,
             lambda text: self._connection_log(generation, text),
             sender,
             is_current=lambda: self._current(generation),
+            handshake=handshake,
         )
         if not self._current(generation):
             return False
@@ -837,7 +856,7 @@ class SerialService(ManualInputMixin):
             self._clear_connection(
                 generation,
                 "failed",
-                "HELLO を確認できませんでした。",
+                "HELLO を確認できませんでした。データ用ポート・配線・FWの版を確認してください。",
                 opened=bool(target.is_open()),
             )
             return False
@@ -854,6 +873,15 @@ class SerialService(ManualInputMixin):
                 keyboard_enabled,
                 setting_path,
             )
+        request_status = getattr(target, "request_status", None)
+        if callable(request_status):
+            if request_status(timeout=0.5, quiet=True) is None:
+                self._connection_log(
+                    generation,
+                    "接続しましたが状態は未取得です。配線とFWを確認してください。",
+                )
+        if not self._current(generation):
+            return False
         if not self._prepare_connection_inputs(generation, sender):
             return False
         snapshot = self.connection_snapshot()
@@ -1074,7 +1102,7 @@ class SerialService(ManualInputMixin):
             )
             if not target.hold_input(True):
                 raise RuntimeError("入力を停止できませんでした。")
-            rate = method(candidates=list(BAUD_TABLE.values()))
+            rate = method()
             if not self._current(generation):
                 return
             if rate is None:

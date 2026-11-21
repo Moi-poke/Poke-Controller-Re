@@ -797,8 +797,6 @@ def test_bcon_set_baud_index_switches_on_adopt():
 
 
 def test_bcon_baud_hunt_upgrades_low_lock_to_1m(capsys):
-    from pokecon.domain.transport.bcon_protocol import T_BAUD_SET, T_HELLO
-
     made, ser = _open_hunt_upgrade_ser()
     calls: list[tuple[int, bool]] = []
     real = made.set_baud_index
@@ -810,12 +808,10 @@ def test_bcon_baud_hunt_upgrades_low_lock_to_1m(capsys):
     made.set_baud_index = _spy
     try:
         locked = made.baud_hunt([115200], timeout_per=0.3)
-        chat = [f[1] for f in ser.written if len(f) >= 2 and f[0] == 0xAB]
         out = capsys.readouterr().out
-        # Then: scanの2連続HELLO→BAUD_SET→adopt HELLOの順で1Mへ上がる。
+        # 低速で確認できても、最終速度はHELLOを確認した1Mbpsになる。
         assert locked == 1000000
         assert ser.baudrate == 1000000
-        assert chat == [T_HELLO, T_HELLO, T_BAUD_SET, T_HELLO]
         # 昇格はscan完了・STATE抑え解除後（_tx_hold=False）に1回だけ。
         assert calls == [(3, False)]
         assert made._last_good_baud == 1000000

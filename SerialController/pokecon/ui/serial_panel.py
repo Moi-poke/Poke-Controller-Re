@@ -747,6 +747,11 @@ class SerialPanelMixin(ControllerPanelMixin):
     def _refresh_transport_description(self) -> None:
         name = str(self.transport_name.get())
         description = dict(describe_transports()).get(name, "") or name
+        if self.serial.uses_bcon(name):
+            description += (
+                "\n有線のPC接続はデータUART、無線のPC接続はUSB-CDCを使います。"
+                "通信速度はUART用の設定です。USB-CDCの転送速度を表す値ではありません。"
+            )
         self.transport_description.config(text=description)
 
     # 入力の優先付け（誰の操作を優先するか）
@@ -1102,6 +1107,7 @@ class SerialPanelMixin(ControllerPanelMixin):
                 else f"採用={ack[0]} / v{ack[1]}.{ack[2]} / 結果={ack[3]}"
             )
             details += f"　HELLO: {hello}"
+            details += "\n速度はUART/COM設定（USB-CDCの転送速度とは別）"
         self._set_label_text(self.connection_details, details)
         self._render_baud_summary()
 

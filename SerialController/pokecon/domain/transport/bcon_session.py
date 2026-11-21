@@ -473,11 +473,14 @@ class BconSessionMixin:
                 if not order:
                     self._gui(f"bconのhunt候補が空です: {candidates!r}", False)
                     return None
+            initial_rate = self._current_baud()
+            was_ready = self.hello_established()
             self._logger.info(
                 f"bconのbaud huntを始めます(候補={order})。STATE送出を抑えます。"
             )
             with self._write_lock:
                 with self._lock:
+                    previous_hold = self._tx_hold
                     self._tx_hold = True
                     self._live_pending = None
                     self._live_latest = None
@@ -506,7 +509,17 @@ class BconSessionMixin:
             finally:
                 with self._write_lock:
                     with self._lock:
-                        self._tx_hold = False
+                        self._tx_hold = previous_hold
+            if locked is None and was_ready and initial_rate is not None:
+                if self._confirm_hunted_baud(initial_rate, per) and self.hello(
+                    timeout=per, quiet=True
+                ):
+                    self._gui(
+                        f"探索では応答を得られませんでしたが、元の{initial_rate}bpsでHELLOを再確認しました。",
+                        False,
+                        info=True,
+                    )
+                    return initial_rate
             if locked is None:
                 self._gui(
                     f"bconのbaud huntに失敗しました(候補={order})。"
@@ -604,8 +617,10 @@ class BconSessionMixin:
             if old_rate == new_rate:
                 self._logger.info(f"bconのbaudは既に{new_rate}bpsです。")
                 return True
+            deadline = time.perf_counter() + limit
             with self._write_lock:
                 with self._lock:
+                    previous_hold = self._tx_hold
                     self._tx_hold = True
                     self._live_pending = None
                     self._live_latest = None
@@ -634,8 +649,13 @@ class BconSessionMixin:
                     return False
                 with self._lock:
                     self._parser = BconParser()
-                remaining = max(0.2, limit - 0.8 - 0.1 - (0.0 if limit > 1.0 else 0.0))
-                if self.hello(timeout=min(remaining, 2.0), quiet=True):
+                # Core1のguard開始はACK受信と非同期。NEUTRALを連続で送り、
+                # 新rateの2連続受信・SEQ再同期を済ませてからHELLOを確認する。
+                self._prime_hunt(
+                    seconds=min(0.15, max(0.0, deadline - time.perf_counter()))
+                )
+                remaining = deadline - time.perf_counter()
+                if remaining > 0 and self.hello(timeout=remaining, quiet=True):
                     with self._lock:
                         self._last_good_baud = new_rate
                     self._gui(
@@ -663,7 +683,7 @@ class BconSessionMixin:
             finally:
                 with self._write_lock:
                     with self._lock:
-                        self._tx_hold = False
+                        self._tx_hold = previous_hold
         except Exception as e:
             self._logger.debug(f"set_baud_indexで例外: {e!r}", exc_info=True)
             return False

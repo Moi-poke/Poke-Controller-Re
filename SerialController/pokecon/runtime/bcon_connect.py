@@ -10,9 +10,9 @@ def connect_bcon(
     transport: Any,
     log: Callable[[str], None],
     sender: Any = None,
-    hello_timeout: float = 3.0,
     *,
     is_current: Callable[[], bool] = lambda: True,
+    handshake: Callable[[], bool] | None = None,
 ) -> bool:
     """SerialService の直列 worker で実行する。失敗時は入力を保留する。"""
     held = False
@@ -39,7 +39,12 @@ def connect_bcon(
             sender.discardLive()
         if not is_current():
             return False
-        if not transport.hello(timeout=hello_timeout, quiet=True) or not is_current():
+        hello_ok = (
+            handshake()
+            if handshake is not None
+            else transport.hello(timeout=3.0, quiet=True)
+        )
+        if not hello_ok or not is_current():
             log("HELLO を確認できませんでした。版・配線・通信速度を確認してください。")
             return False
         if sender is not None:
