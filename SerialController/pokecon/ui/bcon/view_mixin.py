@@ -107,6 +107,7 @@ class BconViewMixin:
         _result: Any
         _mode_label: Any
         _imu_label: Any
+        _controller_type_label: Any
         _vib_label: Any
         _summary: Any
         _actual_baud: Any
@@ -518,6 +519,21 @@ class BconViewMixin:
             if snapshot.status is not None:
                 mode = "有線" if int(snapshot.status[0]) & STATUS_FLAG_WIRED else "無線"
         self._apply_text(getattr(self, "_mode_label", None), mode)
+        controller_type = "—"
+        if opened and snapshot.phase == "ready":
+            if snapshot.controller_role is not None:
+                controller_type = {
+                    0: "Pro Con",
+                    1: "Joy-Con L",
+                    2: "Joy-Con R",
+                }.get(snapshot.controller_role, "不明")
+            elif snapshot.hello_ack is not None and snapshot.hello_ack[1:3] < (0, 16):
+                controller_type = "未対応（FW 0.16 以降）"
+            else:
+                controller_type = "未確認"
+        elif opened and snapshot.phase not in {"restarting", "bootloader", "failed"}:
+            controller_type = "未確認"
+        self._apply_text(getattr(self, "_controller_type_label", None), controller_type)
         imu = "—" if not opened else "未確認"
         if opened and snapshot.player_info:
             try:

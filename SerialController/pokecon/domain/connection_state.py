@@ -30,3 +30,4 @@ class ConnectionSnapshot:
     status_received_at: float | None = None
     player_info: bytes = b""
     rumble: bytes = b""
+    controller_role: int | None = None

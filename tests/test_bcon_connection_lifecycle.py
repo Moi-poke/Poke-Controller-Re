@@ -10,6 +10,7 @@ from pokecon.domain.serial.sender import Sender
 from pokecon.domain.transport.bcon import BconTransport
 from pokecon.domain.transport.bcon_protocol import (
     T_BAUD_SET,
+    T_CONTROLLER_INFO,
     T_HELLO,
     T_HELLO_ACK,
     T_IMU_SAMPLE,
@@ -187,6 +188,29 @@ def establish(service: SerialService, wires: list[ControlledWire]) -> None:
     assert service.connection_snapshot().phase == "ready"
 
 
+@pytest.mark.parametrize("proc", [False, True], ids=["native", "proc"])
+def test_controller_role_crosses_wire_and_clears_on_disconnect(
+    monkeypatch: pytest.MonkeyPatch, proc: bool
+) -> None:
+    service, _, wires = make_service(monkeypatch, proc=proc)
+    try:
+        establish(service, wires)
+        assert service.connection_snapshot().controller_role is None
+        for role in (0, 1, 2, 255):
+            wires[0].inject(T_CONTROLLER_INFO, bytes([role]))
+            wait_snapshot(service, lambda snapshot: snapshot.controller_role == role)
+        # 不正長は直前の種別を別の既知値に化けさせない。
+        wires[0].inject(T_CONTROLLER_INFO, b"\x00\x01")
+        wires[0].inject(T_PLAYER_INFO, b"\x05\x03")
+        wait_snapshot(service, lambda snapshot: snapshot.player_info == b"\x05\x03")
+        assert service.connection_snapshot().controller_role == 255
+        service.disconnect()
+        wait_snapshot(service, lambda snapshot: snapshot.phase == "disconnected")
+        assert service.connection_snapshot().controller_role is None
+    finally:
+        service.shutdown()
+
+
 def test_status_decodes_real_len7_without_periodic_log_flood(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -276,6 +300,7 @@ def test_old_subscription_cannot_mutate_reused_transport_generation(
                 (T_HELLO_ACK, bytes([4, 99, 99, 0])),
                 (T_STATUS, bytes([3, 1, 0, 0, 0, 0, 0])),
                 (T_PLAYER_INFO, b"\xff\xff"),
+                (T_CONTROLLER_INFO, b"\x02"),
                 (T_RUMBLE, b"\xff\xff"),
             ):
                 old_receive((kind, payload, 0))

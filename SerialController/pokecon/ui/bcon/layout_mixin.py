@@ -64,6 +64,7 @@ class BconLayoutMixin:
         _btn_cap: Any
         _btn_beacon: Any
         _mode_label: Any
+        _controller_type_label: Any
         _lamp_canvas: Any
         _lamp_items: list[int]
         _imu_label: Any
@@ -415,6 +416,11 @@ class BconLayoutMixin:
         )
         self._vib_label = ttk.Label(state_body, text="—")
         self._vib_label.grid(row=4, column=1, sticky=tk.W, padx=2, pady=2)
+        ttk.Label(state_body, text="コントローラー種別").grid(
+            row=5, column=0, sticky=tk.W, padx=2, pady=2
+        )
+        self._controller_type_label = ttk.Label(state_body, text="—")
+        self._controller_type_label.grid(row=5, column=1, sticky=tk.W, padx=2, pady=2)
 
     def _build_color_group(self, col_info: Any) -> None:
         """本体色の 4 スロット入力とプレビュー矩形の折りたたみ枠を作る。"""

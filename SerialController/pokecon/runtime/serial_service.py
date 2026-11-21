@@ -46,6 +46,7 @@ from pokecon.domain.serial.arbitration import (
 from pokecon.domain.serial.sender import Sender
 from pokecon.domain.transport.bcon_protocol import (
     BAUD_TABLE,
+    T_CONTROLLER_INFO,
     T_HELLO_ACK,
     T_PLAYER_INFO,
     T_RUMBLE,
@@ -484,6 +485,7 @@ class SerialService(ManualInputMixin):
             status=None,
             status_received_at=None,
             player_info=b"",
+            controller_role=None,
             rumble=b"",
         )
         return generation
@@ -566,6 +568,7 @@ class SerialService(ManualInputMixin):
                     status=None,
                     status_received_at=None,
                     player_info=b"",
+                    controller_role=None,
                     rumble=b"",
                 )
             changes["operation"] = None
@@ -603,6 +606,7 @@ class SerialService(ManualInputMixin):
             status=None,
             status_received_at=None,
             player_info=b"",
+            controller_role=None,
             rumble=b"",
         )
 
@@ -637,6 +641,12 @@ class SerialService(ManualInputMixin):
                     )
                 elif kind == T_PLAYER_INFO:
                     self._publish(generation, _receiving=True, player_info=payload)
+                elif kind == T_CONTROLLER_INFO:
+                    self._publish(
+                        generation,
+                        _receiving=True,
+                        controller_role=payload[0] if len(payload) == 1 else None,
+                    )
                 elif kind == T_RUMBLE:
                     self._publish(generation, _receiving=True, rumble=payload)
             except (TypeError, ValueError, IndexError):
@@ -812,6 +822,7 @@ class SerialService(ManualInputMixin):
             status=None,
             status_received_at=None,
             player_info=b"",
+            controller_role=None,
             rumble=b"",
         )
         ok = connect_bcon(
@@ -1013,6 +1024,7 @@ class SerialService(ManualInputMixin):
                 status=None,
                 status_received_at=None,
                 player_info=b"",
+                controller_role=None,
                 rumble=b"",
             )
             if not target.hold_input(True):
@@ -1057,6 +1069,7 @@ class SerialService(ManualInputMixin):
                 status=None,
                 status_received_at=None,
                 player_info=b"",
+                controller_role=None,
                 rumble=b"",
             )
             if not target.hold_input(True):

@@ -22,6 +22,7 @@ T_STATUS = 0x20
 T_PONG = 0x21
 T_RUMBLE = 0x22
 T_PLAYER_INFO = 0x23
+T_CONTROLLER_INFO = 0x24
 T_CAPTURE_START = 0x30
 T_BEACON_START = 0x31
 T_COLOR_SET = 0x32
@@ -89,6 +90,7 @@ def proto_expected_len(type_: int) -> int:
         T_PONG: 1,
         T_RUMBLE: 2,
         T_PLAYER_INFO: 2,
+        T_CONTROLLER_INFO: 1,
         T_CAPTURE_START: 1,
         T_BEACON_START: 0,
         T_COLOR_SET: 12,

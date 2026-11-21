@@ -188,6 +188,7 @@ def detail_view(service: SnapshotService) -> Any:
         "_actual_baud",
         "_busy_label",
         "_imu_label",
+        "_controller_type_label",
         "_vib_label",
         "_seconds_input",
         "_kb_text",
@@ -215,6 +216,51 @@ def ready_snapshot(**changes: Any) -> ConnectionSnapshot:
         ),
         **changes,
     )
+
+
+@pytest.mark.parametrize(
+    "role,expected",
+    [(0, "Pro Con"), (1, "Joy-Con L"), (2, "Joy-Con R"), (3, "不明"), (255, "不明")],
+)
+def test_controller_type_uses_received_role_only(role: int, expected: str) -> None:
+    service = SnapshotService(
+        ready_snapshot(controller_role=role, hello_ack=(4, 0, 16, 0))
+    )
+    detail = detail_view(service)
+    detail._render_summary()
+    assert detail._controller_type_label["text"] == expected
+
+
+def test_controller_type_clears_through_restart_and_reloads_actual_role() -> None:
+    service = SnapshotService(
+        ready_snapshot(controller_role=0, hello_ack=(4, 0, 16, 0))
+    )
+    detail = detail_view(service)
+    cases: list[tuple[dict[str, Any], str]] = [
+        ({}, "Pro Con"),
+        ({"phase": "restarting"}, "—"),
+        ({"phase": "failed"}, "—"),
+        ({"phase": "disconnected", "opened": False}, "—"),
+        ({"phase": "ready", "opened": True, "controller_role": None}, "未確認"),
+        ({"controller_role": 2}, "Joy-Con R"),
+    ]
+    for changes, expected in cases:
+        service.snapshot = replace(service.snapshot, **changes)
+        detail._apply_snapshot(service.snapshot)
+        assert detail._controller_type_label["text"] == expected
+
+
+@pytest.mark.parametrize(
+    "ack,expected",
+    [((4, 0, 15, 0), "未対応（FW 0.16 以降）"), ((4, 0, 16, 0), "未確認")],
+)
+def test_controller_type_never_defaults_missing_response_to_procon(
+    ack: tuple[int, int, int, int], expected: str
+) -> None:
+    service = SnapshotService(ready_snapshot(hello_ack=ack))
+    detail = detail_view(service)
+    detail._render_summary()
+    assert detail._controller_type_label["text"] == expected
 
 
 def test_baud_settings_commit_only_after_confirmed_snapshot() -> None:
